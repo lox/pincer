@@ -50,7 +50,11 @@ Operating principle:
 Primary components:
 
 - HTTP API server (Go)
+- Trigger ingestion layer (chat message, job, schedule, heartbeat, delegate callbacks)
+- Ingress work queue and durable outbox
 - SQLite (WAL)
+- Conversation/session store with checkpoints
+- Turn orchestrator (planner -> tool loop)
 - Tool registry and validators
 - Policy engine
 - Approval queue
@@ -59,14 +63,19 @@ Primary components:
 - Scheduler
 - Provider client (OpenAI-compatible)
 
-Reference flow:
+Reference flow (governed agentic turn):
 
-1. User/job/schedule triggers a turn.
-2. Planner returns structured output.
-3. Backend validates and classifies proposed actions.
-4. Policy allows, blocks, or queues for approval.
-5. Action executor runs approved actions through idempotency.
-6. State transitions and outcomes are logged to audit.
+1. A trigger enqueues a work item (chat input, job wakeup, heartbeat event, or subagent callback).
+2. Turn orchestrator loads thread/session context and budget (window limits, tool-step limits).
+3. Planner returns either final text or tool calls using trusted tool schemas.
+4. For each tool call:
+   - tool arguments are validated and classified;
+   - internal/tool-safe calls execute and produce typed tool result messages;
+   - external-impacting calls become `proposed_actions` for policy.
+5. Tool results are appended to context and re-entered into the same turn loop.
+6. Loop repeats until no tool calls remain, a final assistant response is produced, or bounded limits are hit (`max_tool_steps`, `max_tool_tokens`, `max_context_messages`).
+7. Proposal flow remains unchanged: `proposed -> approved -> executed -> audited`.
+8. All step transitions and invalid model output events are written to audit.
 
 ## 5. Identity and authentication
 
@@ -183,7 +192,29 @@ For external side effects:
 - key reuse with mismatched args is a hard conflict,
 - conflict emits audit event (`idempotency_conflict`).
 
+## 10.1 Turn safety controls
+
+Turn execution is bounded and replay-safe:
+
+- `max_tool_steps` and `max_tool_tokens` are enforced per work item.
+- every work item has a deterministic turn identifier.
+- invalid/unstable model output follows repair then `FAILED_MODEL_OUTPUT`.
+- tool-call loops cannot bypass proposal/policy for external side effects.
+
 ## 11. Jobs, scheduler, and autonomy primitives
+
+### 11.0 Turn execution kernel
+
+Each user request or trigger is a deterministic turn:
+
+- Planner and executor are separated.
+- Planner output may include tool calls.
+- Tool calls execute in a bounded loop with context updates between rounds.
+- Final turn artifact includes:
+  - assistant final message,
+  - appended tool-result messages,
+  - normalized proposed actions.
+- Turn outcomes are persisted as part of thread state and can be resumed after process restart.
 
 ### 11.1 Jobs
 
@@ -219,6 +250,13 @@ Memory writes are internal actions and do not bypass approval for external side 
 Skills are curated workflows constrained by policy and allowed toolsets.
 Self-improvement proposals are internal artifacts until owner-approved when they affect policy/scopes/runtime behavior.
 
+### 11.5 Proactive triggers and delegated work
+
+- Background scheduler wakeups and heartbeat-driven events are first-class turn triggers.
+- Turn orchestrators may spawn delegated internal work units (subagents) with explicit capability and scope limits.
+- Delegated work emits callback events that re-enter the same turn/event stream.
+- Delegated outputs are internal messages until policy classifies and proposes side effects.
+
 ## 12. Model provider contract
 
 Provider interface must support:
@@ -233,6 +271,13 @@ Planner output contract:
 ```json
 {
   "assistant_message": "string",
+  "tool_calls": [
+    {
+      "id": "string",
+      "name": "string",
+      "arguments": {}
+    }
+  ],
   "proposed_actions": [
     {
       "tool": "string",
@@ -243,6 +288,8 @@ Planner output contract:
   ]
 }
 ```
+
+`tool_calls` is optional; when present, loop execution must continue until terminal state.
 
 Invalid output handling:
 
@@ -314,6 +361,7 @@ Notifications include intervention and proactive reach-out events with rate limi
 - side-effect idempotency enforcement
 - audit logging for proposal/approval/execution/rejection/conflict
 - SSRF protections for web fetch tools
+- bounded turn loop with persisted checkpoints and replay-safe IDs
 
 ## 16. Deliberate exclusions (unless explicitly planned)
 

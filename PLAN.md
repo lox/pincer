@@ -72,17 +72,21 @@ Exit criteria:
 
 Goal:
 
-- [ ] Enable durable autonomous background execution in safe lanes.
+- [ ] Enable durable autonomous background execution with a governed turn execution kernel.
 
 Steps:
 
-- [ ] Implement job model and checkpoint persistence.
-- [ ] Implement step runner limits (time/tool/token budgets).
+- [ ] Define work item ingestion from user messages, jobs, schedules, and heartbeat events.
+- [ ] Implement turn orchestration with bounded planner-tool loop (`max_tool_steps`, `max_tool_tokens`, `max_context_messages`).
+- [ ] Persist turn checkpoints after each tool step so turns can resume across restarts.
+- [ ] Implement deterministic repair/fallback handling for malformed tool-call/model outputs.
+- [ ] Implement step runner limits (time/tool/token budgets) with clear failure states.
 - [ ] Implement scheduler triggers (`cron`, `interval`, `at`).
 - [ ] Implement wakeup dedupe and leasing.
 - [ ] Connect scheduler wakeups to job/turn execution.
 - [ ] Emit job progress to thread messages and artifacts.
 - [ ] Enforce that background jobs cannot directly execute external writes.
+- [ ] Add internal event/bus abstraction for subagent callback delivery.
 
 Exit criteria:
 
@@ -100,6 +104,7 @@ Steps:
 
 - [ ] Formalize short-term and durable memory primitives.
 - [ ] Add timer-driven follow-up behavior using scheduler + jobs.
+- [ ] Add delegated work unit/subagent support with strict capability and scope policies.
 - [ ] Add curated skills bound to explicit tool permissions.
 - [ ] Add internal proposal flows for skill/prompt/schedule improvements.
 - [ ] Require explicit owner approval for policy/scope/runtime-impacting changes.
@@ -135,6 +140,8 @@ Exit criteria:
 - [x] External side effects always use `proposed -> approved -> executed -> audited`.
 - [x] Idempotency conflicts are hard failures with audit events.
 - [x] No policy-bypass channels.
+- [x] All planner-tool turns are bounded, replay-safe, and audit-covered.
+- [x] Triggered turns (jobs/schedules/heartbeat/subagents) must use the same proposal pipeline.
 
 ## 9. Current checkpoint
 
@@ -143,7 +150,8 @@ Exit criteria:
 - [x] Device session list + revoke controls.
 - [x] Reproducible API and iOS E2E flows.
 - [ ] Phase 2 integrations started.
+- [ ] Turn orchestration and bounded tool-loop implementation is planned.
 
 Next priority:
 
-- [ ] Begin Phase 2 by integrating real Gmail/Calendar/Web read tools under current policy controls.
+- [ ] Begin Phase 3 by implementing the governed turn execution kernel and event routing before expanding external tool coverage.

@@ -20,6 +20,8 @@ All external actions follow:
 
 `proposed -> approved -> executed -> audited`
 
+- Triggered turns are executed as bounded planner/tool loops, with each tool result written back into context before the final response.
+
 ## Why this architecture
 
 Pincer is explicitly designed to mitigate Simon Willison's ["the lethal trifecta"](https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/):
@@ -35,10 +37,12 @@ iOS App
    |
    v
 Go Backend (single binary)
+   |- Trigger queue (chat/messages, jobs, wakeups, callbacks)
    |- Policy Engine
    |- Approval Queue
+   |- Turn Orchestrator (planner -> bounded tool loop)
    |- Action Executor
-   |- Job Runner + Scheduler
+   |- Job Runner + Scheduler + Wakeups
    |- Tool Registry
    |- SQLite (state + audit)
    |- Provider Client (OpenRouter/OpenAI-compatible)
@@ -47,6 +51,7 @@ Go Backend (single binary)
 ## Local end-to-end
 
 - `mise run backend-up`
+- `mise run ios-run` (manual simulator launch path)
 - `mise run e2e-api`
 - `mise run e2e-ios`
 - `mise run backend-down`
@@ -58,6 +63,18 @@ Useful overrides:
 - `PINCER_AUTH_TOKEN`
 - `PINCER_TOKEN_HMAC_KEY`
 - `PINCER_E2E_RESET_DB=0`
+
+Database/session defaults:
+
+- `mise run backend-up` uses `./pincer.db` (persistent dev DB, no reset by default).
+- `mise run e2e-api` and `mise run e2e-ios` use `/tmp/pincer-e2e.db` in tmux session `pincer-backend-e2e` on `http://127.0.0.1:18080` (reset each run by default).
+
+Backend runtime config is now CLI+env via `kong`:
+
+- `go run ./cmd/pincer --help`
+- `OPENROUTER_API_KEY` (legacy fallback: `PINCER_OPENROUTER_API_KEY`)
+- `PINCER_LOG_LEVEL` (`debug|info|warn|error|fatal`)
+- `PINCER_LOG_FORMAT` (`text|json`)
 
 ## Documentation
 
