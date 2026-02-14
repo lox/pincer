@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -423,6 +424,110 @@ func TestExecuteApprovedActionIdempotencyConflict(t *testing.T) {
 	}
 }
 
+func TestExecuteApprovedRunBashActionWritesCommandOutputToChat(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "pincer-test.db")
+	app, err := New(AppConfig{
+		DBPath:                  dbPath,
+		DisableBackgroundWorker: true,
+	})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = app.Close()
+	})
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	expiresAt := time.Now().UTC().Add(24 * time.Hour).Format(time.RFC3339Nano)
+	threadID := "thr_bash"
+
+	if _, err := app.db.Exec(`
+		INSERT INTO threads(thread_id, user_id, channel, created_at)
+		VALUES(?, ?, 'ios', ?)
+	`, threadID, defaultOwnerID, now); err != nil {
+		t.Fatalf("insert thread: %v", err)
+	}
+
+	if err := insertApprovedActionWithFieldsForTest(
+		app,
+		"act_bash",
+		"idem_bash",
+		"chat",
+		threadID,
+		"run_bash",
+		`{"command":"printf hello"}`,
+		"HIGH",
+		expiresAt,
+		now,
+	); err != nil {
+		t.Fatalf("insert bash action: %v", err)
+	}
+
+	if err := app.executeApprovedAction("act_bash"); err != nil {
+		t.Fatalf("execute bash action: %v", err)
+	}
+
+	var status string
+	if err := app.db.QueryRow(`SELECT status FROM proposed_actions WHERE action_id = 'act_bash'`).Scan(&status); err != nil {
+		t.Fatalf("load action status: %v", err)
+	}
+	if status != "EXECUTED" {
+		t.Fatalf("expected action status EXECUTED, got %q", status)
+	}
+
+	var systemContent string
+	if err := app.db.QueryRow(`
+		SELECT content
+		FROM messages
+		WHERE thread_id = ? AND role = 'system'
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, threadID).Scan(&systemContent); err != nil {
+		t.Fatalf("load system message: %v", err)
+	}
+
+	if !strings.Contains(systemContent, "Command: printf hello") {
+		t.Fatalf("expected system message to include command, got %q", systemContent)
+	}
+	if !strings.Contains(systemContent, "Exit code: 0") {
+		t.Fatalf("expected system message to include exit code, got %q", systemContent)
+	}
+	if !strings.Contains(systemContent, "hello") {
+		t.Fatalf("expected system message to include command output, got %q", systemContent)
+	}
+}
+
+func TestPlanTurnClassifiesRunBashRiskFromCommand(t *testing.T) {
+	t.Parallel()
+
+	app := newTestAppWithPlanner(t, stubPlanner{
+		result: agent.PlanResult{
+			AssistantMessage: "Ready.",
+			ProposedActions: []agent.ProposedAction{
+				{
+					Tool:          "run_bash",
+					Args:          json.RawMessage(`{"command":"rm -rf /tmp/pincer-risk-test"}`),
+					Justification: "Requested command execution.",
+					RiskClass:     "LOW",
+				},
+			},
+		},
+	})
+
+	plan, err := app.planTurn(context.Background(), "thr_risk", "run command")
+	if err != nil {
+		t.Fatalf("plan turn: %v", err)
+	}
+	if len(plan.ProposedActions) != 1 {
+		t.Fatalf("expected 1 proposed action, got %d", len(plan.ProposedActions))
+	}
+	if plan.ProposedActions[0].RiskClass != "HIGH" {
+		t.Fatalf("expected trusted bash risk classification HIGH, got %q", plan.ProposedActions[0].RiskClass)
+	}
+}
+
 type testThreadResponse struct {
 	ThreadID string `json:"thread_id"`
 }
@@ -743,13 +848,39 @@ func countAuditEvents(events []testAuditEvent, actionID, eventType string) int {
 }
 
 func insertApprovedActionForTest(app *App, actionID, idempotencyKey, argsJSON, expiresAt, createdAt string) error {
+	return insertApprovedActionWithFieldsForTest(
+		app,
+		actionID,
+		idempotencyKey,
+		"job",
+		"job-test",
+		"job_tool",
+		argsJSON,
+		"EXFILTRATION",
+		expiresAt,
+		createdAt,
+	)
+}
+
+func insertApprovedActionWithFieldsForTest(
+	app *App,
+	actionID string,
+	idempotencyKey string,
+	source string,
+	sourceID string,
+	tool string,
+	argsJSON string,
+	riskClass string,
+	expiresAt string,
+	createdAt string,
+) error {
 	_, err := app.db.Exec(`
 		INSERT INTO proposed_actions(
 			action_id, user_id, source, source_id, tool, args_json, risk_class,
 			justification, idempotency_key, status, rejection_reason, expires_at, created_at
-		) VALUES(?, ?, 'job', ?, 'job_tool', ?, 'EXFILTRATION',
+		) VALUES(?, ?, ?, ?, ?, ?, ?,
 			'test action', ?, 'APPROVED', '', ?, ?)
-	`, actionID, defaultOwnerID, "job-test", argsJSON, idempotencyKey, expiresAt, createdAt)
+	`, actionID, defaultOwnerID, source, sourceID, tool, argsJSON, riskClass, idempotencyKey, expiresAt, createdAt)
 	if err != nil {
 		return err
 	}

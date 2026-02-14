@@ -17,6 +17,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -40,6 +41,9 @@ const (
 	defaultTokenRenewWindow           = 7 * 24 * time.Hour
 	defaultPairingCodeTTL             = 10 * time.Minute
 	lastUsedUpdateInterval            = time.Hour
+	defaultBashExecTimeout            = 10 * time.Second
+	maxBashOutputBytes                = 8 * 1024
+	maxBashSystemMessageChars         = 4 * 1024
 )
 
 var errIdempotencyConflict = errors.New("idempotency conflict")
@@ -129,6 +133,20 @@ type approval struct {
 	RejectionReason string `json:"rejection_reason,omitempty"`
 	ArgsJSON        string `json:"args_json,omitempty"`
 	UserID          string `json:"user_id,omitempty"`
+}
+
+type bashActionArgs struct {
+	Command string `json:"command"`
+	CWD     string `json:"cwd,omitempty"`
+}
+
+type bashExecutionResult struct {
+	Command   string
+	CWD       string
+	ExitCode  int
+	Output    string
+	TimedOut  bool
+	Truncated bool
 }
 
 type approvalsResponse struct {
@@ -1079,21 +1097,28 @@ func (a *App) executeApprovedAction(actionID string) error {
 		}
 	}
 
+	executionSystemMsg := fmt.Sprintf("Action %s executed.", item.ActionID)
+	actionExecutedAuditPayload := item.ArgsJSON
+	if isBashTool(item.Tool) {
+		result := executeBashAction(item.ArgsJSON)
+		executionSystemMsg = bashExecutionSystemMessage(item.ActionID, result)
+		actionExecutedAuditPayload = bashExecutionAuditPayload(item.Tool, result)
+	}
+
 	if _, err := tx.Exec(`UPDATE proposed_actions SET status = 'EXECUTED' WHERE action_id = ?`, actionID); err != nil {
 		return err
 	}
 
 	if item.Source == "chat" {
-		systemMsg := fmt.Sprintf("Action %s executed.", item.ActionID)
 		if _, err := tx.Exec(`
 			INSERT INTO messages(message_id, thread_id, role, content, created_at)
 			VALUES(?, ?, 'system', ?, ?)
-		`, newID("msg"), item.SourceID, systemMsg, now); err != nil {
+		`, newID("msg"), item.SourceID, executionSystemMsg, now); err != nil {
 			return err
 		}
 	}
 
-	if err := insertAuditTx(tx, "action_executed", actionID, item.ArgsJSON, now); err != nil {
+	if err := insertAuditTx(tx, "action_executed", actionID, actionExecutedAuditPayload, now); err != nil {
 		return err
 	}
 
@@ -1149,7 +1174,9 @@ func (a *App) planTurn(ctx context.Context, threadID, userMessage string) (agent
 		}
 
 		riskClass := strings.ToUpper(strings.TrimSpace(action.RiskClass))
-		if riskClass == "" {
+		if isBashTool(tool) {
+			riskClass = riskClassForBashArgs(args)
+		} else if riskClass == "" {
 			riskClass = riskClassForTool(tool)
 		}
 
@@ -1213,6 +1240,10 @@ func defaultActionArgs(threadID, userMessage string) json.RawMessage {
 }
 
 func riskClassForTool(tool string) string {
+	if isBashTool(tool) {
+		return "HIGH"
+	}
+
 	switch strings.ToLower(strings.TrimSpace(tool)) {
 	case "gmail_send_draft", "gmail_send_message":
 		return "EXFILTRATION"
@@ -1221,6 +1252,208 @@ func riskClassForTool(tool string) string {
 	default:
 		return "HIGH"
 	}
+}
+
+func isBashTool(tool string) bool {
+	switch strings.ToLower(strings.TrimSpace(tool)) {
+	case "run_bash", "bash_run", "bash", "run_shell":
+		return true
+	default:
+		return false
+	}
+}
+
+func riskClassForBashArgs(args json.RawMessage) string {
+	var parsed bashActionArgs
+	if err := json.Unmarshal(args, &parsed); err != nil {
+		return "HIGH"
+	}
+
+	command := strings.TrimSpace(parsed.Command)
+	if command == "" {
+		return "HIGH"
+	}
+
+	// Treat shell metachar usage as high risk.
+	if strings.ContainsAny(command, "|&;><`$(){}[]\n\r") {
+		return "HIGH"
+	}
+
+	parts := strings.Fields(command)
+	if len(parts) == 0 {
+		return "HIGH"
+	}
+
+	switch parts[0] {
+	case "pwd", "ls", "cat", "echo", "whoami", "id", "date", "uname", "which", "head", "tail", "wc":
+		return "READ"
+	default:
+		return "HIGH"
+	}
+}
+
+func executeBashAction(argsJSON string) bashExecutionResult {
+	result := bashExecutionResult{ExitCode: -1}
+
+	var args bashActionArgs
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		result.Output = fmt.Sprintf("invalid run_bash args: %v", err)
+		return result
+	}
+
+	result.Command = strings.TrimSpace(args.Command)
+	result.CWD = strings.TrimSpace(args.CWD)
+
+	if result.Command == "" {
+		result.Output = "missing required field: command"
+		return result
+	}
+
+	output, exitCode, timedOut, truncated := runBashCommand(result.Command, result.CWD)
+	result.Output = output
+	result.ExitCode = exitCode
+	result.TimedOut = timedOut
+	result.Truncated = truncated
+	return result
+}
+
+func runBashCommand(command, cwd string) (output string, exitCode int, timedOut bool, truncated bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), defaultBashExecTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "bash", "-lc", command)
+	if cwd != "" {
+		cmd.Dir = cwd
+	}
+
+	buffer := newBoundedOutputBuffer(maxBashOutputBytes)
+	cmd.Stdout = buffer
+	cmd.Stderr = buffer
+
+	err := cmd.Run()
+
+	output = strings.TrimSpace(buffer.String())
+	exitCode = 0
+	timedOut = false
+	truncated = buffer.Truncated()
+
+	switch {
+	case err == nil:
+		// no-op
+	case errors.Is(ctx.Err(), context.DeadlineExceeded):
+		timedOut = true
+		exitCode = -1
+		output = appendOutputLine(output, fmt.Sprintf("command timed out after %s", defaultBashExecTimeout))
+	default:
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			exitCode = exitErr.ExitCode()
+		} else {
+			exitCode = -1
+			output = appendOutputLine(output, fmt.Sprintf("failed to execute bash command: %v", err))
+		}
+	}
+
+	if output == "" {
+		output = "(no output)"
+	}
+	return output, exitCode, timedOut, truncated
+}
+
+func appendOutputLine(existing, next string) string {
+	existing = strings.TrimSpace(existing)
+	next = strings.TrimSpace(next)
+	switch {
+	case existing == "":
+		return next
+	case next == "":
+		return existing
+	default:
+		return existing + "\n" + next
+	}
+}
+
+func bashExecutionSystemMessage(actionID string, result bashExecutionResult) string {
+	lines := []string{
+		fmt.Sprintf("Action %s executed.", actionID),
+		fmt.Sprintf("Command: %s", result.Command),
+		fmt.Sprintf("Exit code: %d", result.ExitCode),
+	}
+	if result.CWD != "" {
+		lines = append(lines, fmt.Sprintf("CWD: %s", result.CWD))
+	}
+	if result.TimedOut {
+		lines = append(lines, "Timed out: true")
+	}
+	if result.Truncated {
+		lines = append(lines, "Output truncated: true")
+	}
+	lines = append(lines, "Output:", result.Output)
+
+	msg := strings.Join(lines, "\n")
+	if len(msg) > maxBashSystemMessageChars {
+		return msg[:maxBashSystemMessageChars] + "\n...[truncated]"
+	}
+	return msg
+}
+
+func bashExecutionAuditPayload(tool string, result bashExecutionResult) string {
+	payload := map[string]any{
+		"tool":             tool,
+		"command":          result.Command,
+		"cwd":              result.CWD,
+		"exit_code":        result.ExitCode,
+		"timed_out":        result.TimedOut,
+		"output_truncated": result.Truncated,
+		"output":           result.Output,
+	}
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return `{}`
+	}
+	return string(payloadBytes)
+}
+
+type boundedOutputBuffer struct {
+	limit     int
+	total     int
+	builder   strings.Builder
+	truncated bool
+}
+
+func newBoundedOutputBuffer(limit int) *boundedOutputBuffer {
+	if limit <= 0 {
+		limit = 1
+	}
+	return &boundedOutputBuffer{limit: limit}
+}
+
+func (b *boundedOutputBuffer) Write(p []byte) (int, error) {
+	n := len(p)
+	if b.total < b.limit {
+		remaining := b.limit - b.total
+		if n > remaining {
+			_, _ = b.builder.Write(p[:remaining])
+			b.truncated = true
+		} else {
+			_, _ = b.builder.Write(p)
+		}
+	} else {
+		b.truncated = true
+	}
+	b.total += n
+	if b.total > b.limit {
+		b.truncated = true
+	}
+	return n, nil
+}
+
+func (b *boundedOutputBuffer) String() string {
+	return b.builder.String()
+}
+
+func (b *boundedOutputBuffer) Truncated() bool {
+	return b.truncated
 }
 
 func isJSONObject(raw json.RawMessage) bool {

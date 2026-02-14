@@ -83,4 +83,5 @@ Backend runtime config is now CLI+env via `kong`:
 - `docs/spec.md` - end-state system design and contracts.
 - `PLAN.md` - phased implementation plan and steps.
 - `docs/ios-ui-plan.md` - iOS UI/UX planning details.
+- `SOUL.md` - assistant phrasing guidance used by the planner when present.
 - `AGENTS.md` - repository-specific agent instructions.

@@ -150,6 +150,7 @@ Baseline tool families:
 - Gmail (user and bot identities)
 - Calendar
 - Web (`search`, `open`)
+- Controlled shell execution (`run_bash`) with bounded timeout/output capture
 - Internal memory/artifact tools
 
 ## 8. Policy engine
@@ -164,6 +165,7 @@ Mandatory rules:
 4. Approval requests expire and auto-reject.
 5. Untrusted-ingest turns cannot directly trigger external write/send in the same turn.
 6. Web access enforces SSRF protections (no local/private targets, capped redirects/bytes).
+7. `run_bash` remains explicit-approval and bounded-execution only (no silent execution path).
 
 ## 9. Approval lifecycle
 
@@ -365,7 +367,7 @@ Notifications include intervention and proactive reach-out events with rate limi
 
 ## 16. Deliberate exclusions (unless explicitly planned)
 
-- arbitrary subprocess/shell tools
+- unrestricted subprocess/shell execution
 - policy bypass pathways
 - silent recipient/domain allowlist execution
 - hidden side-effect channels

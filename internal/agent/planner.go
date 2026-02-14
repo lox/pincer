@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
 
 const defaultOpenRouterBaseURL = "https://openrouter.ai/api/v1"
+const defaultSOULPath = "SOUL.md"
 
 var (
 	ErrInvalidModelOutput = errors.New("invalid model output")
@@ -90,6 +92,8 @@ type OpenAIPlannerConfig struct {
 	FallbackModel string
 	HTTPClient    *http.Client
 	UserAgent     string
+	SOULPrompt    string
+	SOULPath      string
 }
 
 type OpenAIPlanner struct {
@@ -99,6 +103,7 @@ type OpenAIPlanner struct {
 	fallbackModel string
 	httpClient    *http.Client
 	userAgent     string
+	soulPrompt    string
 }
 
 func NewOpenAIPlanner(cfg OpenAIPlannerConfig) (*OpenAIPlanner, error) {
@@ -118,6 +123,20 @@ func NewOpenAIPlanner(cfg OpenAIPlannerConfig) (*OpenAIPlanner, error) {
 	}
 	baseURL = strings.TrimSuffix(baseURL, "/")
 
+	soulPrompt := strings.TrimSpace(cfg.SOULPrompt)
+	if soulPrompt == "" {
+		soulPath := strings.TrimSpace(cfg.SOULPath)
+		if soulPath == "" {
+			soulPath = defaultSOULPath
+		}
+
+		loaded, err := loadSOULPromptFile(soulPath)
+		if err != nil {
+			return nil, fmt.Errorf("read SOUL prompt: %w", err)
+		}
+		soulPrompt = loaded
+	}
+
 	return &OpenAIPlanner{
 		apiKey:        strings.TrimSpace(cfg.APIKey),
 		baseURL:       baseURL,
@@ -125,6 +144,7 @@ func NewOpenAIPlanner(cfg OpenAIPlannerConfig) (*OpenAIPlanner, error) {
 		fallbackModel: strings.TrimSpace(cfg.FallbackModel),
 		httpClient:    cfg.HTTPClient,
 		userAgent:     strings.TrimSpace(cfg.UserAgent),
+		soulPrompt:    soulPrompt,
 	}, nil
 }
 
@@ -185,8 +205,16 @@ func (p *OpenAIPlanner) planWithModel(ctx context.Context, model string, req Pla
 			Content: "You are the planning harness for Pincer. Return only a single JSON object with keys assistant_message and proposed_actions. " +
 				"proposed_actions must be an array of objects with tool, args (JSON object), justification, and optional risk_class. " +
 				"Only return non-empty proposed_actions when the user explicitly asked for an external action or workflow. " +
+				"For shell command requests, propose tool run_bash with args containing command and optional cwd. " +
 				"Never return markdown or code fences.",
 		},
+	}
+	if p.soulPrompt != "" {
+		messages = append(messages, openAIMessage{
+			Role: "system",
+			Content: "Apply the following SOUL guidance for style and phrasing while still obeying the required JSON response schema and safety constraints:\n" +
+				p.soulPrompt,
+		})
 	}
 	if repair {
 		messages = append(messages, openAIMessage{
@@ -352,4 +380,15 @@ func isJSONObject(raw json.RawMessage) bool {
 	}
 	_, ok := decoded.(map[string]any)
 	return ok
+}
+
+func loadSOULPromptFile(path string) (string, error) {
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil
+		}
+		return "", err
+	}
+	return strings.TrimSpace(string(contents)), nil
 }

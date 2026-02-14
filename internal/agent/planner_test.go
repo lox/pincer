@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -107,5 +110,129 @@ func TestParsePlanResultExtractsJSONFromWrappedContent(t *testing.T) {
 	}
 	if result.AssistantMessage != "ok" {
 		t.Fatalf("unexpected assistant message: %q", result.AssistantMessage)
+	}
+}
+
+func TestOpenAIPlannerIncludesSOULPromptWhenConfigured(t *testing.T) {
+	t.Parallel()
+
+	const soul = "Be concise. Keep simple answers to one line."
+
+	var (
+		mu      sync.Mutex
+		sawSOUL bool
+	)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req openAIChatCompletionRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		for _, msg := range req.Messages {
+			if msg.Role == "system" && strings.Contains(msg.Content, soul) {
+				mu.Lock()
+				sawSOUL = true
+				mu.Unlock()
+				break
+			}
+		}
+
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]string{"content": `{"assistant_message":"ok","proposed_actions":[]}`}},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	planner, err := NewOpenAIPlanner(OpenAIPlannerConfig{
+		APIKey:       "test-key",
+		BaseURL:      srv.URL,
+		PrimaryModel: "primary-model",
+		HTTPClient:   srv.Client(),
+		SOULPrompt:   soul,
+	})
+	if err != nil {
+		t.Fatalf("new planner: %v", err)
+	}
+
+	if _, err := planner.Plan(context.Background(), PlanRequest{
+		ThreadID:    "thr_test",
+		UserMessage: "hello",
+	}); err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !sawSOUL {
+		t.Fatalf("expected planner request to include SOUL guidance")
+	}
+}
+
+func TestOpenAIPlannerLoadsSOULPromptFromFile(t *testing.T) {
+	t.Parallel()
+
+	const soul = "Answer directly and keep it brief."
+
+	dir := t.TempDir()
+	soulPath := filepath.Join(dir, "SOUL.md")
+	if err := os.WriteFile(soulPath, []byte(soul), 0o644); err != nil {
+		t.Fatalf("write SOUL.md: %v", err)
+	}
+
+	var (
+		mu      sync.Mutex
+		sawSOUL bool
+	)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req openAIChatCompletionRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		for _, msg := range req.Messages {
+			if msg.Role == "system" && strings.Contains(msg.Content, soul) {
+				mu.Lock()
+				sawSOUL = true
+				mu.Unlock()
+				break
+			}
+		}
+
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]string{"content": `{"assistant_message":"ok","proposed_actions":[]}`}},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	planner, err := NewOpenAIPlanner(OpenAIPlannerConfig{
+		APIKey:       "test-key",
+		BaseURL:      srv.URL,
+		PrimaryModel: "primary-model",
+		HTTPClient:   srv.Client(),
+		SOULPath:     soulPath,
+	})
+	if err != nil {
+		t.Fatalf("new planner: %v", err)
+	}
+
+	if _, err := planner.Plan(context.Background(), PlanRequest{
+		ThreadID:    "thr_test",
+		UserMessage: "hello",
+	}); err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !sawSOUL {
+		t.Fatalf("expected planner request to include SOUL prompt loaded from file")
 	}
 }
