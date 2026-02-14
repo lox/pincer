@@ -1,6 +1,14 @@
 [tools]
 go = "1.23.6"
 
+[env]
+PINCER_HTTP_ADDR = ':8080'
+PINCER_DB_PATH = './pincer.db'
+PINCER_TOKEN_HMAC_KEY = 'pincer-dev-token-hmac-key-change-me'
+PINCER_IOS_DEVICE = 'iPhone 17 Pro'
+PINCER_IOS_BUNDLE_ID = 'com.lox.pincer'
+PINCER_BASE_URL = 'http://127.0.0.1:8080'
+
 [tasks.test]
 description = "Run Go tests"
 run = "go test ./..."
@@ -11,11 +19,11 @@ run = "go run ./cmd/pincer"
 
 [tasks.dev]
 description = "Run the backend in dev mode with a fixed HMAC key"
-run = "PINCER_HTTP_ADDR=\"${PINCER_HTTP_ADDR:-:8080}\" PINCER_DB_PATH=\"${PINCER_DB_PATH:-./pincer.db}\" PINCER_TOKEN_HMAC_KEY=\"pincer-dev-token-hmac-key-change-me\" go run ./cmd/pincer"
+run = "go run ./cmd/pincer"
 
 [tasks.reset-db]
 description = "Reset local dev database"
-run = "DB_PATH=\"${PINCER_DB_PATH:-./pincer.db}\"; rm -f \"${DB_PATH}\" \"${DB_PATH}-shm\" \"${DB_PATH}-wal\""
+run = "rm -f \"${PINCER_DB_PATH}\" \"${PINCER_DB_PATH}-shm\" \"${PINCER_DB_PATH}-wal\""
 
 [tasks.fmt]
 description = "Format Go files"
@@ -38,13 +46,23 @@ description = "Build, install, and launch iOS app in Simulator"
 run = "scripts/ios_run_simulator.sh"
 
 [tasks.ios-reset-token]
-description = "Clear the simulator stored bearer token"
-run = "DEVICE=\"${PINCER_IOS_DEVICE:-booted}\"; BUNDLE_ID=\"${PINCER_IOS_BUNDLE_ID:-com.lox.pincer}\"; xcrun simctl spawn \"${DEVICE}\" defaults delete \"${BUNDLE_ID}\" PINCER_BEARER_TOKEN"
+[tasks.ios-reset-token.env]
+PINCER_IOS_DEVICE = "booted"
+PINCER_IOS_BUNDLE_ID = "com.lox.pincer"
+run = "xcrun simctl spawn \"${PINCER_IOS_DEVICE}\" defaults delete \"${PINCER_IOS_BUNDLE_ID}\" PINCER_BEARER_TOKEN"
 
 [tasks.e2e-api]
 description = "Run MVP API end-to-end checks against running backend"
+[tasks.e2e-api.env]
+PINCER_BASE_URL = "http://127.0.0.1:18080"
+PINCER_HTTP_ADDR = ":18080"
+PINCER_DB_PATH = "/tmp/pincer-e2e.db"
 run = "scripts/e2e_api.sh"
 
 [tasks.e2e-ios]
 description = "Run MVP iOS + backend end-to-end checks in simulator"
+[tasks.e2e-ios.env]
+PINCER_BASE_URL = "http://127.0.0.1:18080"
+PINCER_HTTP_ADDR = ":18080"
+PINCER_DB_PATH = "/tmp/pincer-e2e.db"
 run = "scripts/e2e_ios.sh"
