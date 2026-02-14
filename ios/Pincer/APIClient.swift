@@ -21,8 +21,8 @@ actor APIClient {
         self.encoder = JSONEncoder()
     }
 
-    func ensurePaired(deviceName: String = "Pincer iOS") async throws {
-        if !token.isEmpty {
+    func ensurePaired(force: Bool = false, deviceName: String = "Pincer iOS") async throws {
+        if !force, !token.isEmpty {
             return
         }
 
@@ -38,50 +38,67 @@ actor APIClient {
     }
 
     func createThread() async throws -> String {
-        try await ensurePaired()
-        let request = try makeRequest(path: "/v1/chat/threads", method: "POST", body: Optional<SendMessageRequest>.none)
-        let response: ThreadResponse = try await send(request)
-        return response.threadID
+        try await withAuthorizedRetry {
+            let request = try makeRequest(path: "/v1/chat/threads", method: "POST", body: Optional<SendMessageRequest>.none)
+            let response: ThreadResponse = try await send(request)
+            return response.threadID
+        }
     }
 
     func sendMessage(threadID: String, content: String) async throws {
-        try await ensurePaired()
-        let body = SendMessageRequest(content: content)
-        let request = try makeRequest(path: "/v1/chat/threads/\(threadID)/messages", method: "POST", body: body)
-        let _: EmptyResponse = try await send(request)
+        try await withAuthorizedRetry {
+            let body = SendMessageRequest(content: content)
+            let request = try makeRequest(path: "/v1/chat/threads/\(threadID)/messages", method: "POST", body: body)
+            let _: EmptyResponse = try await send(request)
+        }
     }
 
     func fetchMessages(threadID: String) async throws -> [Message] {
-        try await ensurePaired()
-        let request = try makeRequest(path: "/v1/chat/threads/\(threadID)/messages", method: "GET", body: Optional<SendMessageRequest>.none)
-        let response: MessagesResponse = try await send(request)
-        return response.items
+        try await withAuthorizedRetry {
+            let request = try makeRequest(path: "/v1/chat/threads/\(threadID)/messages", method: "GET", body: Optional<SendMessageRequest>.none)
+            let response: MessagesResponse = try await send(request)
+            return response.items
+        }
     }
 
     func fetchApprovals(status: String = "pending") async throws -> [Approval] {
-        try await ensurePaired()
-        let request = try makeRequest(path: "/v1/approvals?status=\(status)", method: "GET", body: Optional<SendMessageRequest>.none)
-        let response: ApprovalsResponse = try await send(request)
-        return response.items
+        try await withAuthorizedRetry {
+            let request = try makeRequest(path: "/v1/approvals?status=\(status)", method: "GET", body: Optional<SendMessageRequest>.none)
+            let response: ApprovalsResponse = try await send(request)
+            return response.items
+        }
     }
 
     func approve(actionID: String) async throws {
-        try await ensurePaired()
-        let request = try makeRequest(path: "/v1/approvals/\(actionID)/approve", method: "POST", body: Optional<SendMessageRequest>.none)
-        let _: EmptyResponse = try await send(request)
+        try await withAuthorizedRetry {
+            let request = try makeRequest(path: "/v1/approvals/\(actionID)/approve", method: "POST", body: Optional<SendMessageRequest>.none)
+            let _: EmptyResponse = try await send(request)
+        }
     }
 
     func fetchDevices() async throws -> [Device] {
-        try await ensurePaired()
-        let request = try makeRequest(path: "/v1/devices", method: "GET", body: Optional<SendMessageRequest>.none)
-        let response: DevicesResponse = try await send(request)
-        return response.items
+        try await withAuthorizedRetry {
+            let request = try makeRequest(path: "/v1/devices", method: "GET", body: Optional<SendMessageRequest>.none)
+            let response: DevicesResponse = try await send(request)
+            return response.items
+        }
     }
 
     func revokeDevice(deviceID: String) async throws {
+        try await withAuthorizedRetry {
+            let request = try makeRequest(path: "/v1/devices/\(deviceID)/revoke", method: "POST", body: Optional<SendMessageRequest>.none)
+            let _: EmptyResponse = try await send(request)
+        }
+    }
+
+    private func withAuthorizedRetry<T>(_ operation: () async throws -> T) async throws -> T {
         try await ensurePaired()
-        let request = try makeRequest(path: "/v1/devices/\(deviceID)/revoke", method: "POST", body: Optional<SendMessageRequest>.none)
-        let _: EmptyResponse = try await send(request)
+        do {
+            return try await operation()
+        } catch APIError.unauthorized {
+            try await ensurePaired(force: true)
+            return try await operation()
+        }
     }
 
     private func makeRequest<T: Encodable>(path: String, method: String, body: T?, includeAuth: Bool = true) throws -> URLRequest {
@@ -107,8 +124,7 @@ actor APIClient {
         }
         guard (200...299).contains(http.statusCode) else {
             if http.statusCode == 401 {
-                token = ""
-                UserDefaults.standard.removeObject(forKey: AppConfig.tokenDefaultsKey)
+                clearToken()
                 throw APIError.unauthorized
             }
             throw APIError.httpStatus(http.statusCode)
@@ -118,6 +134,11 @@ actor APIClient {
             return EmptyResponse() as! T
         }
         return try decoder.decode(T.self, from: data)
+    }
+
+    private func clearToken() {
+        token = ""
+        UserDefaults.standard.removeObject(forKey: AppConfig.tokenDefaultsKey)
     }
 }
 

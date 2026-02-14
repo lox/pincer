@@ -19,7 +19,7 @@ final class SettingsViewModel: ObservableObject {
         do {
             devices = try await client.fetchDevices()
         } catch {
-            errorText = "Failed to load devices."
+            errorText = userFacingErrorMessage(error, fallback: "Failed to load devices.")
         }
     }
 
@@ -35,7 +35,7 @@ final class SettingsViewModel: ObservableObject {
                 devices = try await client.fetchDevices()
             }
         } catch {
-            errorText = "Failed to revoke device."
+            errorText = userFacingErrorMessage(error, fallback: "Failed to revoke device.")
         }
     }
 }

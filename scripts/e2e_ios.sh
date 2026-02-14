@@ -5,7 +5,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEVICE="${PINCER_IOS_DEVICE:-iPhone 17 Pro}"
 BUNDLE_ID="${PINCER_IOS_BUNDLE_ID:-com.lox.pincer}"
 SESSION="${PINCER_AGENT_SESSION:-pincer-e2e-ios}"
-BASE_URL="${PINCER_BASE_URL:-http://127.0.0.1:8080}"
+BASE_URL="${PINCER_BASE_URL:-http://127.0.0.1:18080}"
+HTTP_ADDR="${PINCER_HTTP_ADDR:-:18080}"
 AUTH_TOKEN="${PINCER_AUTH_TOKEN:-}"
 AUTH_HEADER=""
 MESSAGE_TEXT="${PINCER_E2E_MESSAGE:-Run iOS e2e flow $(date +%s)}"
@@ -118,7 +119,12 @@ require_cmd xcodebuild
 require_cmd npx
 
 cd "${ROOT_DIR}"
-scripts/backend_up.sh >/dev/null
+PINCER_TMUX_SESSION="${PINCER_TMUX_SESSION:-pincer-backend-e2e}" \
+PINCER_DB_PATH="${PINCER_DB_PATH:-/tmp/pincer-e2e.db}" \
+PINCER_HTTP_ADDR="${HTTP_ADDR}" \
+PINCER_BASE_URL="${BASE_URL}" \
+PINCER_E2E_RESET_DB="${PINCER_E2E_RESET_DB:-1}" \
+  scripts/backend_up.sh >/dev/null
 bootstrap_auth_token
 mise run ios-build >/dev/null
 

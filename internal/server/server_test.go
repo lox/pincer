@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/lox/pincer/internal/agent"
 )
 
 func TestEndToEndApprovalFlow(t *testing.T) {
@@ -45,6 +48,44 @@ func TestEndToEndApprovalFlow(t *testing.T) {
 	}
 	if countAuditEvents(events, pending[0].ActionID, "action_executed") != 1 {
 		t.Fatalf("expected action_executed audit for %s", pending[0].ActionID)
+	}
+}
+
+func TestPostMessageUsesPlannerOutput(t *testing.T) {
+	t.Parallel()
+
+	planner := stubPlanner{
+		result: agent.PlanResult{
+			AssistantMessage: "Harness response ready.",
+			ProposedActions: []agent.ProposedAction{
+				{
+					Tool:          "demo_external_notify",
+					Args:          json.RawMessage(`{"thread_id":"t","summary":"planner args"}`),
+					Justification: "Planner requested external follow-up.",
+					RiskClass:     "EXFILTRATION",
+				},
+			},
+		},
+	}
+
+	app := newTestAppWithPlanner(t, planner)
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
+
+	token := bootstrapAuthToken(t, srv.URL)
+	threadID := createThread(t, srv.URL, token)
+	response := postMessageResponse(t, srv.URL, token, threadID, "hello harness")
+
+	if response.AssistantMessage != "Harness response ready." {
+		t.Fatalf("expected planner assistant message, got %q", response.AssistantMessage)
+	}
+
+	pending := listApprovals(t, srv.URL, token, "pending")
+	if len(pending) != 1 {
+		t.Fatalf("expected 1 pending approval, got %d", len(pending))
+	}
+	if pending[0].Tool != "demo_external_notify" {
+		t.Fatalf("expected tool demo_external_notify, got %q", pending[0].Tool)
 	}
 }
 
@@ -355,6 +396,7 @@ type testThreadResponse struct {
 
 type testApproval struct {
 	ActionID        string `json:"action_id"`
+	Tool            string `json:"tool"`
 	Status          string `json:"status"`
 	RejectionReason string `json:"rejection_reason"`
 }
@@ -395,6 +437,22 @@ func newTestApp(t *testing.T) *App {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "pincer-test.db")
 	app, err := New(AppConfig{DBPath: dbPath})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = app.Close()
+	})
+	return app
+}
+
+func newTestAppWithPlanner(t *testing.T, planner agent.Planner) *App {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "pincer-test.db")
+	app, err := New(AppConfig{
+		DBPath:  dbPath,
+		Planner: planner,
+	})
 	if err != nil {
 		t.Fatalf("new app: %v", err)
 	}
@@ -479,6 +537,20 @@ func postMessage(t *testing.T, baseURL, token, threadID, content string) {
 	if status != http.StatusCreated {
 		t.Fatalf("post message status: %d body=%s", status, string(body))
 	}
+}
+
+func postMessageResponse(t *testing.T, baseURL, token, threadID, content string) createMessageResponse {
+	t.Helper()
+	status, body := postJSON(t, http.MethodPost, baseURL+"/v1/chat/threads/"+threadID+"/messages", token, []byte(`{"content":"`+content+`"}`))
+	if status != http.StatusCreated {
+		t.Fatalf("post message status: %d body=%s", status, string(body))
+	}
+
+	var out createMessageResponse
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatalf("decode createMessageResponse: %v", err)
+	}
+	return out
 }
 
 func listDevices(t *testing.T, baseURL, token string) []testDevice {
@@ -673,4 +745,16 @@ func postJSON(t *testing.T, method, url, token string, body []byte) (int, []byte
 		t.Fatalf("read response body: %v", err)
 	}
 	return resp.StatusCode, respBody
+}
+
+type stubPlanner struct {
+	result agent.PlanResult
+	err    error
+}
+
+func (p stubPlanner) Plan(_ context.Context, _ agent.PlanRequest) (agent.PlanResult, error) {
+	if p.err != nil {
+		return agent.PlanResult{}, p.err
+	}
+	return p.result, nil
 }

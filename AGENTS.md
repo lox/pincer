@@ -63,6 +63,7 @@ Use `mise` for all routine tasks:
 - `mise run tidy` - tidy Go modules
 - `mise run ios-generate` - generate Xcode project from `project.yml`
 - `mise run ios-build` - build iOS app for simulator (no signing)
+- `mise run ios-run` - build, install, and launch app in iOS Simulator
 - `mise run e2e-api` - run backend API E2E conveyor checks
 - `mise run e2e-ios` - run simulator UI + backend E2E checks
 
@@ -131,7 +132,14 @@ Behavior of `backend-up`:
 - creates tmux session `pincer-backend` (or `PINCER_TMUX_SESSION`)
 - starts backend via `mise run run`
 - waits for `POST /v1/pairing/code` to return `201`
-- defaults to a clean DB at `/tmp/pincer-e2e.db` each run
+- defaults to persistent DB `./pincer.db`
+
+E2E scripts use isolated defaults:
+
+- tmux session `pincer-backend-e2e`
+- DB path `/tmp/pincer-e2e.db`
+- HTTP address `:18080` (base URL `http://127.0.0.1:18080`)
+- DB reset enabled each run
 
 Useful tmux inspection commands:
 

@@ -2,11 +2,11 @@
 set -euo pipefail
 
 SESSION="${PINCER_TMUX_SESSION:-pincer-backend}"
-DB_PATH="${PINCER_DB_PATH:-/tmp/pincer-e2e.db}"
+DB_PATH="${PINCER_DB_PATH:-./pincer.db}"
 HTTP_ADDR="${PINCER_HTTP_ADDR:-:8080}"
 BASE_URL="${PINCER_BASE_URL:-http://127.0.0.1:8080}"
 TOKEN_HMAC_KEY="${PINCER_TOKEN_HMAC_KEY:-pincer-dev-token-hmac-key-change-me}"
-RESET_DB="${PINCER_E2E_RESET_DB:-1}"
+RESET_DB="${PINCER_RESET_DB:-${PINCER_E2E_RESET_DB:-0}}"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 if ! command -v tmux >/dev/null 2>&1; then

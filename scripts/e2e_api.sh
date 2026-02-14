@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BASE_URL="${PINCER_BASE_URL:-http://127.0.0.1:8080}"
+BASE_URL="${PINCER_BASE_URL:-http://127.0.0.1:18080}"
+HTTP_ADDR="${PINCER_HTTP_ADDR:-:18080}"
 AUTH_TOKEN="${PINCER_AUTH_TOKEN:-}"
 AUTH_HEADER=""
 START_BACKEND="${PINCER_E2E_START_BACKEND:-1}"
@@ -17,7 +18,12 @@ if ! command -v curl >/dev/null 2>&1; then
 fi
 
 if [[ "${START_BACKEND}" == "1" ]]; then
-  "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/backend_up.sh" >/dev/null
+  PINCER_TMUX_SESSION="${PINCER_TMUX_SESSION:-pincer-backend-e2e}" \
+  PINCER_DB_PATH="${PINCER_DB_PATH:-/tmp/pincer-e2e.db}" \
+  PINCER_HTTP_ADDR="${HTTP_ADDR}" \
+  PINCER_BASE_URL="${BASE_URL}" \
+  PINCER_E2E_RESET_DB="${PINCER_E2E_RESET_DB:-1}" \
+    "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/backend_up.sh" >/dev/null
 fi
 
 bootstrap_auth_token() {

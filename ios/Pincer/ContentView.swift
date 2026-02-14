@@ -40,7 +40,12 @@ struct ContentView: View {
                         .accessibilityIdentifier(A11y.tabChat)
                 }
 
-            ApprovalsView(model: approvalsModel)
+            ApprovalsView(
+                model: approvalsModel,
+                onApproveSuccess: {
+                    await chatModel.refreshAfterApproval()
+                }
+            )
                 .accessibilityIdentifier(A11y.screenApprovals)
                 .tabItem {
                     Label("Approvals", systemImage: "checkmark.shield")
@@ -94,6 +99,16 @@ private struct ChatView: View {
                                 ForEach(model.messages) { message in
                                     ChatMessageRow(message: message)
                                         .id(message.id)
+                                }
+
+                                if !model.inlineApprovals.isEmpty {
+                                    InlineApprovalsSection(
+                                        approvals: model.inlineApprovals,
+                                        approvingActionIDs: model.approvingActionIDs,
+                                        onApprove: { actionID in
+                                            Task { await model.approveInline(actionID) }
+                                        }
+                                    )
                                 }
                             }
                             .padding(.horizontal, 16)
@@ -150,6 +165,7 @@ private struct ChatView: View {
 
 private struct ApprovalsView: View {
     @ObservedObject var model: ApprovalsViewModel
+    let onApproveSuccess: () async -> Void
 
     var body: some View {
         NavigationStack {
@@ -174,7 +190,11 @@ private struct ApprovalsView: View {
                                     item: item,
                                     isBusy: model.isBusy,
                                     approveIdentifier: index == 0 ? A11y.approvalsApproveFirst : "approval_approve_\(item.actionID)",
-                                    onApprove: { Task { await model.approve(item.actionID) } }
+                                    onApprove: {
+                                        Task {
+                                            await model.approve(item.actionID, onSuccess: onApproveSuccess)
+                                        }
+                                    }
                                 )
                                 .padding(.horizontal, 16)
                             }
@@ -408,8 +428,7 @@ private struct ChatComposer: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            TextField("Message...", text: $text, axis: .vertical)
-                .lineLimit(1...4)
+            TextField("Message...", text: $text)
                 .font(.system(.body, design: .rounded))
                 .foregroundStyle(PincerPalette.textPrimary)
                 .padding(.horizontal, 14)
@@ -420,6 +439,12 @@ private struct ChatComposer: View {
                     Capsule()
                         .stroke(PincerPalette.border, lineWidth: 1)
                 )
+                .submitLabel(.send)
+                .onSubmit {
+                    if canSend {
+                        onSend()
+                    }
+                }
                 .accessibilityIdentifier(A11y.chatInput)
 
             Button(action: onSend) {
@@ -453,6 +478,51 @@ private struct EmptyApprovalsCard: View {
             Text("New external actions from Chat will show up here for explicit approval.")
                 .font(.system(.subheadline, design: .rounded))
                 .foregroundStyle(PincerPalette.textSecondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .cardSurface()
+    }
+}
+
+private struct InlineApprovalsSection: View {
+    let approvals: [Approval]
+    let approvingActionIDs: Set<String>
+    let onApprove: (String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Pending approvals in this chat")
+                .font(.system(.footnote, design: .rounded).weight(.semibold))
+                .foregroundStyle(PincerPalette.textSecondary)
+
+            ForEach(approvals) { item in
+                HStack(alignment: .top, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(prettyToolName(item.tool))
+                            .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                            .foregroundStyle(PincerPalette.textPrimary)
+
+                        Text("Risk: \(item.riskClass.capitalized)")
+                            .font(.system(.caption, design: .rounded))
+                            .foregroundStyle(PincerPalette.textSecondary)
+                    }
+
+                    Spacer()
+
+                    Button(action: { onApprove(item.actionID) }) {
+                        Text(approvingActionIDs.contains(item.actionID) ? "Approving..." : "Approve")
+                            .font(.system(.caption, design: .rounded).weight(.semibold))
+                            .foregroundStyle(PincerPalette.accent)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(PincerPalette.accentSoft)
+                            .clipShape(Capsule())
+                    }
+                    .disabled(approvingActionIDs.contains(item.actionID))
+                    .accessibilityIdentifier("chat_inline_approve_\(item.actionID)")
+                }
+                .padding(.vertical, 2)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .cardSurface()

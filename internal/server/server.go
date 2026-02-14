@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -13,18 +14,29 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
 
+	charmLog "github.com/charmbracelet/log"
+	"github.com/lox/pincer/internal/agent"
 	_ "modernc.org/sqlite"
 )
 
 const (
 	defaultOwnerID                    = "owner-dev"
 	defaultTokenHMACKey               = "pincer-dev-token-hmac-key-change-me"
+	defaultPrimaryModel               = "anthropic/claude-opus-4.6"
+	defaultAssistantMessage           = "I prepared a proposed external action. Review it in Approvals before execution."
+	defaultActionTool                 = "demo_external_notify"
+	defaultActionRiskClass            = "EXFILTRATION"
+	defaultActionJustification        = "User requested external follow-up"
+	defaultActionExpiry               = 24 * time.Hour
+	defaultPlannerHistoryLimit        = 12
+	maxProposedActionsPerTurn         = 3
 	defaultActionExecutorPollInterval = 250 * time.Millisecond
 	defaultTokenTTL                   = 30 * 24 * time.Hour
 	defaultTokenRenewWindow           = 7 * 24 * time.Hour
@@ -37,6 +49,12 @@ var errIdempotencyConflict = errors.New("idempotency conflict")
 type AppConfig struct {
 	DBPath                  string
 	TokenHMACKey            string
+	OpenRouterAPIKey        string
+	OpenRouterBaseURL       string
+	ModelPrimary            string
+	ModelFallback           string
+	Logger                  *charmLog.Logger
+	Planner                 agent.Planner
 	ActionExecutorInterval  time.Duration
 	DisableBackgroundWorker bool
 }
@@ -44,6 +62,8 @@ type AppConfig struct {
 type App struct {
 	db                     *sql.DB
 	tokenHMACKey           []byte
+	logger                 *charmLog.Logger
+	planner                agent.Planner
 	ownerID                string
 	stopCh                 chan struct{}
 	doneCh                 chan struct{}
@@ -146,6 +166,16 @@ func New(cfg AppConfig) (*App, error) {
 		return nil, errors.New("db path is required")
 	}
 
+	logger := cfg.Logger
+	if logger == nil {
+		logger = charmLog.NewWithOptions(os.Stderr, charmLog.Options{
+			Prefix:          "pincer",
+			Level:           charmLog.InfoLevel,
+			ReportTimestamp: true,
+			TimeFormat:      time.RFC3339,
+		})
+	}
+
 	db, err := sql.Open("sqlite", cfg.DBPath)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
@@ -161,6 +191,33 @@ func New(cfg AppConfig) (*App, error) {
 		return nil, err
 	}
 
+	planner := cfg.Planner
+	if planner == nil {
+		staticPlanner := agent.NewStaticPlanner()
+		planner = staticPlanner
+
+		if cfg.OpenRouterAPIKey != "" {
+			primaryModel := strings.TrimSpace(cfg.ModelPrimary)
+			if primaryModel == "" {
+				primaryModel = defaultPrimaryModel
+			}
+
+			openAIPlanner, err := agent.NewOpenAIPlanner(agent.OpenAIPlannerConfig{
+				APIKey:        cfg.OpenRouterAPIKey,
+				BaseURL:       cfg.OpenRouterBaseURL,
+				PrimaryModel:  primaryModel,
+				FallbackModel: cfg.ModelFallback,
+				UserAgent:     "pincer/0.1",
+			})
+			if err != nil {
+				_ = db.Close()
+				return nil, fmt.Errorf("init planner: %w", err)
+			}
+
+			planner = agent.NewFallbackPlanner(openAIPlanner, staticPlanner)
+		}
+	}
+
 	tokenHMACKey := cfg.TokenHMACKey
 	if tokenHMACKey == "" {
 		tokenHMACKey = defaultTokenHMACKey
@@ -174,6 +231,8 @@ func New(cfg AppConfig) (*App, error) {
 	app := &App{
 		db:                     db,
 		tokenHMACKey:           []byte(tokenHMACKey),
+		logger:                 logger,
+		planner:                planner,
 		ownerID:                defaultOwnerID,
 		stopCh:                 make(chan struct{}),
 		doneCh:                 make(chan struct{}),
@@ -211,7 +270,69 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("/v1/approvals/", a.handleApprovalSubroutes)
 	mux.HandleFunc("/v1/audit", a.handleAudit)
 
-	return a.authMiddleware(mux)
+	return a.loggingMiddleware(a.authMiddleware(mux))
+}
+
+func (a *App) loggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		recorder := &statusRecorder{ResponseWriter: w}
+		next.ServeHTTP(recorder, r)
+
+		statusCode := recorder.status()
+		level := charmLog.InfoLevel
+		switch {
+		case statusCode >= http.StatusInternalServerError:
+			level = charmLog.ErrorLevel
+		case statusCode >= http.StatusBadRequest:
+			level = charmLog.WarnLevel
+		default:
+			level = charmLog.DebugLevel
+		}
+
+		keyvals := []interface{}{
+			"method", r.Method,
+			"path", r.URL.Path,
+			"status", statusCode,
+			"duration_ms", time.Since(start).Milliseconds(),
+			"response_bytes", recorder.bytesWritten,
+		}
+		if remoteAddr := clientIP(r.RemoteAddr); remoteAddr != "" {
+			keyvals = append(keyvals, "remote_addr", remoteAddr)
+		}
+		if userAgent := r.UserAgent(); userAgent != "" {
+			keyvals = append(keyvals, "user_agent", userAgent)
+		}
+
+		a.logger.Log(level, "http request", keyvals...)
+	})
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	statusCode   int
+	bytesWritten int
+}
+
+func (r *statusRecorder) WriteHeader(statusCode int) {
+	r.statusCode = statusCode
+	r.ResponseWriter.WriteHeader(statusCode)
+}
+
+func (r *statusRecorder) Write(data []byte) (int, error) {
+	if r.statusCode == 0 {
+		r.statusCode = http.StatusOK
+	}
+	n, err := r.ResponseWriter.Write(data)
+	r.bytesWritten += n
+	return n, err
+}
+
+func (r *statusRecorder) status() int {
+	if r.statusCode == 0 {
+		return http.StatusOK
+	}
+	return r.statusCode
 }
 
 func (a *App) authMiddleware(next http.Handler) http.Handler {
@@ -272,6 +393,12 @@ func (a *App) handlePairingCode(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist pairing code"})
 		return
 	}
+
+	a.logger.Info(
+		"pairing code issued",
+		"expires_at", expiresAt.Format(time.RFC3339Nano),
+		"active_devices", activeDevices,
+	)
 
 	writeJSON(w, http.StatusCreated, createPairingCodeResponse{
 		Code:      code,
@@ -397,6 +524,8 @@ func (a *App) handlePairingBind(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	a.logger.Info("device paired", "device_id", deviceID, "device_name", deviceName, "expires_at", expiresAtStr)
+
 	writeJSON(w, http.StatusCreated, bindPairingResponse{
 		DeviceID:  deviceID,
 		Token:     tokenValue,
@@ -419,6 +548,8 @@ func (a *App) handleThreads(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create thread"})
 		return
 	}
+
+	a.logger.Info("thread created", "thread_id", threadID, "channel", "ios")
 
 	writeJSON(w, http.StatusCreated, threadResponse{ThreadID: threadID})
 }
@@ -461,17 +592,15 @@ func (a *App) handlePostMessage(w http.ResponseWriter, r *http.Request, threadID
 		return
 	}
 
-	assistant := "I prepared a proposed external action. Review it in Approvals before execution."
-	actionID := newID("act")
-	idempotencyKey := newID("idem")
+	plan, err := a.planTurn(r.Context(), threadID, req.Content)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "failed to plan response"})
+		return
+	}
+
 	now := time.Now().UTC()
 	nowStr := now.Format(time.RFC3339Nano)
-	expiresAt := now.Add(24 * time.Hour).Format(time.RFC3339Nano)
-
-	args, _ := json.Marshal(map[string]string{
-		"thread_id": threadID,
-		"summary":   req.Content,
-	})
+	expiresAt := now.Add(defaultActionExpiry).Format(time.RFC3339Nano)
 
 	tx, err := a.db.Begin()
 	if err != nil {
@@ -490,23 +619,33 @@ func (a *App) handlePostMessage(w http.ResponseWriter, r *http.Request, threadID
 	if _, err := tx.Exec(`
 		INSERT INTO messages(message_id, thread_id, role, content, created_at)
 		VALUES(?, ?, 'assistant', ?, ?)
-	`, newID("msg"), threadID, assistant, nowStr); err != nil {
+	`, newID("msg"), threadID, plan.AssistantMessage, nowStr); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to insert assistant message"})
 		return
 	}
-	if _, err := tx.Exec(`
-		INSERT INTO proposed_actions(
-			action_id, user_id, source, source_id, tool, args_json, risk_class,
-			justification, idempotency_key, status, rejection_reason, expires_at, created_at
-		) VALUES(?, ?, 'chat', ?, 'demo_external_notify', ?, 'EXFILTRATION',
-			'User requested external follow-up', ?, 'PENDING', '', ?, ?)
-	`, actionID, a.ownerID, threadID, string(args), idempotencyKey, expiresAt, nowStr); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to insert action"})
-		return
-	}
-	if err := insertAuditTx(tx, "action_proposed", actionID, string(args), nowStr); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to insert audit"})
-		return
+
+	firstActionID := ""
+	for _, proposed := range plan.ProposedActions {
+		actionID := newID("act")
+		idempotencyKey := newID("idem")
+		argsJSON := string(proposed.Args)
+		if _, err := tx.Exec(`
+			INSERT INTO proposed_actions(
+				action_id, user_id, source, source_id, tool, args_json, risk_class,
+				justification, idempotency_key, status, rejection_reason, expires_at, created_at
+			) VALUES(?, ?, 'chat', ?, ?, ?, ?,
+				?, ?, 'PENDING', '', ?, ?)
+		`, actionID, a.ownerID, threadID, proposed.Tool, argsJSON, proposed.RiskClass, proposed.Justification, idempotencyKey, expiresAt, nowStr); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to insert action"})
+			return
+		}
+		if err := insertAuditTx(tx, "action_proposed", actionID, argsJSON, nowStr); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to insert audit"})
+			return
+		}
+		if firstActionID == "" {
+			firstActionID = actionID
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -514,9 +653,15 @@ func (a *App) handlePostMessage(w http.ResponseWriter, r *http.Request, threadID
 		return
 	}
 
+	a.logger.Info(
+		"chat turn planned",
+		"thread_id", threadID,
+		"proposed_actions", len(plan.ProposedActions),
+	)
+
 	writeJSON(w, http.StatusCreated, createMessageResponse{
-		AssistantMessage: assistant,
-		ActionID:         actionID,
+		AssistantMessage: plan.AssistantMessage,
+		ActionID:         firstActionID,
 	})
 }
 
@@ -656,6 +801,8 @@ func (a *App) handleDeviceSubroutes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	a.logger.Info("device revoked", "device_id", deviceID)
+
 	writeJSON(w, http.StatusOK, map[string]string{"device_id": deviceID, "status": "REVOKED"})
 }
 
@@ -682,6 +829,7 @@ func (a *App) handleApprovalSubroutes(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 			return
 		}
+		a.logger.Info("action approved", "action_id", actionID)
 		writeJSON(w, http.StatusOK, map[string]string{"action_id": actionID, "status": "APPROVED"})
 	case "reject":
 		var req rejectActionRequest
@@ -701,6 +849,7 @@ func (a *App) handleApprovalSubroutes(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 			return
 		}
+		a.logger.Info("action rejected", "action_id", actionID, "reason", reason)
 		writeJSON(w, http.StatusOK, map[string]string{"action_id": actionID, "status": "REJECTED"})
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
@@ -782,7 +931,10 @@ func (a *App) markActionApproved(actionID string) error {
 		return err
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (a *App) revokeDevice(deviceID string) error {
@@ -823,7 +975,10 @@ func (a *App) revokeDevice(deviceID string) error {
 		return err
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (a *App) markActionRejected(actionID, reason string) error {
@@ -855,7 +1010,10 @@ func (a *App) markActionRejected(actionID, reason string) error {
 		return err
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (a *App) executeApprovedAction(actionID string) error {
@@ -941,13 +1099,172 @@ func (a *App) executeApprovedAction(actionID string) error {
 		return err
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	a.logger.Info("action executed", "action_id", actionID, "tool", item.Tool, "source", item.Source)
+	return nil
 }
 
 func (a *App) threadExists(threadID string) bool {
 	var one int
 	err := a.db.QueryRow(`SELECT 1 FROM threads WHERE thread_id = ?`, threadID).Scan(&one)
 	return err == nil
+}
+
+func (a *App) planTurn(ctx context.Context, threadID, userMessage string) (agent.PlanResult, error) {
+	history, err := a.loadPlannerHistory(threadID, defaultPlannerHistoryLimit)
+	if err != nil {
+		return agent.PlanResult{}, fmt.Errorf("load planner history: %w", err)
+	}
+
+	plan, err := a.planner.Plan(ctx, agent.PlanRequest{
+		ThreadID:    threadID,
+		UserMessage: userMessage,
+		History:     history,
+	})
+	if err != nil {
+		return agent.PlanResult{}, err
+	}
+
+	assistant := strings.TrimSpace(plan.AssistantMessage)
+	if assistant == "" {
+		assistant = defaultAssistantMessage
+	}
+
+	proposed := make([]agent.ProposedAction, 0, len(plan.ProposedActions))
+	for _, action := range plan.ProposedActions {
+		tool := strings.TrimSpace(action.Tool)
+		if tool == "" {
+			continue
+		}
+
+		args := action.Args
+		if !isJSONObject(args) {
+			args = defaultActionArgs(threadID, userMessage)
+		}
+
+		justification := strings.TrimSpace(action.Justification)
+		if justification == "" {
+			justification = defaultActionJustification
+		}
+
+		riskClass := strings.ToUpper(strings.TrimSpace(action.RiskClass))
+		if riskClass == "" {
+			riskClass = riskClassForTool(tool)
+		}
+
+		proposed = append(proposed, agent.ProposedAction{
+			Tool:          tool,
+			Args:          args,
+			Justification: justification,
+			RiskClass:     riskClass,
+		})
+		if len(proposed) >= maxProposedActionsPerTurn {
+			break
+		}
+	}
+
+	if len(proposed) == 0 {
+		proposed = defaultProposedActions(threadID, userMessage)
+	}
+
+	return agent.PlanResult{
+		AssistantMessage: assistant,
+		ProposedActions:  proposed,
+	}, nil
+}
+
+func (a *App) loadPlannerHistory(threadID string, limit int) ([]agent.Message, error) {
+	rows, err := a.db.Query(`
+		SELECT role, content
+		FROM messages
+		WHERE thread_id = ?
+		ORDER BY created_at DESC
+		LIMIT ?
+	`, threadID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	reversed := make([]agent.Message, 0, limit)
+	for rows.Next() {
+		var role string
+		var content string
+		if err := rows.Scan(&role, &content); err != nil {
+			return nil, err
+		}
+		reversed = append(reversed, agent.Message{
+			Role:    role,
+			Content: content,
+		})
+	}
+
+	history := make([]agent.Message, 0, len(reversed))
+	for i := len(reversed) - 1; i >= 0; i-- {
+		history = append(history, reversed[i])
+	}
+
+	return history, nil
+}
+
+func defaultProposedActions(threadID, userMessage string) []agent.ProposedAction {
+	return []agent.ProposedAction{
+		{
+			Tool:          defaultActionTool,
+			Args:          defaultActionArgs(threadID, userMessage),
+			Justification: defaultActionJustification,
+			RiskClass:     defaultActionRiskClass,
+		},
+	}
+}
+
+func defaultActionArgs(threadID, userMessage string) json.RawMessage {
+	args, _ := json.Marshal(map[string]string{
+		"thread_id": threadID,
+		"summary":   userMessage,
+	})
+	return args
+}
+
+func riskClassForTool(tool string) string {
+	switch strings.ToLower(strings.TrimSpace(tool)) {
+	case "demo_external_notify", "gmail_send_draft", "gmail_send_message":
+		return "EXFILTRATION"
+	case "artifact_put", "notes_write", "gmail_create_draft_reply":
+		return "WRITE"
+	default:
+		return "HIGH"
+	}
+}
+
+func isJSONObject(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	if !json.Valid(raw) {
+		return false
+	}
+	var decoded any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return false
+	}
+	_, ok := decoded.(map[string]any)
+	return ok
+}
+
+func clientIP(remoteAddr string) string {
+	remoteAddr = strings.TrimSpace(remoteAddr)
+	if remoteAddr == "" {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		return remoteAddr
+	}
+	return host
 }
 
 func (a *App) runActionExecutor() {
@@ -972,22 +1289,22 @@ func (a *App) runActionExecutor() {
 func (a *App) processActionQueueOnce() {
 	now := time.Now().UTC()
 	if err := a.expirePendingActions(now); err != nil {
-		log.Printf("action executor: expire pending actions: %v", err)
+		a.logger.Error("action executor failed to expire pending actions", "error", err)
 	}
 
 	actionIDs, err := a.listApprovedActionIDs()
 	if err != nil {
-		log.Printf("action executor: list approved actions: %v", err)
+		a.logger.Error("action executor failed to list approved actions", "error", err)
 		return
 	}
 
 	for _, actionID := range actionIDs {
 		if err := a.executeApprovedAction(actionID); err != nil {
 			if errors.Is(err, errIdempotencyConflict) {
-				log.Printf("action executor: idempotency conflict for action %s", actionID)
+				a.logger.Warn("action executor idempotency conflict", "action_id", actionID)
 				continue
 			}
-			log.Printf("action executor: execute action %s: %v", actionID, err)
+			a.logger.Error("action executor failed to execute action", "action_id", actionID, "error", err)
 		}
 	}
 }
@@ -1075,7 +1392,11 @@ func (a *App) expirePendingActions(now time.Time) error {
 		}
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	a.logger.Info("pending actions expired", "count", len(expiredActionIDs))
+	return nil
 }
 
 func (a *App) activeDeviceCount() (int, error) {

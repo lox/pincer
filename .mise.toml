@@ -33,6 +33,10 @@ run = "cd ios/Pincer && xcodegen generate"
 description = "Build iOS app for Simulator (no signing)"
 run = "xcodebuild -project ios/Pincer/Pincer.xcodeproj -scheme Pincer -destination 'generic/platform=iOS Simulator' build CODE_SIGNING_ALLOWED=NO"
 
+[tasks.ios-run]
+description = "Build, install, and launch iOS app in Simulator"
+run = "scripts/ios_run_simulator.sh"
+
 [tasks.e2e-api]
 description = "Run MVP API end-to-end checks against running backend"
 run = "scripts/e2e_api.sh"
