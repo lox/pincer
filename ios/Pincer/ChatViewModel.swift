@@ -1,11 +1,20 @@
 import Foundation
 import Combine
 
+struct ApprovedInlineIndicator: Identifiable, Equatable {
+    let actionID: String
+    let tool: String
+    let approvedAt: Date
+
+    var id: String { actionID }
+}
+
 @MainActor
 final class ChatViewModel: ObservableObject {
     @Published var threadID: String?
     @Published var messages: [Message] = []
     @Published private(set) var inlineApprovals: [Approval] = []
+    @Published private(set) var approvedInlineIndicators: [ApprovedInlineIndicator] = []
     @Published private(set) var approvingActionIDs: Set<String> = []
     @Published var input: String = ""
     @Published var errorText: String?
@@ -41,6 +50,7 @@ final class ChatViewModel: ObservableObject {
         messages = try await client.fetchMessages(threadID: threadID)
         await approvalsStore.refreshPendingWithoutBusyState()
         syncInlineApprovals()
+        cleanupApprovedInlineIndicators()
     }
 
     func send() async {
@@ -73,10 +83,14 @@ final class ChatViewModel: ObservableObject {
     func approveInline(_ actionID: String) async {
         guard threadID != nil else { return }
         guard !approvingActionIDs.contains(actionID) else { return }
+        let approvedItem = inlineApprovals.first { $0.actionID == actionID }
 
         let approved = await approvalsStore.approve(actionID)
         if approved {
             inlineApprovals.removeAll { $0.actionID == actionID }
+            if let approvedItem {
+                upsertApprovedIndicator(from: approvedItem)
+            }
             await refreshAfterApproval()
         } else {
             errorText = approvalsStore.errorText
@@ -110,6 +124,7 @@ final class ChatViewModel: ObservableObject {
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
                 self?.syncInlineApprovals()
+                self?.cleanupApprovedInlineIndicators()
             }
             .store(in: &cancellables)
 
@@ -123,5 +138,36 @@ final class ChatViewModel: ObservableObject {
 
     private func syncInlineApprovals() {
         inlineApprovals = approvalsStore.pendingApprovals(forThreadID: threadID)
+    }
+
+    private func upsertApprovedIndicator(from approval: Approval) {
+        if approvedInlineIndicators.contains(where: { $0.actionID == approval.actionID }) {
+            return
+        }
+        approvedInlineIndicators.append(ApprovedInlineIndicator(
+            actionID: approval.actionID,
+            tool: approval.tool,
+            approvedAt: Date()
+        ))
+    }
+
+    private func cleanupApprovedInlineIndicators() {
+        approvedInlineIndicators.removeAll { indicator in
+            hasApprovalMessage(for: indicator.actionID) || hasExecutionMessage(for: indicator.actionID)
+        }
+    }
+
+    private func hasApprovalMessage(for actionID: String) -> Bool {
+        let marker = "Action \(actionID) approved."
+        return messages.contains { message in
+            message.role == "system" && message.content.contains(marker)
+        }
+    }
+
+    private func hasExecutionMessage(for actionID: String) -> Bool {
+        let marker = "Action \(actionID) executed."
+        return messages.contains { message in
+            message.role == "system" && message.content.contains(marker)
+        }
     }
 }

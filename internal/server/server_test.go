@@ -123,6 +123,80 @@ func TestPostMessageUsesPlannerOutput(t *testing.T) {
 	}
 }
 
+func TestPostMessageWithProposalSkipsAssistantChatBubble(t *testing.T) {
+	t.Parallel()
+
+	app := newTestAppWithPlanner(t, stubPlanner{
+		result: agent.PlanResult{
+			AssistantMessage: "Proposing command execution.",
+			ProposedActions: []agent.ProposedAction{
+				{
+					Tool:          "run_bash",
+					Args:          json.RawMessage(`{"command":"pwd"}`),
+					Justification: "User requested shell command.",
+					RiskClass:     "READ",
+				},
+			},
+		},
+	})
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
+
+	token := bootstrapAuthToken(t, srv.URL)
+	threadID := createThread(t, srv.URL, token)
+	postMessage(t, srv.URL, token, threadID, "run pwd")
+
+	msgs := listMessages(t, srv.URL, token, threadID)
+	if len(msgs) != 1 {
+		t.Fatalf("expected only 1 message in thread, got %d", len(msgs))
+	}
+	if msgs[0].Role != "user" {
+		t.Fatalf("expected first message role user, got %q", msgs[0].Role)
+	}
+}
+
+func TestApproveChatActionWritesApprovedSystemMarker(t *testing.T) {
+	t.Parallel()
+
+	app := newTestAppWithPlanner(t, stubPlanner{
+		result: agent.PlanResult{
+			AssistantMessage: "Proposing command execution.",
+			ProposedActions: []agent.ProposedAction{
+				{
+					Tool:          "run_bash",
+					Args:          json.RawMessage(`{"command":"pwd"}`),
+					Justification: "User requested shell command.",
+					RiskClass:     "READ",
+				},
+			},
+		},
+	})
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
+
+	token := bootstrapAuthToken(t, srv.URL)
+	threadID := createThread(t, srv.URL, token)
+	postMessage(t, srv.URL, token, threadID, "run pwd")
+
+	pending := listApprovals(t, srv.URL, token, "pending")
+	if len(pending) != 1 {
+		t.Fatalf("expected 1 pending approval, got %d", len(pending))
+	}
+	actionID := pending[0].ActionID
+	approveAction(t, srv.URL, token, actionID)
+
+	messages := listMessages(t, srv.URL, token, threadID)
+	approvedMarker := fmt.Sprintf("Action %s approved.", actionID)
+
+	for _, msg := range messages {
+		if msg.Role == "system" && strings.Contains(msg.Content, approvedMarker) {
+			return
+		}
+	}
+
+	t.Fatalf("expected system message to include %q", approvedMarker)
+}
+
 func TestProtectedEndpointRequiresToken(t *testing.T) {
 	t.Parallel()
 
@@ -710,6 +784,30 @@ func listDevices(t *testing.T, baseURL, token string) []testDevice {
 	var out testDevicesResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		t.Fatalf("decode devices: %v", err)
+	}
+	return out.Items
+}
+
+func listMessages(t *testing.T, baseURL, token, threadID string) []message {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, baseURL+"/v1/chat/threads/"+threadID+"/messages", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("list messages status: %d", resp.StatusCode)
+	}
+	var out messagesResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode messages: %v", err)
 	}
 	return out.Items
 }

@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 private enum A11y {
     static let screenChat = "screen_chat"
@@ -104,9 +105,10 @@ private struct ChatView: View {
                                         .id(message.id)
                                 }
 
-                                if !model.inlineApprovals.isEmpty {
+                                if !model.inlineApprovals.isEmpty || !model.approvedInlineIndicators.isEmpty {
                                     InlineApprovalsSection(
                                         approvals: model.inlineApprovals,
+                                        approvedIndicators: model.approvedInlineIndicators,
                                         approvingActionIDs: model.approvingActionIDs,
                                         onApprove: { actionID in
                                             Task { await model.approveInline(actionID) }
@@ -342,6 +344,14 @@ private enum PincerPalette {
     static let accent = Color(red: 0.12, green: 0.45, blue: 0.95)
     static let accentSoft = Color(red: 0.90, green: 0.95, blue: 1.00)
     static let success = Color(red: 0.34, green: 0.60, blue: 0.39)
+    static let warning = Color(red: 0.78, green: 0.47, blue: 0.11)
+    static let danger = Color(red: 0.77, green: 0.24, blue: 0.24)
+
+    static let terminalBackground = Color(red: 0.06, green: 0.07, blue: 0.09)
+    static let terminalBorder = Color.white.opacity(0.14)
+    static let terminalText = Color(red: 0.85, green: 0.89, blue: 0.95)
+    static let terminalPrompt = Color(red: 0.50, green: 0.88, blue: 0.56)
+    static let terminalMuted = Color(red: 0.52, green: 0.57, blue: 0.64)
 }
 
 private struct PincerPageBackground: View {
@@ -361,44 +371,77 @@ private struct ChatMessageRow: View {
     let message: Message
 
     private var isUser: Bool { message.role.lowercased() == "user" }
+    private var parsedBashExecution: ParsedBashExecutionMessage? {
+        guard message.role.lowercased() == "system" else { return nil }
+        return parseBashExecutionSystemMessage(message.content)
+    }
+    private var parsedApprovalStatus: ParsedApprovalStatusMessage? {
+        guard message.role.lowercased() == "system" else { return nil }
+        return parseApprovalStatusSystemMessage(message.content)
+    }
 
     var body: some View {
-        HStack {
-            if isUser { Spacer(minLength: 58) }
-
-            VStack(alignment: .leading, spacing: 6) {
-                if !isUser {
-                    Text(roleTitle)
-                        .font(.system(.caption, design: .rounded).weight(.semibold))
-                        .foregroundStyle(PincerPalette.textTertiary)
-                }
-
-                Text(message.content)
-                    .font(.system(.body, design: .rounded))
-                    .foregroundStyle(isUser ? Color.white : PincerPalette.textPrimary)
-
-                if !isUser {
-                    Text(shortTimestamp(from: message.createdAt))
-                        .font(.system(size: 11, weight: .medium, design: .rounded))
-                        .foregroundStyle(PincerPalette.textTertiary)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .background(isUser ? PincerPalette.accent : PincerPalette.card)
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(isUser ? Color.clear : PincerPalette.border, lineWidth: 1)
+        if let parsedApprovalStatus {
+            ApprovalStatusSystemRow(
+                parsed: parsedApprovalStatus,
+                timestamp: shortTimestamp(from: message.createdAt),
+                copyText: copyPayload
             )
-            .shadow(color: PincerPalette.shadow, radius: isUser ? 0 : 6, x: 0, y: 2)
+        } else {
+            HStack {
+                if isUser { Spacer(minLength: 58) }
 
-            if !isUser { Spacer(minLength: 58) }
+                VStack(alignment: .leading, spacing: 6) {
+                    if !isUser {
+                        Text(roleTitle)
+                            .font(.system(.caption, design: .rounded).weight(.semibold))
+                            .foregroundStyle(PincerPalette.textTertiary)
+                    }
+
+                    if let parsedBashExecution {
+                        BashExecutionMessageCard(parsed: parsedBashExecution)
+                    } else {
+                        Text(message.content)
+                            .font(.system(.body, design: .rounded))
+                            .foregroundStyle(isUser ? Color.white : PincerPalette.textPrimary)
+                    }
+
+                    HStack(spacing: 8) {
+                        if !isUser {
+                            Text(shortTimestamp(from: message.createdAt))
+                                .font(.system(size: 11, weight: .medium, design: .rounded))
+                                .foregroundStyle(PincerPalette.textTertiary)
+                        }
+
+                        Spacer()
+
+                        CopyIconButton(
+                            copyText: copyPayload,
+                            tint: isUser ? Color.white.opacity(0.88) : PincerPalette.textTertiary
+                        )
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .background(isUser ? PincerPalette.accent : PincerPalette.card)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(isUser ? Color.clear : PincerPalette.border, lineWidth: 1)
+                )
+                .shadow(color: PincerPalette.shadow, radius: isUser ? 0 : 6, x: 0, y: 2)
+
+                if !isUser { Spacer(minLength: 58) }
+            }
         }
     }
 
     private var roleTitle: String {
+        if parsedBashExecution != nil {
+            return "Bash Result"
+        }
+
         switch message.role.lowercased() {
         case "assistant":
             return "Assistant"
@@ -407,6 +450,123 @@ private struct ChatMessageRow: View {
         default:
             return "Message"
         }
+    }
+
+    private var copyPayload: String {
+        if let parsedBashExecution {
+            return parsedBashExecution.output
+        }
+        if let parsedApprovalStatus {
+            let tool = parsedApprovalStatus.tool?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let displayTool = tool.isEmpty ? "Action" : tool
+            return "Approval: \(displayTool) \u{2705}"
+        }
+        return message.content
+    }
+}
+
+private struct BashExecutionMessageCard: View {
+    let parsed: ParsedBashExecutionMessage
+
+    private var statusColor: Color {
+        if parsed.timedOut {
+            return PincerPalette.warning
+        }
+        if parsed.exitCode == 0 {
+            return PincerPalette.success
+        }
+        return PincerPalette.danger
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("$ \(parsed.command)")
+                .foregroundStyle(PincerPalette.terminalPrompt)
+
+            if let cwd = parsed.cwd, !cwd.isEmpty {
+                Text("# cwd: \(cwd)")
+                    .foregroundStyle(PincerPalette.terminalMuted)
+            }
+
+            Text(parsed.output)
+                .foregroundStyle(PincerPalette.terminalText)
+
+            Text(resultLine)
+                .foregroundStyle(statusColor)
+
+            if parsed.truncated {
+                Text("result: output truncated")
+                    .foregroundStyle(PincerPalette.terminalMuted)
+            }
+        }
+        .font(.system(.subheadline, design: .monospaced))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(PincerPalette.terminalBackground)
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(PincerPalette.terminalBorder, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .textSelection(.enabled)
+    }
+
+    private var resultLine: String {
+        if parsed.timedOut {
+            return "result: timed out (\(parsed.durationMillis)ms)"
+        }
+        return "result: exit \(parsed.exitCode) (\(parsed.durationMillis)ms)"
+    }
+}
+
+private struct ApprovalStatusSystemRow: View {
+    let parsed: ParsedApprovalStatusMessage
+    let timestamp: String
+    let copyText: String
+
+    var body: some View {
+        ZStack(alignment: .bottomTrailing) {
+            VStack(spacing: 2) {
+                Text("Approval: \(displayTool) \u{2705}")
+                    .font(.system(.footnote, design: .rounded).weight(.semibold))
+                    .foregroundStyle(PincerPalette.textSecondary)
+
+                Text(timestamp)
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(PincerPalette.textTertiary)
+            }
+            .frame(maxWidth: .infinity, alignment: .center)
+
+            CopyIconButton(copyText: copyText, tint: PincerPalette.textTertiary)
+                .padding(.trailing, 2)
+        }
+        .padding(.vertical, 2)
+    }
+
+    private var displayTool: String {
+        let tool = parsed.tool?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if tool.isEmpty {
+            return "Action"
+        }
+        return tool
+    }
+}
+
+private struct CopyIconButton: View {
+    let copyText: String
+    let tint: Color
+
+    var body: some View {
+        Button(action: {
+            UIPasteboard.general.string = copyText
+        }) {
+            Image(systemName: "doc.on.doc")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(tint)
+                .frame(width: 18, height: 18)
+                .padding(2)
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -479,12 +639,13 @@ private struct EmptyApprovalsCard: View {
 
 private struct InlineApprovalsSection: View {
     let approvals: [Approval]
+    let approvedIndicators: [ApprovedInlineIndicator]
     let approvingActionIDs: Set<String>
     let onApprove: (String) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Pending approvals in this chat")
+            Text("Actions in this chat")
                 .font(.system(.footnote, design: .rounded).weight(.semibold))
                 .foregroundStyle(PincerPalette.textSecondary)
 
@@ -513,6 +674,27 @@ private struct InlineApprovalsSection: View {
                     }
                     .disabled(approvingActionIDs.contains(item.actionID))
                     .accessibilityIdentifier("chat_inline_approve_\(item.actionID)")
+                }
+                .padding(.vertical, 2)
+            }
+
+            ForEach(approvedIndicators) { item in
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(PincerPalette.success)
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(prettyToolName(item.tool))
+                            .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                            .foregroundStyle(PincerPalette.textPrimary)
+
+                        Text("Approved. Waiting for execution...")
+                            .font(.system(.caption, design: .rounded))
+                            .foregroundStyle(PincerPalette.textSecondary)
+                    }
+
+                    Spacer()
                 }
                 .padding(.vertical, 2)
             }
@@ -785,6 +967,109 @@ private extension View {
     func cardSurface() -> some View {
         modifier(CardSurfaceModifier())
     }
+}
+
+private struct ParsedBashExecutionMessage {
+    let command: String
+    let exitCode: Int
+    let durationMillis: Int
+    let cwd: String?
+    let output: String
+    let timedOut: Bool
+    let truncated: Bool
+}
+
+private struct ParsedApprovalStatusMessage {
+    let actionID: String
+    let tool: String?
+    let status: String?
+}
+
+private func parseApprovalStatusSystemMessage(_ content: String) -> ParsedApprovalStatusMessage? {
+    let lines = content.components(separatedBy: "\n")
+    guard let headline = lines.first else { return nil }
+
+    let prefix = "Action "
+    let suffix = " approved."
+    guard headline.hasPrefix(prefix), headline.hasSuffix(suffix) else { return nil }
+
+    let actionID = String(
+        headline
+            .dropFirst(prefix.count)
+            .dropLast(suffix.count)
+    ).trimmingCharacters(in: .whitespaces)
+    guard !actionID.isEmpty else { return nil }
+
+    var tool: String?
+    var status: String?
+    for line in lines.dropFirst() {
+        if line.hasPrefix("Tool: ") {
+            tool = String(line.dropFirst("Tool: ".count)).trimmingCharacters(in: .whitespaces)
+        } else if line.hasPrefix("Status: ") {
+            status = String(line.dropFirst("Status: ".count)).trimmingCharacters(in: .whitespaces)
+        }
+    }
+
+    return ParsedApprovalStatusMessage(actionID: actionID, tool: tool, status: status)
+}
+
+private func parseBashExecutionSystemMessage(_ content: String) -> ParsedBashExecutionMessage? {
+    let lines = content.components(separatedBy: "\n")
+    guard lines.count >= 4 else { return nil }
+    guard lines[0].hasPrefix("Action "), lines[0].hasSuffix(" executed.") else { return nil }
+    guard lines[1].hasPrefix("Command: ") else { return nil }
+    guard lines[2].hasPrefix("Exit code: ") else { return nil }
+
+    let command = String(lines[1].dropFirst("Command: ".count)).trimmingCharacters(in: .whitespaces)
+    let exitRaw = String(lines[2].dropFirst("Exit code: ".count)).trimmingCharacters(in: .whitespaces)
+    guard let exitCode = Int(exitRaw) else { return nil }
+
+    var durationMillis = 0
+    var cwd: String?
+    var timedOut = false
+    var truncated = false
+    var outputStart = -1
+
+    for (idx, line) in lines.enumerated() {
+        if line == "Output:" {
+            outputStart = idx + 1
+            break
+        }
+        if line.hasPrefix("Duration: ") {
+            let durationValue = line
+                .dropFirst("Duration: ".count)
+                .replacingOccurrences(of: "ms", with: "")
+                .trimmingCharacters(in: .whitespaces)
+            if let parsed = Int(durationValue) {
+                durationMillis = parsed
+            }
+        } else if line.hasPrefix("CWD: ") {
+            cwd = String(line.dropFirst("CWD: ".count)).trimmingCharacters(in: .whitespaces)
+        } else if line == "Timed out: true" {
+            timedOut = true
+        } else if line == "Output truncated: true" {
+            truncated = true
+        }
+    }
+
+    guard outputStart >= 0, outputStart <= lines.count else { return nil }
+    let outputLines: [String]
+    if outputStart >= lines.count {
+        outputLines = []
+    } else {
+        outputLines = Array(lines[outputStart...])
+    }
+    let output = outputLines.joined(separator: "\n")
+
+    return ParsedBashExecutionMessage(
+        command: command,
+        exitCode: exitCode,
+        durationMillis: durationMillis,
+        cwd: cwd,
+        output: output,
+        timedOut: timedOut,
+        truncated: truncated
+    )
 }
 
 private func prettyToolName(_ raw: String) -> String {

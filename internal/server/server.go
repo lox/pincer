@@ -143,6 +143,7 @@ type bashActionArgs struct {
 type bashExecutionResult struct {
 	Command   string
 	CWD       string
+	Duration  time.Duration
 	ExitCode  int
 	Output    string
 	TimedOut  bool
@@ -632,12 +633,15 @@ func (a *App) handlePostMessage(w http.ResponseWriter, r *http.Request, threadID
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to insert user message"})
 		return
 	}
-	if _, err := tx.Exec(`
-		INSERT INTO messages(message_id, thread_id, role, content, created_at)
-		VALUES(?, ?, 'assistant', ?, ?)
-	`, newID("msg"), threadID, plan.AssistantMessage, nowStr); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to insert assistant message"})
-		return
+	shouldInsertAssistantMessage := len(plan.ProposedActions) == 0
+	if shouldInsertAssistantMessage {
+		if _, err := tx.Exec(`
+			INSERT INTO messages(message_id, thread_id, role, content, created_at)
+			VALUES(?, ?, 'assistant', ?, ?)
+		`, newID("msg"), threadID, plan.AssistantMessage, nowStr); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to insert assistant message"})
+			return
+		}
 	}
 
 	firstActionID := ""
@@ -909,7 +913,14 @@ func (a *App) markActionApproved(actionID string) error {
 
 	var status string
 	var expiresAtRaw string
-	err = tx.QueryRow(`SELECT status, expires_at FROM proposed_actions WHERE action_id = ?`, actionID).Scan(&status, &expiresAtRaw)
+	var source string
+	var sourceID string
+	var tool string
+	err = tx.QueryRow(`
+		SELECT status, expires_at, source, source_id, tool
+		FROM proposed_actions
+		WHERE action_id = ?
+	`, actionID).Scan(&status, &expiresAtRaw, &source, &sourceID, &tool)
 	if err != nil {
 		return err
 	}
@@ -945,6 +956,15 @@ func (a *App) markActionApproved(actionID string) error {
 	}
 	if err := insertAuditTx(tx, "action_approved", actionID, `{}`, now); err != nil {
 		return err
+	}
+	if source == "chat" {
+		systemMsg := approvalSystemMessage(actionID, tool)
+		if _, err := tx.Exec(`
+			INSERT INTO messages(message_id, thread_id, role, content, created_at)
+			VALUES(?, ?, 'system', ?, ?)
+		`, newID("msg"), sourceID, systemMsg, now); err != nil {
+			return err
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -1254,6 +1274,26 @@ func riskClassForTool(tool string) string {
 	}
 }
 
+func prettyActionName(tool string) string {
+	trimmed := strings.TrimSpace(tool)
+	if trimmed == "" {
+		return "Action"
+	}
+	if isBashTool(trimmed) {
+		return "Run Bash"
+	}
+
+	display := strings.ReplaceAll(strings.ToLower(trimmed), "_", " ")
+	words := strings.Fields(display)
+	if len(words) == 0 {
+		return "Action"
+	}
+	for idx, word := range words {
+		words[idx] = strings.ToUpper(word[:1]) + word[1:]
+	}
+	return strings.Join(words, " ")
+}
+
 func isBashTool(tool string) bool {
 	switch strings.ToLower(strings.TrimSpace(tool)) {
 	case "run_bash", "bash_run", "bash", "run_shell":
@@ -1309,15 +1349,17 @@ func executeBashAction(argsJSON string) bashExecutionResult {
 		return result
 	}
 
-	output, exitCode, timedOut, truncated := runBashCommand(result.Command, result.CWD)
+	output, duration, exitCode, timedOut, truncated := runBashCommand(result.Command, result.CWD)
 	result.Output = output
+	result.Duration = duration
 	result.ExitCode = exitCode
 	result.TimedOut = timedOut
 	result.Truncated = truncated
 	return result
 }
 
-func runBashCommand(command, cwd string) (output string, exitCode int, timedOut bool, truncated bool) {
+func runBashCommand(command, cwd string) (output string, duration time.Duration, exitCode int, timedOut bool, truncated bool) {
+	start := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), defaultBashExecTimeout)
 	defer cancel()
 
@@ -1331,6 +1373,7 @@ func runBashCommand(command, cwd string) (output string, exitCode int, timedOut 
 	cmd.Stderr = buffer
 
 	err := cmd.Run()
+	duration = time.Since(start)
 
 	output = strings.TrimSpace(buffer.String())
 	exitCode = 0
@@ -1357,7 +1400,7 @@ func runBashCommand(command, cwd string) (output string, exitCode int, timedOut 
 	if output == "" {
 		output = "(no output)"
 	}
-	return output, exitCode, timedOut, truncated
+	return output, duration, exitCode, timedOut, truncated
 }
 
 func appendOutputLine(existing, next string) string {
@@ -1373,11 +1416,21 @@ func appendOutputLine(existing, next string) string {
 	}
 }
 
+func approvalSystemMessage(actionID, tool string) string {
+	lines := []string{
+		fmt.Sprintf("Action %s approved.", actionID),
+		fmt.Sprintf("Tool: %s", prettyActionName(tool)),
+		"Status: Awaiting execution",
+	}
+	return strings.Join(lines, "\n")
+}
+
 func bashExecutionSystemMessage(actionID string, result bashExecutionResult) string {
 	lines := []string{
 		fmt.Sprintf("Action %s executed.", actionID),
 		fmt.Sprintf("Command: %s", result.Command),
 		fmt.Sprintf("Exit code: %d", result.ExitCode),
+		fmt.Sprintf("Duration: %dms", result.Duration.Milliseconds()),
 	}
 	if result.CWD != "" {
 		lines = append(lines, fmt.Sprintf("CWD: %s", result.CWD))
@@ -1402,6 +1455,7 @@ func bashExecutionAuditPayload(tool string, result bashExecutionResult) string {
 		"tool":             tool,
 		"command":          result.Command,
 		"cwd":              result.CWD,
+		"duration_ms":      result.Duration.Milliseconds(),
 		"exit_code":        result.ExitCode,
 		"timed_out":        result.TimedOut,
 		"output_truncated": result.Truncated,
