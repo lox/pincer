@@ -11,7 +11,7 @@ run = "go run ./cmd/pincer"
 
 [tasks.dev]
 description = "Run the backend in dev mode with a fixed HMAC key"
-run = "PINCER_HTTP_ADDR=\"${PINCER_HTTP_ADDR:-:8080}\" PINCER_DB_PATH=\"${PINCER_DB_PATH:-./pincer.db}\" PINCER_TOKEN_HMAC_KEY=\"pincer-dev-token-hmac-key-change-me\" go run ./cmd/pincer"
+run = "PINCER_HTTP_ADDR=\"${PINCER_HTTP_ADDR:-:8080}\" PINCER_DB_PATH=\"${PINCER_DB_PATH:-./pincer.db}\" PINCER_TOKEN_HMAC_KEY=\"pincer-dev-token-hmac-key-change-me\" PINCER_DEMO_ACTIONS=\"${PINCER_DEMO_ACTIONS:-0}\" go run ./cmd/pincer"
 
 [tasks.reset-db]
 description = "Reset local dev database"
@@ -35,7 +35,7 @@ run = "xcodebuild -project ios/Pincer/Pincer.xcodeproj -scheme Pincer -destinati
 
 [tasks.ios-run]
 description = "Build, install, and launch iOS app in Simulator"
-run = "PINCER_BASE_URL=\"${PINCER_BASE_URL:-http://127.0.0.1:8080}\" scripts/ios_run_simulator.sh"
+run = "scripts/ios_run_simulator.sh"
 
 [tasks.ios-reset-token]
 description = "Clear the simulator stored bearer token"

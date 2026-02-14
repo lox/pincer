@@ -30,9 +30,7 @@ const (
 	defaultOwnerID                    = "owner-dev"
 	defaultTokenHMACKey               = "pincer-dev-token-hmac-key-change-me"
 	defaultPrimaryModel               = "anthropic/claude-opus-4.6"
-	defaultAssistantMessage           = "I prepared a proposed external action. Review it in Approvals before execution."
-	defaultActionTool                 = "demo_external_notify"
-	defaultActionRiskClass            = "EXFILTRATION"
+	defaultAssistantMessage           = "Message processed."
 	defaultActionJustification        = "User requested external follow-up"
 	defaultActionExpiry               = 24 * time.Hour
 	defaultPlannerHistoryLimit        = 12
@@ -53,6 +51,7 @@ type AppConfig struct {
 	OpenRouterBaseURL       string
 	ModelPrimary            string
 	ModelFallback           string
+	EnableDemoActions       bool
 	Logger                  *charmLog.Logger
 	Planner                 agent.Planner
 	ActionExecutorInterval  time.Duration
@@ -193,7 +192,7 @@ func New(cfg AppConfig) (*App, error) {
 
 	planner := cfg.Planner
 	if planner == nil {
-		staticPlanner := agent.NewStaticPlanner()
+		staticPlanner := agent.NewStaticPlanner(cfg.EnableDemoActions)
 		planner = staticPlanner
 
 		if cfg.OpenRouterAPIKey != "" {
@@ -1166,10 +1165,6 @@ func (a *App) planTurn(ctx context.Context, threadID, userMessage string) (agent
 		}
 	}
 
-	if len(proposed) == 0 {
-		proposed = defaultProposedActions(threadID, userMessage)
-	}
-
 	return agent.PlanResult{
 		AssistantMessage: assistant,
 		ProposedActions:  proposed,
@@ -1208,17 +1203,6 @@ func (a *App) loadPlannerHistory(threadID string, limit int) ([]agent.Message, e
 	}
 
 	return history, nil
-}
-
-func defaultProposedActions(threadID, userMessage string) []agent.ProposedAction {
-	return []agent.ProposedAction{
-		{
-			Tool:          defaultActionTool,
-			Args:          defaultActionArgs(threadID, userMessage),
-			Justification: defaultActionJustification,
-			RiskClass:     defaultActionRiskClass,
-		},
-	}
 }
 
 func defaultActionArgs(threadID, userMessage string) json.RawMessage {

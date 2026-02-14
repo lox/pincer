@@ -63,11 +63,13 @@ Useful overrides:
 - `PINCER_DB_PATH`
 - `PINCER_AUTH_TOKEN`
 - `PINCER_TOKEN_HMAC_KEY`
+- `PINCER_DEMO_ACTIONS`
 - `PINCER_E2E_RESET_DB=0`
 
 Database/session defaults:
 
 - `mise run dev` uses `./pincer.db` by default and `PINCER_TOKEN_HMAC_KEY='pincer-dev-token-hmac-key-change-me'`.
+- `PINCER_DEMO_ACTIONS` is `false` in `dev` by default; set it to `1`/`true` to keep the demo fallback action enabled.
 - `mise run reset-db` clears `./pincer.db` and associated SQLite journal files.
 - `mise run e2e-api` and `mise run e2e-ios` use `/tmp/pincer-e2e.db` in tmux session `pincer-backend-e2e` on `http://127.0.0.1:18080` (reset each run by default).
 

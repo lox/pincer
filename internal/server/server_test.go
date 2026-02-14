@@ -51,6 +51,30 @@ func TestEndToEndApprovalFlow(t *testing.T) {
 	}
 }
 
+func TestPostMessageWithoutDemoActionsHasNoImplicitProposal(t *testing.T) {
+	t.Parallel()
+
+	app := newTestAppWithConfig(t, AppConfig{
+		DBPath:            filepath.Join(t.TempDir(), "pincer-test-no-demo.db"),
+		EnableDemoActions: false,
+	})
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
+
+	token := bootstrapAuthToken(t, srv.URL)
+	threadID := createThread(t, srv.URL, token)
+	response := postMessageResponse(t, srv.URL, token, threadID, "hello")
+
+	if response.AssistantMessage == "" {
+		t.Fatalf("expected assistant message")
+	}
+
+	pending := listApprovals(t, srv.URL, token, "pending")
+	if len(pending) != 0 {
+		t.Fatalf("expected 0 pending approvals, got %d", len(pending))
+	}
+}
+
 func TestPostMessageUsesPlannerOutput(t *testing.T) {
 	t.Parallel()
 
@@ -435,8 +459,18 @@ type testDevicesResponse struct {
 
 func newTestApp(t *testing.T) *App {
 	t.Helper()
+	return newTestAppWithConfig(t, AppConfig{
+		EnableDemoActions: true,
+	})
+}
+
+func newTestAppWithConfig(t *testing.T, cfg AppConfig) *App {
+	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "pincer-test.db")
-	app, err := New(AppConfig{DBPath: dbPath})
+	if cfg.DBPath == "" {
+		cfg.DBPath = dbPath
+	}
+	app, err := New(cfg)
 	if err != nil {
 		t.Fatalf("new app: %v", err)
 	}
@@ -448,10 +482,10 @@ func newTestApp(t *testing.T) *App {
 
 func newTestAppWithPlanner(t *testing.T, planner agent.Planner) *App {
 	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "pincer-test.db")
 	app, err := New(AppConfig{
-		DBPath:  dbPath,
-		Planner: planner,
+		DBPath:           filepath.Join(t.TempDir(), "pincer-test.db"),
+		EnableDemoActions: true,
+		Planner:          planner,
 	})
 	if err != nil {
 		t.Fatalf("new app: %v", err)

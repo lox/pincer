@@ -8,6 +8,9 @@ PROJECT_PATH="${ROOT_DIR}/ios/Pincer/Pincer.xcodeproj"
 SCHEME="${PINCER_IOS_SCHEME:-Pincer}"
 AUTH_TOKEN="${PINCER_AUTH_TOKEN:-}"
 BASE_URL="${PINCER_BASE_URL:-http://127.0.0.1:8080}"
+if [[ "${BASE_URL}" == '${PINCER_BASE_URL:-http://127.0.0.1:8080}' || -z "${BASE_URL}" ]]; then
+  BASE_URL="http://127.0.0.1:8080"
+fi
 
 require_cmd() {
   local cmd="$1"

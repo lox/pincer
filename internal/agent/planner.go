@@ -46,29 +46,39 @@ type Planner interface {
 	Plan(ctx context.Context, req PlanRequest) (PlanResult, error)
 }
 
-type staticPlanner struct{}
-
-func NewStaticPlanner() Planner {
-	return staticPlanner{}
+type staticPlanner struct {
+	enableDefaultAction bool
 }
 
-func (staticPlanner) Plan(_ context.Context, req PlanRequest) (PlanResult, error) {
+func NewStaticPlanner(enableDefaultAction bool) Planner {
+	return staticPlanner{enableDefaultAction: enableDefaultAction}
+}
+
+func (s staticPlanner) Plan(_ context.Context, req PlanRequest) (PlanResult, error) {
 	args, _ := json.Marshal(map[string]string{
 		"thread_id": req.ThreadID,
 		"summary":   req.UserMessage,
 	})
 
-	return PlanResult{
-		AssistantMessage: "I prepared a proposed external action. Review it in Approvals before execution.",
-		ProposedActions: []ProposedAction{
-			{
-				Tool:          "demo_external_notify",
-				Args:          args,
-				Justification: "User requested external follow-up",
-				RiskClass:     "EXFILTRATION",
+	response := PlanResult{
+		AssistantMessage: "No external actions were proposed.",
+		ProposedActions:  []ProposedAction{},
+	}
+	if s.enableDefaultAction {
+		response = PlanResult{
+			AssistantMessage: "I prepared a proposed external action. Review it in Approvals before execution.",
+			ProposedActions: []ProposedAction{
+				{
+					Tool:          "demo_external_notify",
+					Args:          args,
+					Justification: "User requested external follow-up",
+					RiskClass:     "EXFILTRATION",
+				},
 			},
-		},
-	}, nil
+		}
+	}
+
+	return response, nil
 }
 
 type fallbackPlanner struct {
@@ -196,6 +206,7 @@ func (p *OpenAIPlanner) planWithModel(ctx context.Context, model string, req Pla
 			Role: "system",
 			Content: "You are the planning harness for Pincer. Return only a single JSON object with keys assistant_message and proposed_actions. " +
 				"proposed_actions must be an array of objects with tool, args (JSON object), justification, and optional risk_class. " +
+				"Only return non-empty proposed_actions when the user explicitly asked for an external action or workflow. " +
 				"Never return markdown or code fences.",
 		},
 	}

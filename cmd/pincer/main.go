@@ -19,6 +19,7 @@ type cliConfig struct {
 	HTTPAddr          string `name:"http-addr" help:"HTTP listen address." env:"PINCER_HTTP_ADDR" default:":8080"`
 	DBPath            string `name:"db-path" help:"SQLite database path." env:"PINCER_DB_PATH" default:"./pincer.db"`
 	TokenHMACKey      string `name:"token-hmac-key" help:"HMAC key for bearer token signing." env:"PINCER_TOKEN_HMAC_KEY"`
+	DemoActions       bool   `name:"demo-actions" help:"Enable demo default external action when planner returns no actions." env:"PINCER_DEMO_ACTIONS"`
 	OpenRouterAPIKey  string `name:"openrouter-api-key" help:"OpenRouter API key." env:"OPENROUTER_API_KEY"`
 	OpenRouterBaseURL string `name:"openrouter-base-url" help:"OpenRouter API base URL." env:"OPENROUTER_BASE_URL"`
 	ModelPrimary      string `name:"model-primary" help:"Primary model ID." env:"PINCER_MODEL_PRIMARY" default:"anthropic/claude-opus-4.6"`
@@ -49,6 +50,7 @@ func main() {
 	app, err := server.New(server.AppConfig{
 		DBPath:            cfg.DBPath,
 		TokenHMACKey:      cfg.TokenHMACKey,
+		EnableDemoActions: cfg.DemoActions,
 		OpenRouterAPIKey:  cfg.OpenRouterAPIKey,
 		OpenRouterBaseURL: cfg.OpenRouterBaseURL,
 		ModelPrimary:      cfg.ModelPrimary,

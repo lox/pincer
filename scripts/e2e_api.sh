@@ -3,6 +3,7 @@ set -euo pipefail
 
 BASE_URL="${PINCER_BASE_URL:-http://127.0.0.1:18080}"
 HTTP_ADDR="${PINCER_HTTP_ADDR:-:18080}"
+DEMO_ACTIONS="${PINCER_DEMO_ACTIONS:-1}"
 AUTH_TOKEN="${PINCER_AUTH_TOKEN:-}"
 AUTH_HEADER=""
 START_BACKEND="${PINCER_E2E_START_BACKEND:-1}"
@@ -22,6 +23,7 @@ if [[ "${START_BACKEND}" == "1" ]]; then
   PINCER_DB_PATH="${PINCER_DB_PATH:-/tmp/pincer-e2e.db}" \
   PINCER_HTTP_ADDR="${HTTP_ADDR}" \
   PINCER_BASE_URL="${BASE_URL}" \
+  PINCER_DEMO_ACTIONS="${DEMO_ACTIONS}" \
   PINCER_E2E_RESET_DB="${PINCER_E2E_RESET_DB:-1}" \
     "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/backend_up.sh" >/dev/null
 fi

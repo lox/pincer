@@ -13,7 +13,7 @@ import (
 func TestStaticPlannerReturnsDefaultProposal(t *testing.T) {
 	t.Parallel()
 
-	planner := NewStaticPlanner()
+	planner := NewStaticPlanner(true)
 	result, err := planner.Plan(context.Background(), PlanRequest{
 		ThreadID:    "thr_test",
 		UserMessage: "hello",
@@ -29,6 +29,22 @@ func TestStaticPlannerReturnsDefaultProposal(t *testing.T) {
 	}
 	if result.ProposedActions[0].Tool != "demo_external_notify" {
 		t.Fatalf("unexpected tool: %q", result.ProposedActions[0].Tool)
+	}
+}
+
+func TestStaticPlannerCanDisableDefaultProposal(t *testing.T) {
+	t.Parallel()
+
+	planner := NewStaticPlanner(false)
+	result, err := planner.Plan(context.Background(), PlanRequest{
+		ThreadID:    "thr_test",
+		UserMessage: "hello",
+	})
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	if len(result.ProposedActions) != 0 {
+		t.Fatalf("expected 0 proposed actions, got %d", len(result.ProposedActions))
 	}
 }
 
