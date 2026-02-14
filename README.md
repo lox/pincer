@@ -50,11 +50,12 @@ Go Backend (single binary)
 
 ## Local end-to-end
 
-- `mise run backend-up`
+- `mise run dev`
+- `mise run reset-db`
+- `mise run ios-reset-token`
 - `mise run ios-run` (manual simulator launch path)
 - `mise run e2e-api`
 - `mise run e2e-ios`
-- `mise run backend-down`
 
 Useful overrides:
 
@@ -66,7 +67,8 @@ Useful overrides:
 
 Database/session defaults:
 
-- `mise run backend-up` uses `./pincer.db` (persistent dev DB, no reset by default).
+- `mise run dev` uses `./pincer.db` by default and `PINCER_TOKEN_HMAC_KEY='pincer-dev-token-hmac-key-change-me'`.
+- `mise run reset-db` clears `./pincer.db` and associated SQLite journal files.
 - `mise run e2e-api` and `mise run e2e-ios` use `/tmp/pincer-e2e.db` in tmux session `pincer-backend-e2e` on `http://127.0.0.1:18080` (reset each run by default).
 
 Backend runtime config is now CLI+env via `kong`:

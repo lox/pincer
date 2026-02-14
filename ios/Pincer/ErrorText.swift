@@ -15,7 +15,7 @@ func userFacingErrorMessage(_ error: Error, fallback: String) -> String {
     if let urlError = error as? URLError {
         switch urlError.code {
         case .cannotConnectToHost, .cannotFindHost, .notConnectedToInternet, .timedOut, .networkConnectionLost:
-            return "Cannot reach backend at \(AppConfig.baseURL.absoluteString). Start it with `mise run backend-up`."
+            return "Cannot reach backend at \(AppConfig.baseURL.absoluteString). Start it with `mise run dev`."
         default:
             break
         }

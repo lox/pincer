@@ -45,7 +45,7 @@ cd "${ROOT_DIR}"
 backend_code="$(curl -sS -o /dev/null -w '%{http_code}' -X POST "${BASE_URL}/v1/pairing/code" -H 'Content-Type: application/json' -d '{}' || true)"
 if [[ "${backend_code}" == "000" ]]; then
   echo "warning: backend not reachable at ${BASE_URL}" >&2
-  echo "warning: run 'mise run backend-up' before using chat/approvals" >&2
+  echo "warning: run 'mise run dev' before using chat/approvals" >&2
 fi
 
 xcodebuild -project "${PROJECT_PATH}" \
@@ -62,7 +62,6 @@ fi
 open -a Simulator >/dev/null 2>&1 || true
 xcrun simctl boot "${DEVICE}" >/dev/null 2>&1 || true
 xcrun simctl bootstatus "${DEVICE}" -b >/dev/null
-xcrun simctl uninstall "${DEVICE}" "${BUNDLE_ID}" >/dev/null 2>&1 || true
 xcrun simctl install "${DEVICE}" "${APP_PATH}" >/dev/null
 
 if [[ -n "${AUTH_TOKEN}" ]]; then
