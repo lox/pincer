@@ -86,6 +86,7 @@ struct ContentView: View {
 
 private struct ChatView: View {
     @ObservedObject var model: ChatViewModel
+    private let chatBottomAnchorID = "chat_bottom_anchor"
 
     var body: some View {
         NavigationStack {
@@ -115,15 +116,26 @@ private struct ChatView: View {
                                         }
                                     )
                                 }
+
+                                Color.clear
+                                    .frame(height: 1)
+                                    .id(chatBottomAnchorID)
                             }
                             .padding(.horizontal, 16)
                             .padding(.top, 10)
                             .padding(.bottom, 6)
                         }
                         .onChange(of: model.messages.count) { _, _ in
-                            guard let lastID = model.messages.last?.id else { return }
-                            withAnimation(.easeOut(duration: 0.22)) {
-                                reader.scrollTo(lastID, anchor: .bottom)
+                            scrollToBottom(reader)
+                        }
+                        .onChange(of: model.inlineApprovals.count) { _, newCount in
+                            if newCount > 0 {
+                                scrollToBottom(reader)
+                            }
+                        }
+                        .onChange(of: model.approvedInlineIndicators.count) { _, newCount in
+                            if newCount > 0 {
+                                scrollToBottom(reader)
                             }
                         }
                     }
@@ -164,6 +176,12 @@ private struct ChatView: View {
             } message: {
                 Text(model.errorText ?? "Unknown error")
             }
+        }
+    }
+
+    private func scrollToBottom(_ reader: ScrollViewProxy) {
+        withAnimation(.easeOut(duration: 0.22)) {
+            reader.scrollTo(chatBottomAnchorID, anchor: .bottom)
         }
     }
 }
