@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 
 @MainActor
 final class ChatViewModel: ObservableObject {
@@ -11,10 +12,14 @@ final class ChatViewModel: ObservableObject {
     @Published var isBusy = false
 
     private let client: APIClient
+    private let approvalsStore: ApprovalsStore
+    private var cancellables: Set<AnyCancellable> = []
     private static let createdAtFormatter = ISO8601DateFormatter()
 
-    init(client: APIClient) {
+    init(client: APIClient, approvalsStore: ApprovalsStore) {
         self.client = client
+        self.approvalsStore = approvalsStore
+        bindStore()
     }
 
     func bootstrapIfNeeded() async {
@@ -25,6 +30,7 @@ final class ChatViewModel: ObservableObject {
             let id = try await client.createThread()
             threadID = id
             try await refresh()
+            syncInlineApprovals()
         } catch {
             errorText = userFacingErrorMessage(error, fallback: "Failed to initialize chat.")
         }
@@ -33,7 +39,8 @@ final class ChatViewModel: ObservableObject {
     func refresh() async throws {
         guard let threadID else { return }
         messages = try await client.fetchMessages(threadID: threadID)
-        await refreshInlineApprovals(threadID: threadID)
+        await approvalsStore.refreshPendingWithoutBusyState()
+        syncInlineApprovals()
     }
 
     func send() async {
@@ -64,19 +71,16 @@ final class ChatViewModel: ObservableObject {
     }
 
     func approveInline(_ actionID: String) async {
-        guard !approvingActionIDs.contains(actionID), let threadID else { return }
-        approvingActionIDs.insert(actionID)
-        defer { approvingActionIDs.remove(actionID) }
+        guard threadID != nil else { return }
+        guard !approvingActionIDs.contains(actionID) else { return }
 
-        do {
-            try await client.approve(actionID: actionID)
+        let approved = await approvalsStore.approve(actionID)
+        if approved {
             inlineApprovals.removeAll { $0.actionID == actionID }
-
-            // Pull latest messages to surface the eventual execution status update.
-            try await refresh()
-        } catch {
-            errorText = userFacingErrorMessage(error, fallback: "Failed to approve action.")
-            await refreshInlineApprovals(threadID: threadID)
+            await refreshAfterApproval()
+        } else {
+            errorText = approvalsStore.errorText
+            syncInlineApprovals()
         }
     }
 
@@ -101,14 +105,23 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
-    private func refreshInlineApprovals(threadID: String) async {
-        do {
-            let pending = try await client.fetchApprovals(status: "pending")
-            inlineApprovals = pending.filter { approval in
-                approval.source == "chat" && approval.sourceID == threadID
+    private func bindStore() {
+        approvalsStore.$pendingApprovals
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.syncInlineApprovals()
             }
-        } catch {
-            inlineApprovals = []
-        }
+            .store(in: &cancellables)
+
+        approvalsStore.$approvingActionIDs
+            .receive(on: RunLoop.main)
+            .sink { [weak self] actionIDs in
+                self?.approvingActionIDs = actionIDs
+            }
+            .store(in: &cancellables)
+    }
+
+    private func syncInlineApprovals() {
+        inlineApprovals = approvalsStore.pendingApprovals(forThreadID: threadID)
     }
 }

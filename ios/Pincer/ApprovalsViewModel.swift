@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 
 @MainActor
 final class ApprovalsViewModel: ObservableObject {
@@ -6,31 +7,45 @@ final class ApprovalsViewModel: ObservableObject {
     @Published var errorText: String?
     @Published var isBusy = false
 
-    private let client: APIClient
+    private let approvalsStore: ApprovalsStore
+    private var cancellables: Set<AnyCancellable> = []
 
-    init(client: APIClient) {
-        self.client = client
+    init(approvalsStore: ApprovalsStore) {
+        self.approvalsStore = approvalsStore
+        bindStore()
     }
 
     func refresh() async {
-        isBusy = true
-        defer { isBusy = false }
-        do {
-            approvals = try await client.fetchApprovals(status: "pending")
-        } catch {
-            errorText = userFacingErrorMessage(error, fallback: "Failed to load approvals.")
-        }
+        await approvalsStore.refreshPending()
     }
 
     func approve(_ actionID: String, onSuccess: @escaping () async -> Void = {}) async {
-        isBusy = true
-        defer { isBusy = false }
-        do {
-            try await client.approve(actionID: actionID)
-            approvals = approvals.filter { $0.actionID != actionID }
+        let approved = await approvalsStore.approve(actionID)
+        if approved {
             await onSuccess()
-        } catch {
-            errorText = userFacingErrorMessage(error, fallback: "Failed to approve action.")
         }
+    }
+
+    private func bindStore() {
+        approvalsStore.$pendingApprovals
+            .receive(on: RunLoop.main)
+            .sink { [weak self] approvals in
+                self?.approvals = approvals
+            }
+            .store(in: &cancellables)
+
+        approvalsStore.$errorText
+            .receive(on: RunLoop.main)
+            .sink { [weak self] errorText in
+                self?.errorText = errorText
+            }
+            .store(in: &cancellables)
+
+        approvalsStore.$isBusy
+            .receive(on: RunLoop.main)
+            .sink { [weak self] isBusy in
+                self?.isBusy = isBusy
+            }
+            .store(in: &cancellables)
     }
 }

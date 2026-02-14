@@ -21,13 +21,16 @@ private enum A11y {
 }
 
 struct ContentView: View {
+    @StateObject private var approvalsStore: ApprovalsStore
     @StateObject private var chatModel: ChatViewModel
     @StateObject private var approvalsModel: ApprovalsViewModel
     @StateObject private var settingsModel: SettingsViewModel
 
     init(client: APIClient) {
-        _chatModel = StateObject(wrappedValue: ChatViewModel(client: client))
-        _approvalsModel = StateObject(wrappedValue: ApprovalsViewModel(client: client))
+        let approvalsStore = ApprovalsStore(client: client)
+        _approvalsStore = StateObject(wrappedValue: approvalsStore)
+        _chatModel = StateObject(wrappedValue: ChatViewModel(client: client, approvalsStore: approvalsStore))
+        _approvalsModel = StateObject(wrappedValue: ApprovalsViewModel(approvalsStore: approvalsStore))
         _settingsModel = StateObject(wrappedValue: SettingsViewModel(client: client))
     }
 
@@ -51,7 +54,7 @@ struct ContentView: View {
                     Label("Approvals", systemImage: "checkmark.shield")
                         .accessibilityIdentifier(A11y.tabApprovals)
                 }
-                .badge(approvalsModel.approvals.count)
+                .badge(approvalsStore.pendingApprovals.count)
 
             ScheduleView()
                 .accessibilityIdentifier(A11y.screenSchedule)
@@ -350,17 +353,7 @@ private struct PincerPageBackground: View {
 
 private struct EmptyChatCard: View {
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("I found some interesting details on the latest market trends. Would you like an overview?")
-                .font(.system(.body, design: .rounded))
-                .foregroundStyle(PincerPalette.textPrimary)
-
-            Text("Tap send to create a proposal that will appear in Approvals.")
-                .font(.system(.footnote, design: .rounded))
-                .foregroundStyle(PincerPalette.textSecondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .cardSurface()
+        EmptyView()
     }
 }
 
