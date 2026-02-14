@@ -7,7 +7,7 @@
 Pincer is a security-first autonomous assistant with a Go backend and an iOS control app.
 It is designed for high autonomy with strict control over side effects.
 
-Inspired by OpenClaw and Nanobot.
+Inspired by [OpenClaw](https://github.com/openclaw/openclaw) and [Nanobot](https://github.com/HKUDS/nanobot).
 
 ## Core idea
 
