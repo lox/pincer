@@ -34,8 +34,11 @@ Steps:
 - [x] Implement proposed action persistence.
 - [x] Implement approval endpoints and state transitions.
 - [x] Implement action executor with idempotency.
+- [x] Add explicit-approval `run_bash` execution with bounded timeout/output capture and audited results.
 - [x] Implement audit logging for all side-effect transitions.
 - [x] Implement iOS Chat + Approvals + Settings session controls.
+- [x] Unify approval state between Approvals tab and inline Chat indicators.
+- [x] Render approval and execution outcomes directly in the Chat timeline.
 - [x] Add reproducible API and iOS E2E scripts.
 
 Exit criteria:
@@ -140,13 +143,16 @@ Exit criteria:
 - [x] External side effects always use `proposed -> approved -> executed -> audited`.
 - [x] Idempotency conflicts are hard failures with audit events.
 - [x] No policy-bypass channels.
-- [x] All planner-tool turns are bounded, replay-safe, and audit-covered.
-- [x] Triggered turns (jobs/schedules/heartbeat/subagents) must use the same proposal pipeline.
+- [ ] All planner-tool turns are bounded, replay-safe, and audit-covered.
+- [ ] Triggered turns (jobs/schedules/heartbeat/subagents) must use the same proposal pipeline.
 
 ## 9. Current checkpoint
 
 - [x] Pairing + opaque bearer auth.
 - [x] Chat + approvals + action executor + audit conveyor.
+- [x] SOUL-guided planner prompt loading from `SOUL.md`.
+- [x] `run_bash` tool path with approval gating and auditable execution output in chat.
+- [x] Inline chat approval/execution timeline with shared approval state from Approvals tab.
 - [x] Device session list + revoke controls.
 - [x] Reproducible API and iOS E2E flows.
 - [ ] Phase 2 integrations started.
