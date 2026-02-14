@@ -1,0 +1,42 @@
+[tools]
+go = "1.23.6"
+
+[tasks.test]
+description = "Run Go tests"
+run = "go test ./..."
+
+[tasks.run]
+description = "Run the backend server"
+run = "go run ./cmd/pincer"
+
+[tasks.backend-up]
+description = "Start backend in tmux for local end-to-end testing"
+run = "scripts/backend_up.sh"
+
+[tasks.backend-down]
+description = "Stop tmux backend used for local end-to-end testing"
+run = "scripts/backend_down.sh"
+
+[tasks.fmt]
+description = "Format Go files"
+run = "gofmt -w ./cmd ./internal"
+
+[tasks.tidy]
+description = "Sync Go module dependencies"
+run = "go mod tidy"
+
+[tasks.ios-generate]
+description = "Generate iOS Xcode project from spec"
+run = "cd ios/Pincer && xcodegen generate"
+
+[tasks.ios-build]
+description = "Build iOS app for Simulator (no signing)"
+run = "xcodebuild -project ios/Pincer/Pincer.xcodeproj -scheme Pincer -destination 'generic/platform=iOS Simulator' build CODE_SIGNING_ALLOWED=NO"
+
+[tasks.e2e-api]
+description = "Run MVP API end-to-end checks against running backend"
+run = "scripts/e2e_api.sh"
+
+[tasks.e2e-ios]
+description = "Run MVP iOS + backend end-to-end checks in simulator"
+run = "scripts/e2e_ios.sh"
