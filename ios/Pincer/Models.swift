@@ -61,3 +61,58 @@ struct Approval: Codable, Identifiable {
 struct ApprovalsResponse: Codable {
     let items: [Approval]
 }
+
+struct PairingCodeResponse: Codable {
+    let code: String
+    let expiresAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case code
+        case expiresAt = "expires_at"
+    }
+}
+
+struct PairingBindRequest: Codable {
+    let code: String
+    let deviceName: String
+
+    enum CodingKeys: String, CodingKey {
+        case code
+        case deviceName = "device_name"
+    }
+}
+
+struct PairingBindResponse: Codable {
+	let deviceID: String
+	let token: String
+	let expiresAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case deviceID = "device_id"
+        case token
+		case expiresAt = "expires_at"
+	}
+}
+
+struct Device: Codable, Identifiable {
+	let deviceID: String
+	let name: String
+	let revokedAt: String
+	let createdAt: String
+	let isCurrent: Bool
+
+	var id: String { deviceID }
+	var isRevoked: Bool { !revokedAt.isEmpty }
+
+	enum CodingKeys: String, CodingKey {
+		case deviceID = "device_id"
+		case name
+		case revokedAt = "revoked_at"
+		case createdAt = "created_at"
+		case isCurrent = "is_current"
+	}
+}
+
+struct DevicesResponse: Codable {
+	let items: [Device]
+}

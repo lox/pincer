@@ -1,397 +1,234 @@
-# Pincer Phase 1 Specification (v0.2)
+# Pincer System Specification
 
-Status: Locked defaults for implementation
-Date: 2026-02-13
+Status: Canonical design contract
+Date: 2026-02-14
 
-## 1. Scope
+This document defines the target system design for Pincer.
+Implementation sequencing and phase gates are tracked in `PLAN.md`.
 
-Phase 1 is intentionally minimal and security-first.
+## 1. Purpose
 
-- Single-owner backend instance (one runtime owner).
-- iOS app is the only client/channel.
-- No subprocess/sandbox execution tools.
-- Calendar is read-only.
-- User mailbox: read + draft only (no send).
-- Bot mailbox: read + draft + send, with explicit approval for send.
-- All external writes/sends are approval-gated (no auto-approval rules).
+Pincer is a security-first autonomous assistant that can:
 
-## 1.1 Delivery sequence (minimal-first)
+- operate over long horizons (research, planning, follow-up),
+- integrate with external systems (mail, calendar, web),
+- and remain safe by requiring explicit approval for risky side effects.
 
-1. Data and audit primitives
-- Persist foundational entities in SQLite: `users`, `threads`, `messages`, `proposed_actions`, `idempotency`, `audit_log`.
-- Enforce strict structured planner output validation before policy evaluation.
+## 2. Core invariants
 
-2. Action conveyor
-- Implement deterministic action lifecycle: `proposed -> policy-evaluated -> approval-gated -> executed`.
-- Enforce idempotency on every external write execution attempt.
+1. LLM output is untrusted.
+2. External side effects must flow through trusted code paths.
+3. No external write/send executes without explicit policy decision.
+4. Idempotency gates all external write execution.
+5. Every side-effect transition is auditable.
 
-3. Read-path baseline
-- Enable one read integration first (Gmail read/search or web search/open).
-- Validate end-to-end flow before enabling external write tools.
+Canonical side-effect conveyor:
 
-4. Job runner baseline
-- Implement one-step job execution with checkpoint persistence and resume support.
-- Emit job progress into thread messages and `job_events`.
+`proposed -> approved -> executed -> audited`
 
-5. Pairing and auth
-- Implement device pairing and opaque bearer authentication.
-- Require authentication middleware for all endpoints.
-- Implement iOS shell navigation and approvals-first UX alongside pairing.
+## 3. Trust model
 
-6. Approval-gated bot writes
-- Add bot send flow after core primitives are stable.
-- Keep user mailbox at read + draft only in Phase 1.
+Trusted:
 
-7. Scheduler bootstrap
-- Implement `cron`, `interval`, and `at` triggers with deduplicated wakeup processing.
+- policy engine
+- tool executors
+- SQLite persistence
+- iOS control UI
 
-8. Autonomy extensions (after core acceptance criteria)
-- Add durable memory patterns, timer-driven follow-up creation, and curated skill application.
-- Keep autonomous execution limited to internal-only actions unless explicit approval is granted.
+Untrusted:
 
-## 1.2 Phase 1 acceptance criteria
+- planner/model output
+- email/web content
 
-- No external side effect can execute without explicit approval and audit trail.
-- Approval TTL is enforced with automatic expiration rejection at 24h.
-- Idempotency key reuse with different args fails with conflict.
-- Jobs checkpoint and resume correctly after restart/failure.
-- Autonomous follow-up loops can run internally without violating external side-effect controls.
+Operating principle:
 
-## 1.3 Explicit phase 1 deferrals
+- model may propose,
+- trusted code decides and executes.
 
-- Domain allowlists for web opens.
-- Advanced prompt-injection scoring heuristics.
-- Audit hash chaining.
-- Multi-device policy UX beyond one-owner defaults.
-- Python skill runtime isolation (future option: `pydantic/monty`).
+## 4. Architecture
 
-## 1.4 Autonomy architecture (nanobot-inspired, policy-constrained)
+Primary components:
 
-Inspiration: [nanobot](https://github.com/lightweight-openclaw/nanobot).
-Security posture: [the lethal trifecta](https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/).
+- HTTP API server (Go)
+- SQLite (WAL)
+- Tool registry and validators
+- Policy engine
+- Approval queue
+- Action executor
+- Job runner
+- Scheduler
+- Provider client (OpenAI-compatible)
 
-Memory primitive:
+Reference flow:
 
-- Short-horizon memory: thread context + job checkpoints.
-- Durable memory: internal artifacts/notes authored by trusted tool executors.
-- Memory updates are internal writes and must never directly trigger external side effects.
-
-Timer/follow-up primitive:
-
-- Scheduler wakeups create new turns/jobs for autonomous follow-up.
-- Follow-up runs may read, research, summarize, and update internal memory.
-- External writes remain blocked until explicit approval.
-
-Skill primitive:
-
-- Skills are curated reusable instructions/workflows bound to permitted tool subsets.
-- Skills execute inside normal tool policy boundaries and cannot bypass approval rules.
-- No arbitrary subprocess or Python code execution in Phase 1.
-
-Self-improvement primitive:
-
-- Agent may propose prompt/schedule/skill changes as internal artifacts.
-- Applying changes that affect policy, credentials, scopes, or external side effects is owner-gated.
-
-Execution lanes:
-
-1. Lane A (autonomous internal): memory writes, notes, follow-up scheduling, analysis.
-2. Lane B (approval-gated external): outbound sends and external writes/exfiltration.
-3. Lane C (owner-gated config): policy/scopes/credential/runtime changes.
-
-## 2. Trust and Execution Model
-
-- Trusted: policy engine, tool executors, SQLite store, iOS UI.
-- Untrusted: LLM output, web content, email content.
-- Invariant: model proposes structured actions; backend policy and executor decide/perform.
-
-Execution pipeline:
-
-1. Planner turn produces JSON: assistant message + proposed actions.
-2. Backend validates output schema.
-3. Policy evaluates each action.
-4. If approval required, action enters approval queue.
-5. Approved actions execute via Action Executor.
-6. All steps emit audit events.
-
-## 3. Runtime Configuration
-
-Required environment variables:
-
-- `PINCER_ENV`
-- `PINCER_HTTP_ADDR`
-- `PINCER_DATABASE_PATH`
-- `PINCER_ENCRYPTION_KEY_B64` (32-byte key in base64 for token encryption)
-- `PINCER_OPENROUTER_API_KEY`
-- `PINCER_MODEL_PRIMARY`
-- `PINCER_MODEL_FALLBACK`
-- `PINCER_APPROVAL_TTL_HOURS` (default `24`)
-- `PINCER_DAILY_TOKEN_BUDGET` (default `1000000`)
-- `PINCER_JOB_TOKEN_BUDGET` (default `200000`)
-
-## 4. Data Model (SQLite, WAL)
-
-## 4.1 Core tables
-
-`users`
-- `user_id` TEXT PK
-- `email` TEXT NOT NULL
-- `created_at` TEXT NOT NULL
-
-`devices`
-- `device_id` TEXT PK
-- `user_id` TEXT NOT NULL
-- `name` TEXT
-- `public_key` TEXT
-- `revoked_at` TEXT
-- `created_at` TEXT NOT NULL
-
-`auth_tokens`
-- `token_id` TEXT PK
-- `device_id` TEXT NOT NULL
-- `token_hash` TEXT NOT NULL UNIQUE
-- `expires_at` TEXT NOT NULL
-- `last_used_at` TEXT
-- `created_at` TEXT NOT NULL
-
-`oauth_tokens`
-- `token_id` TEXT PK
-- `user_id` TEXT NOT NULL
-- `provider` TEXT NOT NULL (`google`)
-- `identity_type` TEXT NOT NULL (`user` | `bot`)
-- `encrypted_refresh_token` BLOB NOT NULL
-- `scopes` TEXT NOT NULL
-- `created_at` TEXT NOT NULL
-- `updated_at` TEXT NOT NULL
-- UNIQUE(`user_id`, `provider`, `identity_type`)
-
-`threads`
-- `thread_id` TEXT PK
-- `user_id` TEXT NOT NULL
-- `channel` TEXT NOT NULL (`ios`)
-- `created_at` TEXT NOT NULL
-
-`messages`
-- `message_id` TEXT PK
-- `thread_id` TEXT NOT NULL
-- `role` TEXT NOT NULL (`user` | `assistant` | `system`)
-- `content` TEXT NOT NULL (max 64KB UTF-8 bytes)
-- `created_at` TEXT NOT NULL
-
-`jobs`
-- `job_id` TEXT PK
-- `thread_id` TEXT NOT NULL
-- `user_id` TEXT NOT NULL
-- `goal` TEXT NOT NULL
-- `state` TEXT NOT NULL (`PENDING` | `RUNNING` | `WAITING_APPROVAL` | `COMPLETED` | `FAILED` | `CANCELLED` | `PAUSED_BUDGET`)
-- `checkpoint_blob` BLOB (max 512KB)
-- `next_wakeup_at` TEXT
-- `budget_json` TEXT NOT NULL
-- `created_at` TEXT NOT NULL
-- `updated_at` TEXT NOT NULL
-
-`job_events`
-- `event_id` TEXT PK
-- `job_id` TEXT NOT NULL
-- `type` TEXT NOT NULL
-- `payload_json` TEXT NOT NULL
-- `created_at` TEXT NOT NULL
-
-`schedules`
-- `schedule_id` TEXT PK
-- `user_id` TEXT NOT NULL
-- `trigger_type` TEXT NOT NULL (`cron` | `interval` | `at`)
-- `trigger_config_json` TEXT NOT NULL
-- `payload_json` TEXT NOT NULL
-- `timezone` TEXT NOT NULL (IANA TZ, e.g. `Australia/Melbourne`)
-- `enabled` INTEGER NOT NULL
-- `created_at` TEXT NOT NULL
-
-`wakeup_events`
-- `event_id` TEXT PK
-- `schedule_id` TEXT NOT NULL
-- `scheduled_for` TEXT NOT NULL (UTC RFC3339)
-- `lease_until` TEXT
-- `status` TEXT NOT NULL (`PENDING` | `LEASED` | `COMPLETED`)
-- `dedupe_key` TEXT NOT NULL UNIQUE
-
-`proposed_actions`
-- `action_id` TEXT PK
-- `user_id` TEXT NOT NULL
-- `source` TEXT NOT NULL (`chat` | `job` | `schedule`)
-- `source_id` TEXT NOT NULL
-- `tool` TEXT NOT NULL
-- `args_json` TEXT NOT NULL
-- `risk_class` TEXT NOT NULL
-- `justification` TEXT
-- `idempotency_key` TEXT NOT NULL
-- `status` TEXT NOT NULL (`PENDING` | `APPROVED` | `REJECTED` | `EXECUTED`)
-- `rejection_reason` TEXT
-- `expires_at` TEXT NOT NULL
-- `created_at` TEXT NOT NULL
-- UNIQUE(`user_id`, `tool`, `idempotency_key`)
-
-`idempotency`
-- `owner_id` TEXT NOT NULL
-- `tool_name` TEXT NOT NULL
-- `key` TEXT NOT NULL
-- `args_hash` TEXT NOT NULL
-- `result_hash` TEXT NOT NULL
-- `created_at` TEXT NOT NULL
-- PRIMARY KEY(`owner_id`, `tool_name`, `key`)
-
-`artifacts`
-- `artifact_id` TEXT PK
-- `job_id` TEXT NOT NULL
-- `type` TEXT NOT NULL
-- `blob` BLOB NOT NULL (max 2MB)
-- `created_at` TEXT NOT NULL
-
-`audit_log`
-- `entry_id` TEXT PK
-- `event_type` TEXT NOT NULL
-- `entity_id` TEXT NOT NULL
-- `payload_json` TEXT NOT NULL
-- `created_at` TEXT NOT NULL
-
-## 4.2 Retention and pruning
-
-Run daily prune job:
-
-- `idempotency`: 90 days
-- `audit_log`: 90 days
-- `messages`: 30 days
-- `artifacts`: 90 days
-- expired `auth_tokens`: immediate delete
-
-## 5. Tooling and Risk Classification
-
-Tool call envelope must include explicit identity:
-
-```json
-{
-  "tool": "gmail_search_threads",
-  "identity": "user",
-  "args": {}
-}
-```
-
-`identity` is required on all Google tools (`user` or `bot`).
-
-Phase 1 tool registry:
-
-- `gmail_search_threads` (`READ`)
-- `gmail_get_snippet` (`READ`)
-- `gmail_get_full` (`READ`, approval required)
-- `gmail_create_draft_reply` (`WRITE`, approval required)
-- `gmail_send_draft` (`EXFILTRATION`, bot identity only, approval required)
-- `gcal_list_events` (`READ`)
-- `web_search` (`READ`)
-- `web_open` (`READ`, SSRF constrained)
-- `artifact_put` (`WRITE`, internal destination)
-- `notes_write` (`WRITE`, internal destination)
-
-Internal writes (`artifact_put`, `notes_write`) do not require human approval.
-These internal writes are also the base memory primitive for autonomy in Phase 1.
-
-## 6. Policy Engine Rules (Phase 1)
-
-Deterministic rule set:
-
-1. Any external `WRITE`/`EXFILTRATION` action requires explicit approval.
-2. Background job steps must not execute external `WRITE`/`EXFILTRATION` tools directly.
-3. Background jobs may create proposed actions; Action Executor executes only after approval.
-4. Pending approvals expire after 24h and auto-reject with reason `expired`.
-5. No allowlist auto-approval behavior in Phase 1.
-6. Per-turn untrusted-ingest guard: if a turn ingests untrusted email/web content, block external `WRITE`/`EXFILTRATION` proposals in that same turn (`POLICY_BLOCKED_UNTRUSTED_TURN`).
-7. `web_open` constraints: HTTPS-only by default; no IP literal hostnames; block localhost/RFC1918/link-local/loopback/private ranges; max 5 redirects; max 2MB fetch body; max 50KB extracted text passed to model.
-8. No HTTP POST/PUT tools in Phase 1.
-
-## 7. Approval Lifecycle
-
-States:
+1. User/job/schedule triggers a turn.
+2. Planner returns structured output.
+3. Backend validates and classifies proposed actions.
+4. Policy allows, blocks, or queues for approval.
+5. Action executor runs approved actions through idempotency.
+6. State transitions and outcomes are logged to audit.
+
+## 5. Identity and authentication
+
+Supported identities:
+
+- user identity (`identity: "user"`)
+- bot identity (`identity: "bot"`)
+
+Identity must be explicit on every integration tool call.
+
+Auth model:
+
+- device pairing via short-lived pairing code,
+- opaque bearer tokens (`pnr_<token_id>.<secret>`),
+- hashed token storage (HMAC-SHA256),
+- token TTL + sliding renewal,
+- device-scoped revocation.
+
+## 6. Data model
+
+SQLite is the system of record.
+
+Core tables:
+
+- `users`
+- `devices`
+- `auth_tokens`
+- `oauth_tokens`
+- `threads`
+- `messages`
+- `jobs`
+- `job_events`
+- `schedules`
+- `wakeup_events`
+- `proposed_actions`
+- `idempotency`
+- `artifacts`
+- `audit_log`
+
+### 6.1 Required constraints
+
+- `proposed_actions` uniqueness on `(user_id, tool, idempotency_key)`
+- `idempotency` primary key on `(owner_id, tool_name, key)`
+- bounded payload sizes for message/checkpoint/artifact blobs
+- durable timestamps in RFC3339/UTC for event ordering
+
+### 6.2 Retention defaults
+
+- idempotency: 90 days
+- audit: 90 days
+- artifacts: 90 days
+- messages: 30 days
+
+## 7. Tool system
+
+Tool interface requirements:
+
+- deterministic name and risk class,
+- strict argument schema validation,
+- explicit execution entrypoint.
+
+Risk classes:
+
+- `READ`
+- `WRITE`
+- `EXFILTRATION`
+- `DESTRUCTIVE`
+- `HIGH`
+
+Baseline tool families:
+
+- Gmail (user and bot identities)
+- Calendar
+- Web (`search`, `open`)
+- Internal memory/artifact tools
+
+## 8. Policy engine
+
+Policy is deterministic and code-enforced.
+
+Mandatory rules:
+
+1. External `WRITE` and `EXFILTRATION` actions require explicit approval.
+2. Background jobs cannot directly execute external writes/sends.
+3. Jobs may create proposed actions for later approval.
+4. Approval requests expire and auto-reject.
+5. Untrusted-ingest turns cannot directly trigger external write/send in the same turn.
+6. Web access enforces SSRF protections (no local/private targets, capped redirects/bytes).
+
+## 9. Approval lifecycle
+
+Action states:
 
 - `PENDING`
 - `APPROVED`
 - `REJECTED`
 - `EXECUTED`
 
-Flow:
+Lifecycle:
 
-1. Action proposed and validated.
-2. Policy marks approval required.
-3. Row inserted with `status=PENDING`, `expires_at=now+24h`.
-4. iOS user approves or rejects (FaceID on device).
-5. Action Executor leases approved actions and executes exactly once using idempotency.
-6. On success: `EXECUTED`.
-7. On error: action remains `APPROVED` with retry metadata (bounded retries), audit logged.
-8. Expiry worker marks stale pending actions `REJECTED` with reason `expired`.
+1. proposal persisted with risk metadata,
+2. policy decision computed,
+3. approval required -> queue entry,
+4. user approval/rejection from iOS,
+5. executor executes approved action with idempotency,
+6. audit records all transitions.
 
-## 8. Idempotency
+## 10. Idempotency contract
 
-External write execution requires idempotency record:
+For external side effects:
 
-- Unique key scope: (`owner_id`, `tool_name`, `idempotency_key`).
-- Store `args_hash` on first execution.
-- If key reused with different `args_hash`, return HTTP 409 and emit audit event `idempotency_conflict`.
-- Idempotency retention: 90 days.
+- require idempotency key,
+- store argument hash and result hash,
+- key reuse with mismatched args is a hard conflict,
+- conflict emits audit event (`idempotency_conflict`).
 
-## 9. Job System
+## 11. Jobs, scheduler, and autonomy primitives
 
-Step limits:
+### 11.1 Jobs
 
-- Max wall time per step: 60s
-- Max tool calls per step: 10
-- Max output tokens per step: configurable (default 8k)
-- Max job tokens: 200k
-- Daily backend token budget: 1M
+Jobs run in bounded steps with:
 
-Budget behavior:
+- wall clock limits,
+- tool-call limits,
+- token budgets,
+- checkpoint persistence.
 
-- Step overrun: abort step, persist checkpoint, retry at next wakeup.
-- Job token budget exceeded: fail job with budget reason.
-- Daily budget exceeded: set runnable jobs to `PAUSED_BUDGET` until budget window resets.
-- Jobs may autonomously write memory/notes and schedule follow-up work within policy constraints.
+### 11.2 Scheduler
 
-Job-thread relation:
-
-- `jobs.thread_id` required.
-- Job status updates and artifacts are posted into thread as `system` messages.
-
-## 10. Scheduler
-
-Supported triggers:
+Scheduler supports:
 
 - `cron`
 - `interval`
 - `at`
 
-Timezone:
+Wakeups are deduplicated and durable.
+Timezone handling uses IANA zone definitions; execution times are persisted in UTC.
 
-- Schedule stored with IANA timezone.
-- Next fire computed in schedule timezone.
-- Persist scheduled fire times in UTC.
-- DST rules:
-- Ambiguous local time: first occurrence.
-- Nonexistent local time: roll forward to next valid local time.
+### 11.3 Memory
 
-Dedupe key:
+Memory model:
 
-- `sha256(schedule_id + "|" + scheduled_for_utc + "|" + payload_hash)`
-- `payload_hash = sha256(canonical_json(payload_json))`
+- short-term: thread context + checkpoints,
+- durable: internal notes/artifacts.
 
-## 11. Model Provider Contract
+Memory writes are internal actions and do not bypass approval for external side effects.
 
-Provider: OpenRouter using OpenAI-compatible chat completions.
+### 11.4 Skills and self-improvement
 
-Requirements:
+Skills are curated workflows constrained by policy and allowed toolsets.
+Self-improvement proposals are internal artifacts until owner-approved when they affect policy/scopes/runtime behavior.
 
-- Tool calling enabled.
-- Streaming supported for assistant text.
-- Retry on transient upstream errors (`429`, `502`, timeout).
-- Fallback model chain: primary then one fallback.
+## 12. Model provider contract
 
-Required model output shape:
+Provider interface must support:
+
+- OpenAI-compatible chat API,
+- tool calling,
+- retries and timeout controls,
+- fallback model chain.
+
+Planner output contract:
 
 ```json
 {
@@ -409,154 +246,80 @@ Required model output shape:
 
 Invalid output handling:
 
-1. One repair retry on same model.
-2. If still invalid, one attempt on fallback model.
-3. If still invalid, fail turn/job with `FAILED_MODEL_OUTPUT`.
+1. one repair retry,
+2. one fallback model attempt,
+3. fail turn/job with `FAILED_MODEL_OUTPUT`.
 
-## 12. Google OAuth Scope Matrix
+## 13. API surface
 
-User identity:
+Core API groups:
 
-- Gmail read/draft: `gmail.readonly`, `gmail.compose`
-- Calendar read: `calendar.readonly`
+- pairing/auth:
+  - `POST /v1/pairing/code`
+  - `POST /v1/pairing/bind`
+  - `GET /v1/devices`
+  - `POST /v1/devices/{device_id}/revoke`
+- chat:
+  - `POST /v1/chat/threads`
+  - `POST /v1/chat/threads/{thread_id}/messages`
+  - `GET /v1/chat/threads/{thread_id}/messages`
+- approvals:
+  - `GET /v1/approvals`
+  - `POST /v1/approvals/{action_id}/approve`
+  - `POST /v1/approvals/{action_id}/reject`
+- jobs:
+  - `GET /v1/jobs`
+  - `POST /v1/jobs`
+  - `GET /v1/jobs/{job_id}`
+  - `POST /v1/jobs/{job_id}/cancel`
+- schedules:
+  - `GET /v1/schedules`
+  - `POST /v1/schedules`
+  - `PATCH /v1/schedules/{schedule_id}`
+  - `POST /v1/schedules/{schedule_id}/run-now`
+- system:
+  - `GET /v1/settings/policy`
+  - `GET /v1/audit`
+  - `GET /v1/notifications`
 
-Bot identity:
+## 14. iOS control-plane contract
 
-- Gmail read/send/draft: `gmail.readonly`, `gmail.send`, `gmail.compose`
+The iOS app is a control surface, not an autonomous decision-maker.
 
-No Calendar write scopes in Phase 1.
+Required surfaces:
 
-## 13. iOS Pairing and Auth
+- Chat
+- Approvals
+- Schedules
+- Jobs
+- Settings
 
-Pairing:
+Approval UX requirements:
 
-1. Backend issues short-lived pairing code.
-2. App submits code + generated device public key.
-3. Backend binds device and returns opaque bearer token.
-4. Token stored in iOS Keychain.
+- deterministic backend-rendered approval summaries,
+- clear risk and target display,
+- explicit approve/reject actions,
+- biometric confirmation where enabled.
 
-Auth:
+Notifications include intervention and proactive reach-out events with rate limits.
 
-- Bearer token over TLS only.
-- Token TTL 30 days with sliding renewal.
-- Revocation by `device_id`.
-- One active (non-revoked) device by default in Phase 1.
+## 15. Security controls checklist
 
-## 13.1 iOS UI/UX planning baseline
+- strict schema validation before policy evaluation
+- untrusted content labeling
+- no direct model-to-side-effect path
+- secret redaction before model input
+- token and refresh-secret protection at rest
+- TLS-only transport
+- side-effect idempotency enforcement
+- audit logging for proposal/approval/execution/rejection/conflict
+- SSRF protections for web fetch tools
 
-Notification contract:
+## 16. Deliberate exclusions (unless explicitly planned)
 
-- Notification types: `approval_needed`, `approval_expiring`, `job_failed`, `job_completed`, `proactive_reach_out`.
-- `proactive_reach_out` is policy-gated and must map to a concrete thread/job.
-- `proactive_reach_out.reason` values: `operator_attention_needed`, `clarification_needed`, `important_update`, `follow_up_available`.
-- Push payloads must contain opaque ids only; sensitive details are fetched after authenticated app open.
-- Notification delivery is rate-limited per entity to prevent spam loops.
+- arbitrary subprocess/shell tools
+- policy bypass pathways
+- silent recipient/domain allowlist execution
+- hidden side-effect channels
 
-Detailed planning reference: `docs/ios-ui-plan.md`.
-
-Phase 1 UX contract:
-
-- The iOS app is a control surface, not an autonomous decision-maker.
-- Approvals are first-class UI entities with clear lifecycle and expiry visibility.
-- External side effects are never represented as completed until execution is confirmed.
-- Chat, Approvals, Work, Schedules, and Settings are required primary surfaces.
-
-## 14. REST API (Phase 1)
-
-`POST /v1/pairing/code`
-- Create short-lived pairing code.
-
-`POST /v1/pairing/bind`
-- Input: pairing code, device metadata, public key.
-- Output: bearer token + expiry.
-
-`POST /v1/chat/threads`
-- Create thread.
-
-`POST /v1/chat/threads/{thread_id}/messages`
-- Append user message, trigger planner turn.
-
-`GET /v1/chat/threads/{thread_id}/messages`
-- List timeline.
-
-`GET /v1/approvals?status=pending`
-- List pending approvals.
-
-`GET /v1/approvals/{action_id}`
-- Approval detail.
-
-`POST /v1/approvals/{action_id}/approve`
-- Approve action.
-
-`POST /v1/approvals/{action_id}/reject`
-- Reject action with reason.
-
-`GET /v1/jobs`
-- List jobs by state.
-
-`POST /v1/jobs`
-- Create job bound to thread.
-
-`POST /v1/jobs/{job_id}/cancel`
-- Cancel job.
-
-`GET /v1/jobs/{job_id}`
-- Job detail + events + artifacts metadata.
-
-`GET /v1/schedules`
-- List schedules.
-
-`POST /v1/schedules`
-- Create schedule.
-
-`PATCH /v1/schedules/{schedule_id}`
-- Enable/disable or edit trigger.
-
-`POST /v1/schedules/{schedule_id}/run-now`
-- Enqueue immediate wakeup.
-
-`GET /v1/settings/policy`
-- Return effective policy flags/limits.
-
-`GET /v1/audit`
-- List audit entries (paginated).
-
-`GET /v1/notifications`
-- List notification events for the device (including proactive reach-out events with reason code).
-
-## 15. Approval Card Rendering Contract
-
-Approval text is backend-rendered deterministically (not LLM-generated).
-
-Required fields in approval payload:
-
-- `tool_name`
-- `human_summary`
-- `target_entity`
-- `risk_class`
-- `preview_or_diff`
-- `source_type` (`chat` | `job` | `schedule`)
-- `expires_at`
-
-## 16. Security Controls Checklist (Phase 1)
-
-- Token encryption at rest using env-provided key.
-- TLS required.
-- Strict schema validation for tool args.
-- Explicit identity required on Google tool calls.
-- Untrusted content labeling on ingest.
-- Side effects only through propose->approve->execute flow.
-- Idempotency enforced for external writes.
-- SSRF protections on `web_open`.
-- Remote image loading stripped from email content presented to model.
-- Attachments never passed raw to model.
-
-## 17. Non-Goals (Phase 1)
-
-- Multi-tenant runtime.
-- WhatsApp channel.
-- Calendar write/apply.
-- Domain-wide delegation.
-- Shell/subprocess tools.
-- Automated recipient/domain allowlists.
-- Compliance export tooling.
+Implementation priorities and rollout sequencing live in `PLAN.md`.

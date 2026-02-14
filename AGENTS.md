@@ -18,7 +18,7 @@ Before making changes, read:
 
 1. `docs/spec.md`
 2. `docs/ios-ui-plan.md`
-3. `mvp.md`
+3. `PLAN.md`
 4. `README.md`
 
 Treat `docs/spec.md` as the canonical system contract.
@@ -32,7 +32,7 @@ Treat `docs/spec.md` as the canonical system contract.
 4. Idempotency must gate external execution.
 5. Background autonomy is internal-only unless explicitly approved.
 
-## 4. Current MVP vertical slice
+## 4. Current vertical slice
 
 The minimum end-to-end slice is:
 
@@ -48,10 +48,10 @@ Keep this slice working while iterating.
 
 - `cmd/pincer` - server entrypoint
 - `internal/server` - HTTP handlers, persistence, approval flow
-- `ios/Pincer` - SwiftUI MVP app + generated Xcode project
+- `ios/Pincer` - SwiftUI app + generated Xcode project
 - `docs/spec.md` - backend and security spec
 - `docs/ios-ui-plan.md` - iOS UI/UX plan
-- `mvp.md` - end-to-end MVP definition
+- `PLAN.md` - phased implementation plan
 
 ## 6. Tooling and commands
 
@@ -108,7 +108,7 @@ A change is only complete when:
 
 ## 11. Reproducible local E2E flow (tmux + API + iOS)
 
-This repo includes a repeatable MVP E2E path. Use it before/after changing approval flow code.
+This repo includes a repeatable E2E path. Use it before/after changing approval flow code.
 
 ### 11.1 Prerequisites
 
@@ -130,7 +130,7 @@ Behavior of `backend-up`:
 
 - creates tmux session `pincer-backend` (or `PINCER_TMUX_SESSION`)
 - starts backend via `mise run run`
-- waits for `GET /v1/audit` to return `200`
+- waits for `POST /v1/pairing/code` to return `201`
 - defaults to a clean DB at `/tmp/pincer-e2e.db` each run
 
 Useful tmux inspection commands:
@@ -139,7 +139,7 @@ Useful tmux inspection commands:
 - `tmux capture-pane -pt pincer-backend:0 | tail -n 80`
 - `tmux attach -t pincer-backend`
 
-### 11.3 Automated MVP API E2E
+### 11.3 Automated API E2E
 
 Run:
 
@@ -172,7 +172,8 @@ Build app:
 App config defaults in `ios/Pincer/AppConfig.swift`:
 
 - `baseURL = http://127.0.0.1:8080`
-- `bearerToken = dev-token`
+- `bearerToken` loads from `UserDefaults` key `PINCER_BEARER_TOKEN`
+- if no token exists, client auto-pairs via `/v1/pairing/code` and `/v1/pairing/bind`
 
 Manual check path in app:
 
@@ -181,9 +182,11 @@ Manual check path in app:
 3. Open Approvals
 4. Approve pending action
 5. Confirm action disappears from pending list
-6. Confirm backend state with:
-   - `curl -sS 'http://127.0.0.1:8080/v1/approvals?status=executed' -H 'Authorization: Bearer dev-token' | jq`
-   - `curl -sS 'http://127.0.0.1:8080/v1/audit' -H 'Authorization: Bearer dev-token' | jq`
+6. Fetch a bearer token (if needed), then confirm backend state:
+   - `PAIRING_CODE="$(curl -sS -X POST 'http://127.0.0.1:8080/v1/pairing/code' -H 'Content-Type: application/json' -d '{}' | jq -r '.code')"`
+   - `TOKEN="$(curl -sS -X POST 'http://127.0.0.1:8080/v1/pairing/bind' -H 'Content-Type: application/json' -d "{\"code\":\"${PAIRING_CODE}\",\"device_name\":\"manual-check\"}" | jq -r '.token')"`
+   - `curl -sS 'http://127.0.0.1:8080/v1/approvals?status=executed' -H "Authorization: Bearer ${TOKEN}" | jq`
+   - `curl -sS 'http://127.0.0.1:8080/v1/audit' -H "Authorization: Bearer ${TOKEN}" | jq`
 
 Agent-driven option:
 
@@ -199,5 +202,7 @@ The scripts honor:
 - `PINCER_HTTP_ADDR`
 - `PINCER_BASE_URL`
 - `PINCER_DB_PATH`
-- `PINCER_DEV_TOKEN`
+- `PINCER_TOKEN_HMAC_KEY`
+- `PINCER_AUTH_TOKEN`
+- `PINCER_E2E_START_BACKEND` (`1` default in `e2e_api.sh`, set `0` to use existing backend)
 - `PINCER_E2E_RESET_DB` (`1` default, set `0` to keep DB)

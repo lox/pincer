@@ -5,11 +5,13 @@ private enum A11y {
     static let screenApprovals = "screen_approvals"
     static let screenSchedule = "screen_schedule"
     static let screenJobs = "screen_jobs"
+    static let screenSettings = "screen_settings"
 
     static let tabChat = "tab_chat"
     static let tabApprovals = "tab_approvals"
     static let tabSchedule = "tab_schedule"
     static let tabJobs = "tab_jobs"
+    static let tabSettings = "tab_settings"
 
     static let chatInput = "chat_input"
     static let chatSendButton = "chat_send_button"
@@ -21,10 +23,12 @@ private enum A11y {
 struct ContentView: View {
     @StateObject private var chatModel: ChatViewModel
     @StateObject private var approvalsModel: ApprovalsViewModel
+    @StateObject private var settingsModel: SettingsViewModel
 
     init(client: APIClient) {
         _chatModel = StateObject(wrappedValue: ChatViewModel(client: client))
         _approvalsModel = StateObject(wrappedValue: ApprovalsViewModel(client: client))
+        _settingsModel = StateObject(wrappedValue: SettingsViewModel(client: client))
     }
 
     var body: some View {
@@ -56,6 +60,13 @@ struct ContentView: View {
                 .tabItem {
                     Label("Jobs", systemImage: "briefcase")
                         .accessibilityIdentifier(A11y.tabJobs)
+                }
+
+            SettingsView(model: settingsModel)
+                .accessibilityIdentifier(A11y.screenSettings)
+                .tabItem {
+                    Label("Settings", systemImage: "gearshape")
+                        .accessibilityIdentifier(A11y.tabSettings)
                 }
         }
         .tint(PincerPalette.accent)
@@ -495,6 +506,130 @@ private struct ApprovalCard: View {
                     .foregroundStyle(PincerPalette.textTertiary)
             }
         }
+        .cardSurface()
+    }
+}
+
+private struct SettingsView: View {
+    @ObservedObject var model: SettingsViewModel
+    @State private var pendingRevokeDevice: Device?
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                PincerPageBackground()
+
+                ScrollView(showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Paired Devices")
+                            .font(.system(.title3, design: .rounded).weight(.semibold))
+                            .foregroundStyle(PincerPalette.textPrimary)
+                            .padding(.horizontal, 16)
+                            .padding(.top, 8)
+
+                        if model.devices.isEmpty {
+                            Text("No devices found.")
+                                .font(.system(.subheadline, design: .rounded))
+                                .foregroundStyle(PincerPalette.textSecondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .cardSurface()
+                                .padding(.horizontal, 16)
+                        } else {
+                            ForEach(model.devices) { device in
+                                DeviceCard(
+                                    device: device,
+                                    isBusy: model.isBusy,
+                                    onRevoke: { pendingRevokeDevice = device }
+                                )
+                                .padding(.horizontal, 16)
+                            }
+                        }
+                    }
+                    .padding(.bottom, 16)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .navigationTitle("Settings")
+            .navigationBarTitleDisplayMode(.large)
+            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbarBackground(PincerPalette.page, for: .navigationBar)
+            .task {
+                await model.refresh()
+            }
+            .refreshable {
+                await model.refresh()
+            }
+            .alert("Error", isPresented: Binding(
+                get: { model.errorText != nil },
+                set: { if !$0 { model.errorText = nil } }
+            )) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(model.errorText ?? "Unknown error")
+            }
+            .alert("Revoke Device?", isPresented: Binding(
+                get: { pendingRevokeDevice != nil },
+                set: { if !$0 { pendingRevokeDevice = nil } }
+            )) {
+                Button("Cancel", role: .cancel) {}
+                Button("Revoke", role: .destructive) {
+                    guard let device = pendingRevokeDevice else { return }
+                    pendingRevokeDevice = nil
+                    Task { await model.revoke(device.deviceID) }
+                }
+            } message: {
+                if let device = pendingRevokeDevice {
+                    if device.isCurrent {
+                        Text("This will revoke your current session and you will be paired again automatically.")
+                    } else {
+                        Text("This device will lose access immediately.")
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct DeviceCard: View {
+    let device: Device
+    let isBusy: Bool
+    let onRevoke: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(device.name)
+                .font(.system(.title3, design: .rounded).weight(.semibold))
+                .foregroundStyle(PincerPalette.textPrimary)
+
+            Text("Device ID: \(device.deviceID)")
+                .font(.system(.footnote, design: .rounded))
+                .foregroundStyle(PincerPalette.textSecondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            Text("Paired: \(shortTimestamp(from: device.createdAt))")
+                .font(.system(.subheadline, design: .rounded))
+                .foregroundStyle(PincerPalette.textSecondary)
+
+            if device.isRevoked {
+                Text("Revoked")
+                    .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                    .foregroundStyle(PincerPalette.textTertiary)
+            } else {
+                if device.isCurrent {
+                    Text("This device")
+                        .font(.system(.footnote, design: .rounded).weight(.semibold))
+                        .foregroundStyle(PincerPalette.accent)
+                }
+                Button(action: onRevoke) {
+                    Text(isBusy ? "Revoking..." : "Revoke")
+                        .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                        .foregroundStyle(.red)
+                }
+                .disabled(isBusy)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .cardSurface()
     }
 }

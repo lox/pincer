@@ -1,9 +1,10 @@
 # Pincer iOS Shell
 
-This folder contains a minimal SwiftUI shell for the MVP slice:
+This folder contains the SwiftUI control app:
 
 - `Chat` screen (send messages, render timeline)
 - `Approvals` screen (list pending approvals, approve action)
+- `Settings` screen (list paired devices, revoke session)
 
 Project files:
 
@@ -28,6 +29,7 @@ Project files:
 
 ## Notes
 
-- This is intentionally minimal for Phase 1 MVP.
-- It uses a static bearer token for dev (`PINCER_DEV_TOKEN` on backend).
+- This is intentionally minimal for current Phase 1 implementation.
+- The app uses opaque bearer tokens from pairing (`/v1/pairing/code` + `/v1/pairing/bind`).
+- Token is stored in `UserDefaults` under `PINCER_BEARER_TOKEN` for simulator/dev flows.
 - If build fails with missing iOS platform/runtime, install it from Xcode -> Settings -> Components, then rerun `mise run ios-build`.

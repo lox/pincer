@@ -6,8 +6,8 @@ DEVICE="${PINCER_IOS_DEVICE:-iPhone 17 Pro}"
 BUNDLE_ID="${PINCER_IOS_BUNDLE_ID:-com.lox.pincer}"
 SESSION="${PINCER_AGENT_SESSION:-pincer-e2e-ios}"
 BASE_URL="${PINCER_BASE_URL:-http://127.0.0.1:8080}"
-DEV_TOKEN="${PINCER_DEV_TOKEN:-dev-token}"
-AUTH_HEADER="Authorization: Bearer ${DEV_TOKEN}"
+AUTH_TOKEN="${PINCER_AUTH_TOKEN:-}"
+AUTH_HEADER=""
 MESSAGE_TEXT="${PINCER_E2E_MESSAGE:-Run iOS e2e flow $(date +%s)}"
 SCREENSHOT_PATH="${PINCER_E2E_SCREENSHOT:-/tmp/pincer-e2e-ios.png}"
 
@@ -28,6 +28,37 @@ clear_agent_device_sessions() {
       npx -y agent-device close --session "${name}" >/dev/null 2>&1 || true
     fi
   done <<< "${names}"
+}
+
+bootstrap_auth_token() {
+  if [[ -n "${AUTH_TOKEN}" ]]; then
+    AUTH_HEADER="Authorization: Bearer ${AUTH_TOKEN}"
+    return 0
+  fi
+
+  pairing_json="$(curl -sS -X POST "${BASE_URL}/v1/pairing/code" \
+    -H "Content-Type: application/json" \
+    -d '{}')"
+  pairing_code="$(printf '%s' "${pairing_json}" | jq -r '.code')"
+  if [[ -z "${pairing_code}" || "${pairing_code}" == "null" ]]; then
+    echo "failed to create pairing code: ${pairing_json}" >&2
+    exit 1
+  fi
+
+  bind_json="$(curl -sS -X POST "${BASE_URL}/v1/pairing/bind" \
+    -H "Content-Type: application/json" \
+    -d "{\"code\":\"${pairing_code}\",\"device_name\":\"e2e-ios\"}")"
+  AUTH_TOKEN="$(printf '%s' "${bind_json}" | jq -r '.token')"
+  if [[ -z "${AUTH_TOKEN}" || "${AUTH_TOKEN}" == "null" ]]; then
+    echo "failed to bind pairing code: ${bind_json}" >&2
+    exit 1
+  fi
+
+  AUTH_HEADER="Authorization: Bearer ${AUTH_TOKEN}"
+}
+
+set_simulator_app_token() {
+  xcrun simctl spawn "${DEVICE}" defaults write "${BUNDLE_ID}" PINCER_BEARER_TOKEN -string "${AUTH_TOKEN}" >/dev/null
 }
 
 get_app_path() {
@@ -88,6 +119,7 @@ require_cmd npx
 
 cd "${ROOT_DIR}"
 scripts/backend_up.sh >/dev/null
+bootstrap_auth_token
 mise run ios-build >/dev/null
 
 APP_PATH="$(get_app_path)"
@@ -100,6 +132,7 @@ xcrun simctl boot "${DEVICE}" >/dev/null 2>&1 || true
 xcrun simctl bootstatus "${DEVICE}" -b >/dev/null
 xcrun simctl uninstall "${DEVICE}" "${BUNDLE_ID}" >/dev/null 2>&1 || true
 xcrun simctl install "${DEVICE}" "${APP_PATH}" >/dev/null
+set_simulator_app_token
 
 clear_agent_device_sessions
 npx -y agent-device open Pincer --platform ios --device "${DEVICE}" --session "${SESSION}" --relaunch >/dev/null

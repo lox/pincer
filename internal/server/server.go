@@ -1,9 +1,13 @@
 package server
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"database/sql"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -19,23 +23,27 @@ import (
 )
 
 const (
-	defaultDevToken                   = "dev-token"
 	defaultOwnerID                    = "owner-dev"
+	defaultTokenHMACKey               = "pincer-dev-token-hmac-key-change-me"
 	defaultActionExecutorPollInterval = 250 * time.Millisecond
+	defaultTokenTTL                   = 30 * 24 * time.Hour
+	defaultTokenRenewWindow           = 7 * 24 * time.Hour
+	defaultPairingCodeTTL             = 10 * time.Minute
+	lastUsedUpdateInterval            = time.Hour
 )
 
 var errIdempotencyConflict = errors.New("idempotency conflict")
 
 type AppConfig struct {
 	DBPath                  string
-	DevToken                string
+	TokenHMACKey            string
 	ActionExecutorInterval  time.Duration
 	DisableBackgroundWorker bool
 }
 
 type App struct {
 	db                     *sql.DB
-	token                  string
+	tokenHMACKey           []byte
 	ownerID                string
 	stopCh                 chan struct{}
 	doneCh                 chan struct{}
@@ -54,6 +62,23 @@ type createMessageRequest struct {
 type createMessageResponse struct {
 	AssistantMessage string `json:"assistant_message"`
 	ActionID         string `json:"action_id"`
+}
+
+type createPairingCodeResponse struct {
+	Code      string `json:"code"`
+	ExpiresAt string `json:"expires_at"`
+}
+
+type bindPairingRequest struct {
+	Code       string `json:"code"`
+	DeviceName string `json:"device_name"`
+	PublicKey  string `json:"public_key"`
+}
+
+type bindPairingResponse struct {
+	DeviceID  string `json:"device_id"`
+	Token     string `json:"token"`
+	ExpiresAt string `json:"expires_at"`
 }
 
 type rejectActionRequest struct {
@@ -104,6 +129,18 @@ type auditResponse struct {
 	Items []auditEvent `json:"items"`
 }
 
+type device struct {
+	DeviceID  string `json:"device_id"`
+	Name      string `json:"name"`
+	RevokedAt string `json:"revoked_at"`
+	CreatedAt string `json:"created_at"`
+	IsCurrent bool   `json:"is_current"`
+}
+
+type devicesResponse struct {
+	Items []device `json:"items"`
+}
+
 func New(cfg AppConfig) (*App, error) {
 	if cfg.DBPath == "" {
 		return nil, errors.New("db path is required")
@@ -124,9 +161,9 @@ func New(cfg AppConfig) (*App, error) {
 		return nil, err
 	}
 
-	token := cfg.DevToken
-	if token == "" {
-		token = defaultDevToken
+	tokenHMACKey := cfg.TokenHMACKey
+	if tokenHMACKey == "" {
+		tokenHMACKey = defaultTokenHMACKey
 	}
 
 	interval := cfg.ActionExecutorInterval
@@ -136,7 +173,7 @@ func New(cfg AppConfig) (*App, error) {
 
 	app := &App{
 		db:                     db,
-		token:                  token,
+		tokenHMACKey:           []byte(tokenHMACKey),
 		ownerID:                defaultOwnerID,
 		stopCh:                 make(chan struct{}),
 		doneCh:                 make(chan struct{}),
@@ -164,8 +201,12 @@ func (a *App) Close() error {
 
 func (a *App) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/pairing/code", a.handlePairingCode)
+	mux.HandleFunc("/v1/pairing/bind", a.handlePairingBind)
 	mux.HandleFunc("/v1/chat/threads", a.handleThreads)
 	mux.HandleFunc("/v1/chat/threads/", a.handleThreadSubroutes)
+	mux.HandleFunc("/v1/devices", a.handleDevices)
+	mux.HandleFunc("/v1/devices/", a.handleDeviceSubroutes)
 	mux.HandleFunc("/v1/approvals", a.handleApprovals)
 	mux.HandleFunc("/v1/approvals/", a.handleApprovalSubroutes)
 	mux.HandleFunc("/v1/audit", a.handleAudit)
@@ -175,12 +216,191 @@ func (a *App) Handler() http.Handler {
 
 func (a *App) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		authz := r.Header.Get("Authorization")
-		if authz != "Bearer "+a.token {
+		if strings.HasPrefix(r.URL.Path, "/v1/pairing/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		rawToken := bearerTokenFromHeader(r.Header.Get("Authorization"))
+		if rawToken == "" {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		if err := a.validateAndTouchToken(rawToken); err != nil {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 			return
 		}
 		next.ServeHTTP(w, r)
+	})
+}
+
+func (a *App) handlePairingCode(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	activeDevices, err := a.activeDeviceCount()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to check pairing state"})
+		return
+	}
+
+	if activeDevices > 0 {
+		rawToken := bearerTokenFromHeader(r.Header.Get("Authorization"))
+		if rawToken == "" {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		if err := a.validateAndTouchToken(rawToken); err != nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+	}
+
+	code, err := newPairingCode()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate pairing code"})
+		return
+	}
+	expiresAt := time.Now().UTC().Add(defaultPairingCodeTTL)
+
+	if _, err := a.db.Exec(`
+		INSERT INTO pairing_codes(code_hash, expires_at, consumed_at, created_at)
+		VALUES(?, ?, '', ?)
+	`, a.hashPairingCode(code), expiresAt.Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist pairing code"})
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, createPairingCodeResponse{
+		Code:      code,
+		ExpiresAt: expiresAt.Format(time.RFC3339Nano),
+	})
+}
+
+func (a *App) handlePairingBind(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	var req bindPairingRequest
+	if err := decodeJSON(r.Body, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+
+	code := strings.TrimSpace(req.Code)
+	if code == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "code is required"})
+		return
+	}
+	deviceName := strings.TrimSpace(req.DeviceName)
+	if deviceName == "" {
+		deviceName = "Pincer Device"
+	}
+
+	tokenID, tokenValue, err := newOpaqueToken()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate token"})
+		return
+	}
+
+	now := time.Now().UTC()
+	nowStr := now.Format(time.RFC3339Nano)
+	expiresAt := now.Add(defaultTokenTTL)
+	expiresAtStr := expiresAt.Format(time.RFC3339Nano)
+	deviceID := newID("dev")
+
+	tx, err := a.db.Begin()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to begin transaction"})
+		return
+	}
+	defer tx.Rollback()
+
+	var pairingExpiresAtRaw string
+	var consumedAt string
+	err = tx.QueryRow(`
+		SELECT expires_at, consumed_at
+		FROM pairing_codes
+		WHERE code_hash = ?
+	`, a.hashPairingCode(code)).Scan(&pairingExpiresAtRaw, &consumedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid pairing code"})
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to validate pairing code"})
+		return
+	}
+	if consumedAt != "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid pairing code"})
+		return
+	}
+	pairingExpiresAt, err := parseTimestamp(pairingExpiresAtRaw)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to parse pairing code expiry"})
+		return
+	}
+	if !pairingExpiresAt.After(now) {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid pairing code"})
+		return
+	}
+
+	if _, err := tx.Exec(`
+		UPDATE pairing_codes
+		SET consumed_at = ?
+		WHERE code_hash = ? AND consumed_at = ''
+	`, nowStr, a.hashPairingCode(code)); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to consume pairing code"})
+		return
+	}
+
+	// Phase 1 default: one active device. Revoke existing devices and remove their tokens.
+	if _, err := tx.Exec(`
+		UPDATE devices
+		SET revoked_at = ?
+		WHERE revoked_at = ''
+	`, nowStr); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to revoke existing devices"})
+		return
+	}
+	if _, err := tx.Exec(`DELETE FROM auth_tokens`); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to invalidate existing tokens"})
+		return
+	}
+
+	if _, err := tx.Exec(`
+		INSERT INTO devices(device_id, user_id, name, public_key, revoked_at, created_at)
+		VALUES(?, ?, ?, ?, '', ?)
+	`, deviceID, a.ownerID, deviceName, req.PublicKey, nowStr); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create device"})
+		return
+	}
+	if _, err := tx.Exec(`
+		INSERT INTO auth_tokens(token_id, device_id, token_hash, expires_at, last_used_at, created_at)
+		VALUES(?, ?, ?, ?, ?, ?)
+	`, tokenID, deviceID, a.hashToken(tokenValue), expiresAtStr, nowStr, nowStr); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create token"})
+		return
+	}
+
+	if err := insertAuditTx(tx, "device_paired", deviceID, fmt.Sprintf(`{"name":%q}`, deviceName), nowStr); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to write audit event"})
+		return
+	}
+
+	if err := tx.Commit(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to commit transaction"})
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, bindPairingResponse{
+		DeviceID:  deviceID,
+		Token:     tokenValue,
+		ExpiresAt: expiresAtStr,
 	})
 }
 
@@ -374,6 +594,71 @@ func (a *App) handleApprovals(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, approvalsResponse{Items: items})
 }
 
+func (a *App) handleDevices(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	currentDeviceID := ""
+	rawToken := bearerTokenFromHeader(r.Header.Get("Authorization"))
+	if rawToken != "" {
+		id, err := a.deviceIDForToken(rawToken)
+		if err == nil {
+			currentDeviceID = id
+		}
+	}
+
+	rows, err := a.db.Query(`
+		SELECT device_id, name, revoked_at, created_at
+		FROM devices
+		ORDER BY created_at DESC
+	`)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list devices"})
+		return
+	}
+	defer rows.Close()
+
+	items := make([]device, 0)
+	for rows.Next() {
+		var item device
+		if err := rows.Scan(&item.DeviceID, &item.Name, &item.RevokedAt, &item.CreatedAt); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to scan device"})
+			return
+		}
+		item.IsCurrent = item.DeviceID == currentDeviceID
+		items = append(items, item)
+	}
+
+	writeJSON(w, http.StatusOK, devicesResponse{Items: items})
+}
+
+func (a *App) handleDeviceSubroutes(w http.ResponseWriter, r *http.Request) {
+	rest := strings.TrimPrefix(r.URL.Path, "/v1/devices/")
+	parts := strings.Split(rest, "/")
+	if len(parts) != 2 || parts[1] != "revoke" || r.Method != http.MethodPost {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+	deviceID := strings.TrimSpace(parts[0])
+	if deviceID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing device id"})
+		return
+	}
+
+	if err := a.revokeDevice(deviceID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "device not found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to revoke device"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"device_id": deviceID, "status": "REVOKED"})
+}
+
 func (a *App) handleApprovalSubroutes(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/v1/approvals/")
 	parts := strings.Split(rest, "/")
@@ -494,6 +779,47 @@ func (a *App) markActionApproved(actionID string) error {
 		return err
 	}
 	if err := insertAuditTx(tx, "action_approved", actionID, `{}`, now); err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
+func (a *App) revokeDevice(deviceID string) error {
+	tx, err := a.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var revokedAt string
+	if err := tx.QueryRow(`
+		SELECT revoked_at
+		FROM devices
+		WHERE device_id = ?
+	`, deviceID).Scan(&revokedAt); err != nil {
+		return err
+	}
+
+	if revokedAt != "" {
+		return tx.Commit()
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := tx.Exec(`
+		UPDATE devices
+		SET revoked_at = ?
+		WHERE device_id = ? AND revoked_at = ''
+	`, now, deviceID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`
+		DELETE FROM auth_tokens
+		WHERE device_id = ?
+	`, deviceID); err != nil {
+		return err
+	}
+	if err := insertAuditTx(tx, "device_revoked", deviceID, `{"reason":"user_revoked"}`, now); err != nil {
 		return err
 	}
 
@@ -752,6 +1078,101 @@ func (a *App) expirePendingActions(now time.Time) error {
 	return tx.Commit()
 }
 
+func (a *App) activeDeviceCount() (int, error) {
+	var count int
+	err := a.db.QueryRow(`SELECT COUNT(*) FROM devices WHERE revoked_at = ''`).Scan(&count)
+	return count, err
+}
+
+func (a *App) deviceIDForToken(rawToken string) (string, error) {
+	tokenID, err := tokenIDFromOpaqueToken(rawToken)
+	if err != nil {
+		return "", err
+	}
+	var deviceID string
+	err = a.db.QueryRow(`
+		SELECT device_id
+		FROM auth_tokens
+		WHERE token_id = ?
+	`, tokenID).Scan(&deviceID)
+	if err != nil {
+		return "", err
+	}
+	return deviceID, nil
+}
+
+func (a *App) hashToken(token string) string {
+	mac := hmac.New(sha256.New, a.tokenHMACKey)
+	_, _ = mac.Write([]byte(token))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+func (a *App) hashPairingCode(code string) string {
+	return a.hashToken("pairing:" + strings.ToUpper(strings.TrimSpace(code)))
+}
+
+func (a *App) validateAndTouchToken(rawToken string) error {
+	tokenID, err := tokenIDFromOpaqueToken(rawToken)
+	if err != nil {
+		return err
+	}
+
+	var storedHash string
+	var expiresAtRaw string
+	var lastUsedAtRaw string
+	var revokedAtRaw string
+	err = a.db.QueryRow(`
+		SELECT t.token_hash, t.expires_at, t.last_used_at, d.revoked_at
+		FROM auth_tokens t
+		JOIN devices d ON d.device_id = t.device_id
+		WHERE t.token_id = ?
+	`, tokenID).Scan(&storedHash, &expiresAtRaw, &lastUsedAtRaw, &revokedAtRaw)
+	if err != nil {
+		return err
+	}
+
+	computedHash := a.hashToken(rawToken)
+	if subtle.ConstantTimeCompare([]byte(storedHash), []byte(computedHash)) != 1 {
+		return errors.New("token mismatch")
+	}
+	if revokedAtRaw != "" {
+		return errors.New("device revoked")
+	}
+
+	expiresAt, err := parseTimestamp(expiresAtRaw)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	if !expiresAt.After(now) {
+		return errors.New("token expired")
+	}
+
+	shouldUpdateLastUsed := true
+	if lastUsedAtRaw != "" {
+		lastUsedAt, parseErr := parseTimestamp(lastUsedAtRaw)
+		if parseErr == nil && now.Sub(lastUsedAt) < lastUsedUpdateInterval {
+			shouldUpdateLastUsed = false
+		}
+	}
+
+	newExpiresAt := expiresAt
+	if expiresAt.Sub(now) <= defaultTokenRenewWindow {
+		newExpiresAt = now.Add(defaultTokenTTL)
+		shouldUpdateLastUsed = true
+	}
+
+	if shouldUpdateLastUsed {
+		_, _ = a.db.Exec(`
+			UPDATE auth_tokens
+			SET expires_at = ?, last_used_at = ?
+			WHERE token_id = ?
+		`, newExpiresAt.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), tokenID)
+	}
+
+	return nil
+}
+
 func insertAuditTx(tx *sql.Tx, eventType, entityID, payload, createdAt string) error {
 	_, err := tx.Exec(`
 		INSERT INTO audit_log(entry_id, event_type, entity_id, payload_json, created_at)
@@ -762,6 +1183,28 @@ func insertAuditTx(tx *sql.Tx, eventType, entityID, payload, createdAt string) e
 
 func migrate(db *sql.DB) error {
 	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS devices(
+			device_id TEXT PRIMARY KEY,
+			user_id TEXT NOT NULL,
+			name TEXT NOT NULL,
+			public_key TEXT NOT NULL,
+			revoked_at TEXT NOT NULL,
+			created_at TEXT NOT NULL
+		);`,
+		`CREATE TABLE IF NOT EXISTS auth_tokens(
+			token_id TEXT PRIMARY KEY,
+			device_id TEXT NOT NULL,
+			token_hash TEXT NOT NULL UNIQUE,
+			expires_at TEXT NOT NULL,
+			last_used_at TEXT NOT NULL,
+			created_at TEXT NOT NULL
+		);`,
+		`CREATE TABLE IF NOT EXISTS pairing_codes(
+			code_hash TEXT PRIMARY KEY,
+			expires_at TEXT NOT NULL,
+			consumed_at TEXT NOT NULL,
+			created_at TEXT NOT NULL
+		);`,
 		`CREATE TABLE IF NOT EXISTS threads(
 			thread_id TEXT PRIMARY KEY,
 			user_id TEXT NOT NULL,
@@ -841,6 +1284,54 @@ func newID(prefix string) string {
 		return fmt.Sprintf("%s_%d", prefix, now)
 	}
 	return prefix + "_" + hex.EncodeToString(b[:])
+}
+
+func newPairingCode() (string, error) {
+	var b [4]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	value := binary.BigEndian.Uint32(b[:]) % 100000000
+	return fmt.Sprintf("%08d", value), nil
+}
+
+func newOpaqueToken() (tokenID string, tokenValue string, err error) {
+	id := make([]byte, 9)
+	secret := make([]byte, 32)
+	if _, err := rand.Read(id); err != nil {
+		return "", "", err
+	}
+	if _, err := rand.Read(secret); err != nil {
+		return "", "", err
+	}
+
+	tokenID = base64.RawURLEncoding.EncodeToString(id)
+	tokenSecret := base64.RawURLEncoding.EncodeToString(secret)
+	tokenValue = "pnr_" + tokenID + "." + tokenSecret
+	return tokenID, tokenValue, nil
+}
+
+func tokenIDFromOpaqueToken(rawToken string) (string, error) {
+	if !strings.HasPrefix(rawToken, "pnr_") {
+		return "", errors.New("invalid token format")
+	}
+	rest := strings.TrimPrefix(rawToken, "pnr_")
+	parts := strings.Split(rest, ".")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", errors.New("invalid token format")
+	}
+	return parts[0], nil
+}
+
+func bearerTokenFromHeader(authz string) string {
+	if !strings.HasPrefix(authz, "Bearer ") {
+		return ""
+	}
+	token := strings.TrimSpace(strings.TrimPrefix(authz, "Bearer "))
+	if token == "" {
+		return ""
+	}
+	return token
 }
 
 func sha256Hex(s string) string {

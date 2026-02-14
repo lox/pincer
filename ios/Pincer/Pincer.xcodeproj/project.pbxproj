@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		0B16F2765408205AB7554F1A /* AppConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 044069EE4D0C506D769F1321 /* AppConfig.swift */; };
 		1AF7E5AA1EA446E74FF45490 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B1527160929BF525EC809E77 /* Assets.xcassets */; };
+		32527E93C243AB83D8ED63ED /* SettingsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 633F539062FB2D5937DD6F3D /* SettingsViewModel.swift */; };
 		5BE32E340B9A4FEEA93439D8 /* ChatViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 817111BB98CE5BFED6A4750F /* ChatViewModel.swift */; };
 		7EB7EC438B9862D4CE3932E1 /* PincerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 085FB97D074C43558F99C149 /* PincerApp.swift */; };
 		A946EFFA9815D941DCEDAF8C /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8C017076C30A916A55441D6 /* Models.swift */; };
@@ -22,6 +23,7 @@
 		085FB97D074C43558F99C149 /* PincerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PincerApp.swift; sourceTree = "<group>"; };
 		15B0AC0BC187E83771DCED94 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		4A607777578E8E2C3D86C035 /* ApprovalsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApprovalsViewModel.swift; sourceTree = "<group>"; };
+		633F539062FB2D5937DD6F3D /* SettingsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsViewModel.swift; sourceTree = "<group>"; };
 		817111BB98CE5BFED6A4750F /* ChatViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatViewModel.swift; sourceTree = "<group>"; };
 		B1527160929BF525EC809E77 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		C8C017076C30A916A55441D6 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
@@ -40,6 +42,7 @@
 				15B0AC0BC187E83771DCED94 /* ContentView.swift */,
 				C8C017076C30A916A55441D6 /* Models.swift */,
 				085FB97D074C43558F99C149 /* PincerApp.swift */,
+				633F539062FB2D5937DD6F3D /* SettingsViewModel.swift */,
 			);
 			name = Pincer;
 			path = .;
@@ -134,6 +137,7 @@
 				FFD587396FB1D0F8F33EF7DE /* ContentView.swift in Sources */,
 				A946EFFA9815D941DCEDAF8C /* Models.swift in Sources */,
 				7EB7EC438B9862D4CE3932E1 /* PincerApp.swift in Sources */,
+				32527E93C243AB83D8ED63ED /* SettingsViewModel.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

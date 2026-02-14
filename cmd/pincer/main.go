@@ -11,11 +11,11 @@ import (
 func main() {
 	addr := envOr("PINCER_HTTP_ADDR", ":8080")
 	dbPath := envOr("PINCER_DB_PATH", "./pincer.db")
-	devToken := envOr("PINCER_DEV_TOKEN", "dev-token")
+	tokenHMACKey := envOr("PINCER_TOKEN_HMAC_KEY", "")
 
 	app, err := server.New(server.AppConfig{
-		DBPath:   dbPath,
-		DevToken: devToken,
+		DBPath:       dbPath,
+		TokenHMACKey: tokenHMACKey,
 	})
 	if err != nil {
 		log.Fatalf("init app: %v", err)

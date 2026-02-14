@@ -2,8 +2,9 @@
 set -euo pipefail
 
 BASE_URL="${PINCER_BASE_URL:-http://127.0.0.1:8080}"
-DEV_TOKEN="${PINCER_DEV_TOKEN:-dev-token}"
-AUTH_HEADER="Authorization: Bearer ${DEV_TOKEN}"
+AUTH_TOKEN="${PINCER_AUTH_TOKEN:-}"
+AUTH_HEADER=""
+START_BACKEND="${PINCER_E2E_START_BACKEND:-1}"
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "jq is required but not installed" >&2
@@ -14,6 +15,39 @@ if ! command -v curl >/dev/null 2>&1; then
   echo "curl is required but not installed" >&2
   exit 1
 fi
+
+if [[ "${START_BACKEND}" == "1" ]]; then
+  "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/backend_up.sh" >/dev/null
+fi
+
+bootstrap_auth_token() {
+  if [[ -n "${AUTH_TOKEN}" ]]; then
+    AUTH_HEADER="Authorization: Bearer ${AUTH_TOKEN}"
+    return 0
+  fi
+
+  pairing_json="$(curl -sS -X POST "${BASE_URL}/v1/pairing/code" \
+    -H "Content-Type: application/json" \
+    -d '{}')"
+  pairing_code="$(printf '%s' "${pairing_json}" | jq -r '.code')"
+  if [[ -z "${pairing_code}" || "${pairing_code}" == "null" ]]; then
+    echo "failed to create pairing code: ${pairing_json}" >&2
+    exit 1
+  fi
+
+  bind_json="$(curl -sS -X POST "${BASE_URL}/v1/pairing/bind" \
+    -H "Content-Type: application/json" \
+    -d "{\"code\":\"${pairing_code}\",\"device_name\":\"e2e-api\"}")"
+  AUTH_TOKEN="$(printf '%s' "${bind_json}" | jq -r '.token')"
+  if [[ -z "${AUTH_TOKEN}" || "${AUTH_TOKEN}" == "null" ]]; then
+    echo "failed to bind pairing code: ${bind_json}" >&2
+    exit 1
+  fi
+
+  AUTH_HEADER="Authorization: Bearer ${AUTH_TOKEN}"
+}
+
+bootstrap_auth_token
 
 thread_json="$(curl -sS -X POST "${BASE_URL}/v1/chat/threads" \
   -H "${AUTH_HEADER}" \
@@ -29,7 +63,7 @@ fi
 message_json="$(curl -sS -X POST "${BASE_URL}/v1/chat/threads/${thread_id}/messages" \
   -H "${AUTH_HEADER}" \
   -H "Content-Type: application/json" \
-  -d '{"content":"Run MVP e2e check"}')"
+  -d '{"content":"Run e2e check"}')"
 assistant_message="$(printf '%s' "${message_json}" | jq -r '.assistant_message')"
 
 if [[ -z "${assistant_message}" || "${assistant_message}" == "null" ]]; then
