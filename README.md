@@ -78,9 +78,22 @@ Backend runtime config is now CLI+env via `kong`:
 - `PINCER_LOG_LEVEL` (`debug|info|warn|error|fatal`)
 - `PINCER_LOG_FORMAT` (`text|json`)
 
+## Run with Tailscale
+
+Use Tailscale for transport only; Pincer still requires normal device pairing and bearer-token auth.
+
+1. Run Pincer bound to loopback with a non-default token HMAC key:
+   - `PINCER_HTTP_ADDR=127.0.0.1:8080 PINCER_TOKEN_HMAC_KEY='<strong-random-key>' mise run run`
+2. On the same host, publish it as a Tailscale service:
+   - `tailscale serve --service=svc:pincer --https=443 127.0.0.1:8080`
+   - `tailscale serve status --json`
+3. In the iOS app, set `Settings -> Backend -> Address` to your tailnet HTTPS URL.
+4. Pair the app as usual; tailnet reachability does not bypass pairing/token auth.
+
 ## Documentation
 
 - `docs/spec.md` - end-state system design and contracts.
+- `docs/auth.md` - authentication and device-pairing lifecycle details.
 - `docs/protocol.md` - ConnectRPC/protobuf wire contract and streaming event model.
 - `PLAN.md` - phased implementation plan and steps.
 - `docs/ios-ui-plan.md` - iOS UI/UX planning details.

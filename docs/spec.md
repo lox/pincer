@@ -6,6 +6,7 @@ Date: 2026-02-14
 This document defines the target system design for Pincer.
 Implementation sequencing and phase gates are tracked in `PLAN.md`.
 Control-plane protobuf/service and streaming event contract details are tracked in `docs/protocol.md`.
+Authentication and device-pairing lifecycle details are tracked in `docs/auth.md`.
 
 ## 1. Purpose
 
@@ -93,7 +94,8 @@ Auth model:
 - opaque bearer tokens (`pnr_<token_id>.<secret>`),
 - hashed token storage (HMAC-SHA256),
 - token TTL + sliding renewal,
-- device-scoped revocation.
+- device-scoped revocation,
+- network transport (including tailnet access) does not replace pairing/token authentication.
 
 ## 6. Data model
 
@@ -304,6 +306,7 @@ Invalid output handling:
 
 Control-plane API is ConnectRPC over protobuf. Service/method groups:
 `docs/protocol.md` is the canonical wire-level reference for RPC request/response shapes and streamed event envelopes.
+`docs/auth.md` documents current auth/pairing lifecycle behavior and edge cases.
 
 - auth and devices:
   - `AuthService.CreatePairingCode`
@@ -369,6 +372,7 @@ Notifications include intervention and proactive reach-out events with rate limi
 - secret redaction before model input
 - token and refresh-secret protection at rest
 - TLS-only transport
+- no implicit network-location authentication bypass
 - side-effect idempotency enforcement
 - audit logging for proposal/approval/execution/rejection/conflict
 - SSRF protections for web fetch tools
