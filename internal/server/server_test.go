@@ -19,7 +19,19 @@ import (
 func TestEndToEndApprovalFlow(t *testing.T) {
 	t.Parallel()
 
-	app := newTestApp(t)
+	app := newTestAppWithPlanner(t, stubPlanner{
+		result: agent.PlanResult{
+			AssistantMessage: "Harness response ready.",
+			ProposedActions: []agent.ProposedAction{
+				{
+					Tool:          "job_tool",
+					Args:          json.RawMessage(`{"thread_id":"t","summary":"planner args"}`),
+					Justification: "Planner requested external follow-up.",
+					RiskClass:     "EXFILTRATION",
+				},
+			},
+		},
+	})
 	srv := httptest.NewServer(app.Handler())
 	defer srv.Close()
 
@@ -51,13 +63,10 @@ func TestEndToEndApprovalFlow(t *testing.T) {
 	}
 }
 
-func TestPostMessageWithoutDemoActionsHasNoImplicitProposal(t *testing.T) {
+func TestPostMessageNoImplicitProposalByDefault(t *testing.T) {
 	t.Parallel()
 
-	app := newTestAppWithConfig(t, AppConfig{
-		DBPath:            filepath.Join(t.TempDir(), "pincer-test-no-demo.db"),
-		EnableDemoActions: false,
-	})
+	app := newTestApp(t)
 	srv := httptest.NewServer(app.Handler())
 	defer srv.Close()
 
@@ -83,7 +92,7 @@ func TestPostMessageUsesPlannerOutput(t *testing.T) {
 			AssistantMessage: "Harness response ready.",
 			ProposedActions: []agent.ProposedAction{
 				{
-					Tool:          "demo_external_notify",
+					Tool:          "job_tool",
 					Args:          json.RawMessage(`{"thread_id":"t","summary":"planner args"}`),
 					Justification: "Planner requested external follow-up.",
 					RiskClass:     "EXFILTRATION",
@@ -108,8 +117,8 @@ func TestPostMessageUsesPlannerOutput(t *testing.T) {
 	if len(pending) != 1 {
 		t.Fatalf("expected 1 pending approval, got %d", len(pending))
 	}
-	if pending[0].Tool != "demo_external_notify" {
-		t.Fatalf("expected tool demo_external_notify, got %q", pending[0].Tool)
+	if pending[0].Tool != "job_tool" {
+		t.Fatalf("expected tool job_tool, got %q", pending[0].Tool)
 	}
 }
 
@@ -459,18 +468,8 @@ type testDevicesResponse struct {
 
 func newTestApp(t *testing.T) *App {
 	t.Helper()
-	return newTestAppWithConfig(t, AppConfig{
-		EnableDemoActions: true,
-	})
-}
-
-func newTestAppWithConfig(t *testing.T, cfg AppConfig) *App {
-	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "pincer-test.db")
-	if cfg.DBPath == "" {
-		cfg.DBPath = dbPath
-	}
-	app, err := New(cfg)
+	app, err := New(AppConfig{DBPath: dbPath})
 	if err != nil {
 		t.Fatalf("new app: %v", err)
 	}
@@ -483,9 +482,8 @@ func newTestAppWithConfig(t *testing.T, cfg AppConfig) *App {
 func newTestAppWithPlanner(t *testing.T, planner agent.Planner) *App {
 	t.Helper()
 	app, err := New(AppConfig{
-		DBPath:           filepath.Join(t.TempDir(), "pincer-test.db"),
-		EnableDemoActions: true,
-		Planner:          planner,
+		DBPath:  filepath.Join(t.TempDir(), "pincer-test.db"),
+		Planner: planner,
 	})
 	if err != nil {
 		t.Fatalf("new app: %v", err)
@@ -749,7 +747,7 @@ func insertApprovedActionForTest(app *App, actionID, idempotencyKey, argsJSON, e
 		INSERT INTO proposed_actions(
 			action_id, user_id, source, source_id, tool, args_json, risk_class,
 			justification, idempotency_key, status, rejection_reason, expires_at, created_at
-		) VALUES(?, ?, 'job', ?, 'demo_external_notify', ?, 'EXFILTRATION',
+		) VALUES(?, ?, 'job', ?, 'job_tool', ?, 'EXFILTRATION',
 			'test action', ?, 'APPROVED', '', ?, ?)
 	`, actionID, defaultOwnerID, "job-test", argsJSON, idempotencyKey, expiresAt, createdAt)
 	if err != nil {

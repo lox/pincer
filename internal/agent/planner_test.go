@@ -10,10 +10,10 @@ import (
 	"testing"
 )
 
-func TestStaticPlannerReturnsDefaultProposal(t *testing.T) {
+func TestStaticPlannerReturnsNoActionsByDefault(t *testing.T) {
 	t.Parallel()
 
-	planner := NewStaticPlanner(true)
+	planner := NewStaticPlanner()
 	result, err := planner.Plan(context.Background(), PlanRequest{
 		ThreadID:    "thr_test",
 		UserMessage: "hello",
@@ -23,25 +23,6 @@ func TestStaticPlannerReturnsDefaultProposal(t *testing.T) {
 	}
 	if result.AssistantMessage == "" {
 		t.Fatalf("assistant message should not be empty")
-	}
-	if len(result.ProposedActions) != 1 {
-		t.Fatalf("expected 1 proposed action, got %d", len(result.ProposedActions))
-	}
-	if result.ProposedActions[0].Tool != "demo_external_notify" {
-		t.Fatalf("unexpected tool: %q", result.ProposedActions[0].Tool)
-	}
-}
-
-func TestStaticPlannerCanDisableDefaultProposal(t *testing.T) {
-	t.Parallel()
-
-	planner := NewStaticPlanner(false)
-	result, err := planner.Plan(context.Background(), PlanRequest{
-		ThreadID:    "thr_test",
-		UserMessage: "hello",
-	})
-	if err != nil {
-		t.Fatalf("plan: %v", err)
 	}
 	if len(result.ProposedActions) != 0 {
 		t.Fatalf("expected 0 proposed actions, got %d", len(result.ProposedActions))

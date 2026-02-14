@@ -51,7 +51,6 @@ type AppConfig struct {
 	OpenRouterBaseURL       string
 	ModelPrimary            string
 	ModelFallback           string
-	EnableDemoActions       bool
 	Logger                  *charmLog.Logger
 	Planner                 agent.Planner
 	ActionExecutorInterval  time.Duration
@@ -192,7 +191,7 @@ func New(cfg AppConfig) (*App, error) {
 
 	planner := cfg.Planner
 	if planner == nil {
-		staticPlanner := agent.NewStaticPlanner(cfg.EnableDemoActions)
+		staticPlanner := agent.NewStaticPlanner()
 		planner = staticPlanner
 
 		if cfg.OpenRouterAPIKey != "" {
@@ -1215,7 +1214,7 @@ func defaultActionArgs(threadID, userMessage string) json.RawMessage {
 
 func riskClassForTool(tool string) string {
 	switch strings.ToLower(strings.TrimSpace(tool)) {
-	case "demo_external_notify", "gmail_send_draft", "gmail_send_message":
+	case "gmail_send_draft", "gmail_send_message":
 		return "EXFILTRATION"
 	case "artifact_put", "notes_write", "gmail_create_draft_reply":
 		return "WRITE"

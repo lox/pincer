@@ -46,39 +46,17 @@ type Planner interface {
 	Plan(ctx context.Context, req PlanRequest) (PlanResult, error)
 }
 
-type staticPlanner struct {
-	enableDefaultAction bool
+type staticPlanner struct{}
+
+func NewStaticPlanner() Planner {
+	return staticPlanner{}
 }
 
-func NewStaticPlanner(enableDefaultAction bool) Planner {
-	return staticPlanner{enableDefaultAction: enableDefaultAction}
-}
-
-func (s staticPlanner) Plan(_ context.Context, req PlanRequest) (PlanResult, error) {
-	args, _ := json.Marshal(map[string]string{
-		"thread_id": req.ThreadID,
-		"summary":   req.UserMessage,
-	})
-
-	response := PlanResult{
+func (staticPlanner) Plan(_ context.Context, _ PlanRequest) (PlanResult, error) {
+	return PlanResult{
 		AssistantMessage: "No external actions were proposed.",
 		ProposedActions:  []ProposedAction{},
-	}
-	if s.enableDefaultAction {
-		response = PlanResult{
-			AssistantMessage: "I prepared a proposed external action. Review it in Approvals before execution.",
-			ProposedActions: []ProposedAction{
-				{
-					Tool:          "demo_external_notify",
-					Args:          args,
-					Justification: "User requested external follow-up",
-					RiskClass:     "EXFILTRATION",
-				},
-			},
-		}
-	}
-
-	return response, nil
+	}, nil
 }
 
 type fallbackPlanner struct {
