@@ -1,4 +1,6 @@
-# 🧠 Pincer (Backend + iOS Control App)
+<p align="left">
+  <img src="assets/pincer.png" alt="Pincer logo" width="180" />
+</p>
 
 A security-first autonomous assistant that can:
 
@@ -10,6 +12,8 @@ A security-first autonomous assistant that can:
 * Be controlled via an iOS app
 
 Built as a single Go backend with a minimal, approval-centric iOS control surface.
+
+Inspired by OpenClaw and Nanoclaw.
 
 ---
 
