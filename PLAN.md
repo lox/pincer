@@ -153,8 +153,10 @@ Exit criteria:
 - [x] SOUL-guided planner prompt loading from `SOUL.md`.
 - [x] `run_bash` tool path with approval gating and auditable execution output in chat.
 - [x] Inline chat approval/execution timeline with shared approval state from Approvals tab.
+- [x] Basic native markdown rendering in iOS chat messages using `AttributedString` (`inlineOnlyPreservingWhitespace`).
 - [x] Device session list + revoke controls.
 - [x] Reproducible API and iOS E2E flows.
+- [ ] Upgrade iOS chat markdown rendering to `Textual` for full block-level markdown support.
 - [ ] Phase 2 integrations started.
 - [ ] Turn orchestration and bounded tool-loop implementation is planned.
 

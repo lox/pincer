@@ -419,9 +419,11 @@ private struct ChatMessageRow: View {
                     if let parsedBashExecution {
                         BashExecutionMessageCard(parsed: parsedBashExecution)
                     } else {
-                        Text(message.content)
-                            .font(.system(.body, design: .rounded))
-                            .foregroundStyle(isUser ? Color.white : PincerPalette.textPrimary)
+                        MarkdownMessageText(
+                            message.content,
+                            font: .system(.body, design: .rounded),
+                            foregroundStyle: isUser ? Color.white : PincerPalette.textPrimary
+                        )
                     }
 
                     HStack(spacing: 8) {
@@ -480,6 +482,37 @@ private struct ChatMessageRow: View {
             return "Approval: \(displayTool) \u{2705}"
         }
         return message.content
+    }
+}
+
+private struct MarkdownMessageText: View {
+    let text: String
+    let font: Font
+    let foregroundStyle: Color
+
+    init(_ text: String, font: Font, foregroundStyle: Color) {
+        self.text = text
+        self.font = font
+        self.foregroundStyle = foregroundStyle
+    }
+
+    var body: some View {
+        Group {
+            if let attributed = try? AttributedString(
+                markdown: text,
+                // SwiftUI Text only renders inline markdown semantics. Preserve
+                // original block formatting so headings/lists/quotes stay readable.
+                options: AttributedString.MarkdownParsingOptions(
+                    interpretedSyntax: .inlineOnlyPreservingWhitespace
+                )
+            ) {
+                Text(attributed)
+            } else {
+                Text(text)
+            }
+        }
+        .font(font)
+        .foregroundStyle(foregroundStyle)
     }
 }
 
