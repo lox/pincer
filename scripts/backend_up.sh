@@ -23,11 +23,11 @@ if [[ "${RESET_DB}" == "1" ]]; then
 fi
 
 tmux new-session -d -s "${SESSION}" \
-  "cd '${ROOT_DIR}' && PINCER_HTTP_ADDR='${HTTP_ADDR}' PINCER_DB_PATH='${DB_PATH}' PINCER_TOKEN_HMAC_KEY='${TOKEN_HMAC_KEY}' mise run run"
+  "cd '${ROOT_DIR}' && PINCER_HTTP_ADDR='${HTTP_ADDR}' PINCER_DB_PATH='${DB_PATH}' PINCER_TOKEN_HMAC_KEY='${TOKEN_HMAC_KEY}' go run ./cmd/pincer"
 
 for _ in $(seq 1 30); do
-  code="$(curl -s -o /dev/null -w "%{http_code}" -X POST "${BASE_URL}/v1/pairing/code" -H "Content-Type: application/json" -d '{}' || true)"
-  if [[ "${code}" == "201" ]]; then
+  code="$(curl -s -o /dev/null -w "%{http_code}" -X POST "${BASE_URL}/pincer.protocol.v1.AuthService/CreatePairingCode" -H "Content-Type: application/json" -d '{}' || true)"
+  if [[ "${code}" == "200" || "${code}" == "401" ]]; then
     echo "pincer backend ready in tmux session '${SESSION}'"
     exit 0
   fi

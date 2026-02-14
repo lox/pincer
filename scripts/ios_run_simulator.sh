@@ -45,7 +45,7 @@ require_cmd curl
 
 cd "${ROOT_DIR}"
 
-backend_code="$(curl -sS -o /dev/null -w '%{http_code}' -X POST "${BASE_URL}/v1/pairing/code" -H 'Content-Type: application/json' -d '{}' || true)"
+backend_code="$(curl -sS -o /dev/null -w '%{http_code}' -X POST "${BASE_URL}/pincer.protocol.v1.AuthService/CreatePairingCode" -H 'Content-Type: application/json' -d '{}' || true)"
 if [[ "${backend_code}" == "000" ]]; then
   echo "warning: backend not reachable at ${BASE_URL}" >&2
   echo "warning: run 'mise run dev' before using chat/approvals" >&2
@@ -70,6 +70,7 @@ xcrun simctl install "${DEVICE}" "${APP_PATH}" >/dev/null
 if [[ -n "${AUTH_TOKEN}" ]]; then
   xcrun simctl spawn "${DEVICE}" defaults write "${BUNDLE_ID}" PINCER_BEARER_TOKEN -string "${AUTH_TOKEN}" >/dev/null
 fi
+xcrun simctl spawn "${DEVICE}" defaults write "${BUNDLE_ID}" PINCER_BASE_URL -string "${BASE_URL}" >/dev/null
 
 xcrun simctl launch "${DEVICE}" "${BUNDLE_ID}" >/dev/null
 

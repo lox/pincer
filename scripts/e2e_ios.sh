@@ -9,7 +9,7 @@ BASE_URL="${PINCER_BASE_URL:-http://127.0.0.1:18080}"
 HTTP_ADDR="${PINCER_HTTP_ADDR:-:18080}"
 AUTH_TOKEN="${PINCER_AUTH_TOKEN:-}"
 AUTH_HEADER=""
-MESSAGE_TEXT="${PINCER_E2E_MESSAGE:-Run iOS e2e flow $(date +%s)}"
+MESSAGE_TEXT="${PINCER_E2E_MESSAGE:-Please run bash command pwd and require approval}"
 SCREENSHOT_PATH="${PINCER_E2E_SCREENSHOT:-/tmp/pincer-e2e-ios.png}"
 
 require_cmd() {
@@ -23,12 +23,27 @@ require_cmd() {
 clear_agent_device_sessions() {
   local sessions_json names name
   sessions_json="$(npx -y agent-device session list --json 2>/dev/null || true)"
-  names="$(printf '%s' "${sessions_json}" | jq -r '.data.sessions[]?.name')"
+  names="$(printf '%s' "${sessions_json}" | jq -r '(.data.sessions // [])[]?.name' 2>/dev/null || true)"
   while IFS= read -r name; do
     if [[ -n "${name}" ]]; then
       npx -y agent-device close --session "${name}" >/dev/null 2>&1 || true
     fi
   done <<< "${names}"
+
+  local attempts=10
+  local in_use_count
+  while (( attempts > 0 )); do
+    sessions_json="$(npx -y agent-device session list --json 2>/dev/null || true)"
+    in_use_count="$(printf '%s' "${sessions_json}" | jq -r --arg device "${DEVICE}" '[((.data.sessions // [])[]?) | select(.device == $device)] | length' 2>/dev/null || printf '0')"
+    if [[ "${in_use_count}" == "0" ]]; then
+      return 0
+    fi
+    attempts=$((attempts - 1))
+    sleep 1
+  done
+
+  echo "failed to release agent-device sessions for ${DEVICE}" >&2
+  return 1
 }
 
 bootstrap_auth_token() {
@@ -37,7 +52,7 @@ bootstrap_auth_token() {
     return 0
   fi
 
-  pairing_json="$(curl -sS -X POST "${BASE_URL}/v1/pairing/code" \
+  pairing_json="$(curl -sS -X POST "${BASE_URL}/pincer.protocol.v1.AuthService/CreatePairingCode" \
     -H "Content-Type: application/json" \
     -d '{}')"
   pairing_code="$(printf '%s' "${pairing_json}" | jq -r '.code')"
@@ -46,9 +61,9 @@ bootstrap_auth_token() {
     exit 1
   fi
 
-  bind_json="$(curl -sS -X POST "${BASE_URL}/v1/pairing/bind" \
+  bind_json="$(curl -sS -X POST "${BASE_URL}/pincer.protocol.v1.AuthService/BindPairingCode" \
     -H "Content-Type: application/json" \
-    -d "{\"code\":\"${pairing_code}\",\"device_name\":\"e2e-ios\"}")"
+    -d "{\"code\":\"${pairing_code}\",\"deviceName\":\"e2e-ios\"}")"
   AUTH_TOKEN="$(printf '%s' "${bind_json}" | jq -r '.token')"
   if [[ -z "${AUTH_TOKEN}" || "${AUTH_TOKEN}" == "null" ]]; then
     echo "failed to bind pairing code: ${bind_json}" >&2
@@ -60,6 +75,7 @@ bootstrap_auth_token() {
 
 set_simulator_app_token() {
   xcrun simctl spawn "${DEVICE}" defaults write "${BUNDLE_ID}" PINCER_BEARER_TOKEN -string "${AUTH_TOKEN}" >/dev/null
+  xcrun simctl spawn "${DEVICE}" defaults write "${BUNDLE_ID}" PINCER_BASE_URL -string "${BASE_URL}" >/dev/null
 }
 
 get_app_path() {
@@ -84,10 +100,10 @@ wait_for_pending_action() {
   local attempts=30
   local pending_json pending_count
   while (( attempts > 0 )); do
-    pending_json="$(curl -sS "${BASE_URL}/v1/approvals?status=pending" -H "${AUTH_HEADER}")"
+    pending_json="$(curl -sS -X POST "${BASE_URL}/pincer.protocol.v1.ApprovalsService/ListApprovals" -H "${AUTH_HEADER}" -H "Content-Type: application/json" -d '{"status":"PENDING"}')"
     pending_count="$(printf '%s' "${pending_json}" | jq -r '.items | length')"
     if [[ "${pending_count}" -gt 0 ]]; then
-      printf '%s' "${pending_json}" | jq -r '.items[0].action_id'
+      printf '%s' "${pending_json}" | jq -r '.items[0].actionId'
       return 0
     fi
     attempts=$((attempts - 1))
@@ -101,8 +117,8 @@ wait_for_executed_action() {
   local attempts=30
   local executed_json match_count
   while (( attempts > 0 )); do
-    executed_json="$(curl -sS "${BASE_URL}/v1/approvals?status=executed" -H "${AUTH_HEADER}")"
-    match_count="$(printf '%s' "${executed_json}" | jq -r --arg action_id "${action_id}" '[.items[] | select(.action_id == $action_id)] | length')"
+    executed_json="$(curl -sS -X POST "${BASE_URL}/pincer.protocol.v1.ApprovalsService/ListApprovals" -H "${AUTH_HEADER}" -H "Content-Type: application/json" -d '{"status":"EXECUTED"}')"
+    match_count="$(printf '%s' "${executed_json}" | jq -r --arg action_id "${action_id}" '[.items[] | select(.actionId == $action_id)] | length')"
     if [[ "${match_count}" == "1" ]]; then
       return 0
     fi
@@ -172,9 +188,9 @@ if ! wait_for_executed_action "${ACTION_ID}"; then
   exit 1
 fi
 
-AUDIT_JSON="$(curl -sS "${BASE_URL}/v1/audit" -H "${AUTH_HEADER}")"
+AUDIT_JSON="$(curl -sS -X POST "${BASE_URL}/pincer.protocol.v1.SystemService/ListAudit" -H "${AUTH_HEADER}" -H "Content-Type: application/json" -d '{}')"
 for event in action_proposed action_approved action_executed; do
-  EVENT_COUNT="$(printf '%s' "${AUDIT_JSON}" | jq -r --arg action_id "${ACTION_ID}" --arg event "${event}" '[.items[] | select(.entity_id == $action_id and .event_type == $event)] | length')"
+  EVENT_COUNT="$(printf '%s' "${AUDIT_JSON}" | jq -r --arg action_id "${ACTION_ID}" --arg event "${event}" '[.items[] | select(.actionId == $action_id and .eventType == $event)] | length')"
   if [[ "${EVENT_COUNT}" != "1" ]]; then
     echo "missing audit event '${event}' for action ${ACTION_ID}" >&2
     exit 1

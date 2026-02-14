@@ -26,11 +26,11 @@ actor APIClient {
             return
         }
 
-        let codeRequest = try makeRequest(path: "/v1/pairing/code", method: "POST", body: Optional<SendMessageRequest>.none, includeAuth: false)
+        let codeRequest = try makeRequest(path: "/pincer.protocol.v1.AuthService/CreatePairingCode", method: "POST", body: EmptyRequest(), includeAuth: false)
         let codeResponse: PairingCodeResponse = try await send(codeRequest)
 
         let bindBody = PairingBindRequest(code: codeResponse.code, deviceName: deviceName)
-        let bindRequest = try makeRequest(path: "/v1/pairing/bind", method: "POST", body: bindBody, includeAuth: false)
+        let bindRequest = try makeRequest(path: "/pincer.protocol.v1.AuthService/BindPairingCode", method: "POST", body: bindBody, includeAuth: false)
         let bindResponse: PairingBindResponse = try await send(bindRequest)
 
         token = bindResponse.token
@@ -39,7 +39,7 @@ actor APIClient {
 
     func createThread() async throws -> String {
         try await withAuthorizedRetry {
-            let request = try makeRequest(path: "/v1/chat/threads", method: "POST", body: Optional<SendMessageRequest>.none)
+            let request = try makeRequest(path: "/pincer.protocol.v1.ThreadsService/CreateThread", method: "POST", body: EmptyRequest())
             let response: ThreadResponse = try await send(request)
             return response.threadID
         }
@@ -47,23 +47,36 @@ actor APIClient {
 
     func sendMessage(threadID: String, content: String) async throws {
         try await withAuthorizedRetry {
-            let body = SendMessageRequest(content: content)
-            let request = try makeRequest(path: "/v1/chat/threads/\(threadID)/messages", method: "POST", body: body)
-            let _: EmptyResponse = try await send(request)
+            let body = SendTurnRequest(threadID: threadID, userText: content, triggerType: "CHAT_MESSAGE")
+            let request = try makeRequest(path: "/pincer.protocol.v1.TurnsService/SendTurn", method: "POST", body: body)
+            let _: SendTurnResponse = try await send(request)
         }
     }
 
     func fetchMessages(threadID: String) async throws -> [Message] {
         try await withAuthorizedRetry {
-            let request = try makeRequest(path: "/v1/chat/threads/\(threadID)/messages", method: "GET", body: Optional<SendMessageRequest>.none)
+            let requestBody = ListThreadMessagesRequest(threadID: threadID)
+            let request = try makeRequest(path: "/pincer.protocol.v1.ThreadsService/ListThreadMessages", method: "POST", body: requestBody)
             let response: MessagesResponse = try await send(request)
-            return response.items
+            return response.items.map { message in
+                if message.threadID.isEmpty {
+                    return Message(
+                        messageID: message.messageID,
+                        threadID: threadID,
+                        role: message.role,
+                        content: message.content,
+                        createdAt: message.createdAt
+                    )
+                }
+                return message
+            }
         }
     }
 
     func fetchApprovals(status: String = "pending") async throws -> [Approval] {
         try await withAuthorizedRetry {
-            let request = try makeRequest(path: "/v1/approvals?status=\(status)", method: "GET", body: Optional<SendMessageRequest>.none)
+            let requestBody = ListApprovalsRequest(status: status.uppercased())
+            let request = try makeRequest(path: "/pincer.protocol.v1.ApprovalsService/ListApprovals", method: "POST", body: requestBody)
             let response: ApprovalsResponse = try await send(request)
             return response.items
         }
@@ -71,14 +84,15 @@ actor APIClient {
 
     func approve(actionID: String) async throws {
         try await withAuthorizedRetry {
-            let request = try makeRequest(path: "/v1/approvals/\(actionID)/approve", method: "POST", body: Optional<SendMessageRequest>.none)
+            let requestBody = ApproveActionRequest(actionID: actionID)
+            let request = try makeRequest(path: "/pincer.protocol.v1.ApprovalsService/ApproveAction", method: "POST", body: requestBody)
             let _: EmptyResponse = try await send(request)
         }
     }
 
     func fetchDevices() async throws -> [Device] {
         try await withAuthorizedRetry {
-            let request = try makeRequest(path: "/v1/devices", method: "GET", body: Optional<SendMessageRequest>.none)
+            let request = try makeRequest(path: "/pincer.protocol.v1.DevicesService/ListDevices", method: "POST", body: EmptyRequest())
             let response: DevicesResponse = try await send(request)
             return response.items
         }
@@ -86,7 +100,8 @@ actor APIClient {
 
     func revokeDevice(deviceID: String) async throws {
         try await withAuthorizedRetry {
-            let request = try makeRequest(path: "/v1/devices/\(deviceID)/revoke", method: "POST", body: Optional<SendMessageRequest>.none)
+            let requestBody = RevokeDeviceRequest(deviceID: deviceID)
+            let request = try makeRequest(path: "/pincer.protocol.v1.DevicesService/RevokeDevice", method: "POST", body: requestBody)
             let _: EmptyResponse = try await send(request)
         }
     }

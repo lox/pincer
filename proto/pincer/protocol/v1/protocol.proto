@@ -1,0 +1,668 @@
+syntax = "proto3";
+
+package pincer.protocol.v1;
+
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/lox/pincer/gen/proto/pincer/protocol/v1;protocolv1";
+
+enum QueueMode {
+  QUEUE_MODE_UNSPECIFIED = 0;
+  REJECT_IF_BUSY = 1;
+  INTERRUPT_AFTER_CURRENT_TOOL = 2;
+  QUEUE_AFTER_TURN = 3;
+}
+
+enum ReasoningVisibility {
+  REASONING_VISIBILITY_UNSPECIFIED = 0;
+  REASONING_OFF = 1;
+  REASONING_SUMMARY = 2;
+  REASONING_RAW = 3;
+}
+
+enum EventSource {
+  EVENT_SOURCE_UNSPECIFIED = 0;
+  MODEL_UNTRUSTED = 1;
+  POLICY_ENGINE = 2;
+  TOOL_EXECUTOR = 3;
+  SYSTEM = 4;
+}
+
+enum ContentTrust {
+  CONTENT_TRUST_UNSPECIFIED = 0;
+  UNTRUSTED_MODEL = 1;
+  TRUSTED_VALIDATED = 2;
+  TRUSTED_SYSTEM = 3;
+}
+
+enum Identity {
+  IDENTITY_UNSPECIFIED = 0;
+  IDENTITY_USER = 1;
+  IDENTITY_BOT = 2;
+  IDENTITY_NONE = 3;
+}
+
+enum RiskClass {
+  RISK_CLASS_UNSPECIFIED = 0;
+  READ = 1;
+  WRITE = 2;
+  EXFILTRATION = 3;
+  DESTRUCTIVE = 4;
+  HIGH = 5;
+}
+
+enum PolicyDecision {
+  POLICY_DECISION_UNSPECIFIED = 0;
+  ALLOW_INTERNAL = 1;
+  REQUIRE_APPROVAL = 2;
+  BLOCKED = 3;
+}
+
+enum ActionStatus {
+  ACTION_STATUS_UNSPECIFIED = 0;
+  PENDING = 1;
+  APPROVED = 2;
+  REJECTED = 3;
+  EXECUTED = 4;
+}
+
+enum OutputStream {
+  OUTPUT_STREAM_UNSPECIFIED = 0;
+  STDOUT = 1;
+  STDERR = 2;
+}
+
+enum TriggerType {
+  TRIGGER_TYPE_UNSPECIFIED = 0;
+  CHAT_MESSAGE = 1;
+  JOB_WAKEUP = 2;
+  SCHEDULE_WAKEUP = 3;
+  HEARTBEAT = 4;
+  DELEGATED_CALLBACK = 5;
+}
+
+enum JobStatus {
+  JOB_STATUS_UNSPECIFIED = 0;
+  JOB_RUNNING = 1;
+  JOB_WAITING_APPROVAL = 2;
+  JOB_COMPLETED = 3;
+  JOB_FAILED = 4;
+  JOB_PAUSED_BUDGET = 5;
+  JOB_CANCELLED = 6;
+}
+
+enum ScheduleTriggerKind {
+  SCHEDULE_TRIGGER_KIND_UNSPECIFIED = 0;
+  SCHEDULE_TRIGGER_CRON = 1;
+  SCHEDULE_TRIGGER_INTERVAL = 2;
+  SCHEDULE_TRIGGER_AT = 3;
+}
+
+enum NotificationType {
+  NOTIFICATION_TYPE_UNSPECIFIED = 0;
+  NOTIFICATION_PENDING_APPROVAL_CREATED = 1;
+  NOTIFICATION_APPROVAL_EXPIRING_SOON = 2;
+  NOTIFICATION_JOB_COMPLETED = 3;
+  NOTIFICATION_JOB_FAILED = 4;
+  NOTIFICATION_PROACTIVE_REACH_OUT = 5;
+}
+
+service AuthService {
+  rpc CreatePairingCode(CreatePairingCodeRequest) returns (CreatePairingCodeResponse);
+  rpc BindPairingCode(BindPairingCodeRequest) returns (BindPairingCodeResponse);
+  rpc RotateToken(RotateTokenRequest) returns (RotateTokenResponse);
+}
+
+service DevicesService {
+  rpc ListDevices(ListDevicesRequest) returns (ListDevicesResponse);
+  rpc RevokeDevice(RevokeDeviceRequest) returns (RevokeDeviceResponse);
+}
+
+service ThreadsService {
+  rpc CreateThread(CreateThreadRequest) returns (CreateThreadResponse);
+  rpc GetThreadSnapshot(GetThreadSnapshotRequest) returns (GetThreadSnapshotResponse);
+  rpc ListThreadMessages(ListThreadMessagesRequest) returns (ListThreadMessagesResponse);
+}
+
+service TurnsService {
+  rpc SendTurn(SendTurnRequest) returns (SendTurnResponse);
+  rpc StartTurn(StartTurnRequest) returns (stream ThreadEvent);
+}
+
+service EventsService {
+  rpc WatchThread(WatchThreadRequest) returns (stream ThreadEvent);
+}
+
+service ApprovalsService {
+  rpc ListApprovals(ListApprovalsRequest) returns (ListApprovalsResponse);
+  rpc ApproveAction(ApproveActionRequest) returns (ApproveActionResponse);
+  rpc RejectAction(RejectActionRequest) returns (RejectActionResponse);
+}
+
+service JobsService {
+  rpc ListJobs(ListJobsRequest) returns (ListJobsResponse);
+  rpc CreateJob(CreateJobRequest) returns (CreateJobResponse);
+  rpc GetJob(GetJobRequest) returns (GetJobResponse);
+  rpc CancelJob(CancelJobRequest) returns (CancelJobResponse);
+}
+
+service SchedulesService {
+  rpc ListSchedules(ListSchedulesRequest) returns (ListSchedulesResponse);
+  rpc CreateSchedule(CreateScheduleRequest) returns (CreateScheduleResponse);
+  rpc UpdateSchedule(UpdateScheduleRequest) returns (UpdateScheduleResponse);
+  rpc RunScheduleNow(RunScheduleNowRequest) returns (RunScheduleNowResponse);
+}
+
+service SystemService {
+  rpc GetPolicySummary(GetPolicySummaryRequest) returns (GetPolicySummaryResponse);
+  rpc ListAudit(ListAuditRequest) returns (ListAuditResponse);
+  rpc ListNotifications(ListNotificationsRequest) returns (ListNotificationsResponse);
+}
+
+message CreatePairingCodeRequest {}
+
+message CreatePairingCodeResponse {
+  string code = 1;
+  google.protobuf.Timestamp expires_at = 2;
+}
+
+message BindPairingCodeRequest {
+  string code = 1;
+  string device_name = 2;
+  string public_key = 3;
+}
+
+message BindPairingCodeResponse {
+  string device_id = 1;
+  string token = 2;
+  google.protobuf.Timestamp expires_at = 3;
+  google.protobuf.Timestamp renew_after = 4;
+}
+
+message RotateTokenRequest {}
+
+message RotateTokenResponse {
+  string token = 1;
+  google.protobuf.Timestamp expires_at = 2;
+  google.protobuf.Timestamp renew_after = 3;
+}
+
+message Device {
+  string device_id = 1;
+  string name = 2;
+  bool is_current = 3;
+  google.protobuf.Timestamp created_at = 4;
+  google.protobuf.Timestamp revoked_at = 5;
+}
+
+message ListDevicesRequest {}
+
+message ListDevicesResponse {
+  repeated Device items = 1;
+}
+
+message RevokeDeviceRequest {
+  string device_id = 1;
+}
+
+message RevokeDeviceResponse {
+  string device_id = 1;
+}
+
+message CreateThreadRequest {}
+
+message CreateThreadResponse {
+  string thread_id = 1;
+  uint64 last_sequence = 2;
+}
+
+message TurnBudget {
+  uint32 max_tool_steps = 1;
+  uint32 max_tool_tokens = 2;
+  uint32 max_context_messages = 3;
+}
+
+message StartTurnRequest {
+  string thread_id = 1;
+  string client_message_id = 2;
+  string user_text = 3;
+  QueueMode queue_mode = 4;
+  ReasoningVisibility reasoning_visibility = 5;
+  TriggerType trigger_type = 6;
+  string trigger_source_id = 7;
+  TurnBudget requested_budget = 8;
+  uint64 resume_from_sequence = 9;
+}
+
+message SendTurnRequest {
+  string thread_id = 1;
+  string user_text = 2;
+  TriggerType trigger_type = 3;
+}
+
+message SendTurnResponse {
+  string turn_id = 1;
+  string assistant_message = 2;
+  string action_id = 3;
+}
+
+message WatchThreadRequest {
+  string thread_id = 1;
+  uint64 from_sequence = 2;
+}
+
+message GetThreadSnapshotRequest {
+  string thread_id = 1;
+}
+
+message ListThreadMessagesRequest {
+  string thread_id = 1;
+  uint32 page_size = 2;
+  string page_token = 3;
+}
+
+message ThreadMessage {
+  string message_id = 1;
+  string role = 2;
+  string content = 3;
+  google.protobuf.Struct metadata = 4;
+  ContentTrust content_trust = 5;
+  google.protobuf.Timestamp created_at = 6;
+}
+
+message GetThreadSnapshotResponse {
+  string thread_id = 1;
+  uint64 last_sequence = 2;
+  repeated ThreadMessage messages = 3;
+}
+
+message ListThreadMessagesResponse {
+  repeated ThreadMessage items = 1;
+  string next_page_token = 2;
+  uint64 last_sequence = 3;
+}
+
+message ThreadEvent {
+  string event_id = 1;
+  string thread_id = 2;
+  string job_id = 3;
+  string turn_id = 4;
+  uint64 sequence = 5;
+  google.protobuf.Timestamp occurred_at = 6;
+  EventSource source = 7;
+  ContentTrust content_trust = 8;
+
+  oneof payload {
+    TurnStarted turn_started = 20;
+    TurnBudgetApplied turn_budget_applied = 21;
+    ModelOutputRepairAttempted model_output_repair_attempted = 22;
+    TurnCompleted turn_completed = 23;
+    TurnFailed turn_failed = 24;
+
+    AssistantThinkingDelta assistant_thinking_delta = 30;
+    AssistantTextDelta assistant_text_delta = 31;
+    AssistantMessageCommitted assistant_message_committed = 32;
+
+    ToolCallPlanned tool_call_planned = 40;
+    ToolExecutionStarted tool_execution_started = 41;
+    ToolExecutionOutputDelta tool_execution_output_delta = 42;
+    ToolExecutionFinished tool_execution_finished = 43;
+
+    PolicyDecisionMade policy_decision_made = 50;
+    ProposedActionCreated proposed_action_created = 51;
+    ProposedActionStatusChanged proposed_action_status_changed = 52;
+    IdempotencyConflict idempotency_conflict = 53;
+
+    JobStatusChanged job_status_changed = 60;
+    ScheduleTriggered schedule_triggered = 61;
+    DelegatedCallbackReceived delegated_callback_received = 62;
+
+    AuditEventRecorded audit_event_recorded = 70;
+    NotificationQueued notification_queued = 71;
+    ArtifactCreated artifact_created = 72;
+    MemoryCheckpointSaved memory_checkpoint_saved = 73;
+    SkillProposalCreated skill_proposal_created = 74;
+    SelfImprovementProposalCreated self_improvement_proposal_created = 75;
+
+    Heartbeat heartbeat = 90;
+    StreamGap stream_gap = 91;
+  }
+}
+
+message TurnStarted {
+  string user_message_id = 1;
+  TriggerType trigger_type = 2;
+}
+
+message TurnBudgetApplied {
+  TurnBudget effective_budget = 1;
+}
+
+message ModelOutputRepairAttempted {
+  uint32 repair_attempt = 1;
+  bool fallback_model_used = 2;
+}
+
+message TurnCompleted {
+  string assistant_message_id = 1;
+}
+
+message TurnFailed {
+  string code = 1;
+  string message = 2;
+  bool retryable = 3;
+}
+
+message AssistantThinkingDelta {
+  string segment_id = 1;
+  string delta = 2;
+  bool redacted = 3;
+  ReasoningVisibility visibility = 4;
+}
+
+message AssistantTextDelta {
+  string segment_id = 1;
+  string delta = 2;
+}
+
+message AssistantMessageCommitted {
+  string message_id = 1;
+  string full_text = 2;
+  google.protobuf.Struct metadata = 3;
+}
+
+message ToolCallPlanned {
+  string tool_call_id = 1;
+  string tool_name = 2;
+  google.protobuf.Struct args = 3;
+  RiskClass risk_class = 4;
+  Identity identity = 5;
+}
+
+message ToolExecutionStarted {
+  string execution_id = 1;
+  string tool_call_id = 2;
+  string tool_name = 3;
+  string display_command = 4;
+}
+
+message ToolExecutionOutputDelta {
+  string execution_id = 1;
+  OutputStream stream = 2;
+  bytes chunk = 3;
+  uint64 offset_bytes = 4;
+  bool utf8 = 5;
+}
+
+message ToolExecutionFinished {
+  string execution_id = 1;
+  int32 exit_code = 2;
+  uint64 duration_ms = 3;
+  bool timed_out = 4;
+  bool truncated = 5;
+}
+
+message PolicyDecisionMade {
+  string policy_id = 1;
+  PolicyDecision decision = 2;
+  string reason = 3;
+}
+
+message ProposedActionCreated {
+  string action_id = 1;
+  string tool = 2;
+  RiskClass risk_class = 3;
+  Identity identity = 4;
+  string idempotency_key = 5;
+  string justification = 6;
+  string deterministic_summary = 7;
+  google.protobuf.Struct preview = 8;
+  google.protobuf.Timestamp expires_at = 9;
+}
+
+message ProposedActionStatusChanged {
+  string action_id = 1;
+  ActionStatus status = 2;
+  string reason = 3;
+}
+
+message IdempotencyConflict {
+  string action_id = 1;
+  string tool = 2;
+  string idempotency_key = 3;
+  string reason = 4;
+}
+
+message JobStatusChanged {
+  string job_id = 1;
+  string status = 2;
+}
+
+message ScheduleTriggered {
+  string schedule_id = 1;
+  google.protobuf.Timestamp scheduled_for_utc = 2;
+}
+
+message DelegatedCallbackReceived {
+  string callback_id = 1;
+}
+
+message AuditEventRecorded {
+  string entry_id = 1;
+  string event_type = 2;
+}
+
+message NotificationQueued {
+  string notification_id = 1;
+  string type = 2;
+}
+
+message ArtifactCreated {
+  string artifact_id = 1;
+  string thread_id = 2;
+  string media_type = 3;
+}
+
+message MemoryCheckpointSaved {
+  string checkpoint_id = 1;
+  string scope = 2;
+}
+
+message SkillProposalCreated {
+  string proposal_id = 1;
+  string title = 2;
+  bool requires_owner_approval = 3;
+}
+
+message SelfImprovementProposalCreated {
+  string proposal_id = 1;
+  string kind = 2;
+  bool requires_owner_approval = 3;
+}
+
+message Heartbeat {
+  uint64 latest_sequence = 1;
+}
+
+message StreamGap {
+  uint64 requested_from_sequence = 1;
+  uint64 next_available_sequence = 2;
+}
+
+message Approval {
+  string action_id = 1;
+  string source = 2;
+  string source_id = 3;
+  string tool = 4;
+  ActionStatus status = 5;
+  RiskClass risk_class = 6;
+  Identity identity = 7;
+  string deterministic_summary = 8;
+  google.protobuf.Struct preview = 9;
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp expires_at = 11;
+  string rejection_reason = 12;
+}
+
+message ListApprovalsRequest {
+  ActionStatus status = 1;
+}
+
+message ListApprovalsResponse {
+  repeated Approval items = 1;
+}
+
+message ApproveActionRequest {
+  string action_id = 1;
+}
+
+message ApproveActionResponse {
+  string action_id = 1;
+  ActionStatus status = 2;
+}
+
+message RejectActionRequest {
+  string action_id = 1;
+  string reason = 2;
+}
+
+message RejectActionResponse {
+  string action_id = 1;
+  ActionStatus status = 2;
+}
+
+message Job {
+  string job_id = 1;
+  string goal = 2;
+  JobStatus status = 3;
+  string thread_id = 4;
+  TriggerType trigger_type = 5;
+  string trigger_source_id = 6;
+  TurnBudget budget = 7;
+  uint64 max_wall_time_ms = 8;
+  string last_error = 9;
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp updated_at = 11;
+}
+
+message ListJobsRequest {}
+
+message ListJobsResponse {
+  repeated Job items = 1;
+}
+
+message CreateJobRequest {
+  string goal = 1;
+  TurnBudget budget = 2;
+  uint64 max_wall_time_ms = 3;
+}
+
+message CreateJobResponse {
+  Job item = 1;
+}
+
+message GetJobRequest {
+  string job_id = 1;
+}
+
+message GetJobResponse {
+  Job item = 1;
+}
+
+message CancelJobRequest {
+  string job_id = 1;
+}
+
+message CancelJobResponse {
+  string job_id = 1;
+  JobStatus status = 2;
+}
+
+message Schedule {
+  string schedule_id = 1;
+  string name = 2;
+  ScheduleTriggerKind trigger_kind = 3;
+  string trigger_spec = 4;
+  string timezone = 5;
+  bool enabled = 6;
+  google.protobuf.Timestamp next_run_at = 7;
+  google.protobuf.Timestamp last_run_at = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp updated_at = 10;
+}
+
+message ListSchedulesRequest {}
+
+message ListSchedulesResponse {
+  repeated Schedule items = 1;
+}
+
+message CreateScheduleRequest {
+  string name = 1;
+  ScheduleTriggerKind trigger_kind = 2;
+  string trigger_spec = 3;
+  string timezone = 4;
+}
+
+message CreateScheduleResponse {
+  Schedule item = 1;
+}
+
+message UpdateScheduleRequest {
+  string schedule_id = 1;
+  google.protobuf.Struct patch = 2;
+}
+
+message UpdateScheduleResponse {
+  Schedule item = 1;
+}
+
+message RunScheduleNowRequest {
+  string schedule_id = 1;
+}
+
+message RunScheduleNowResponse {
+  string schedule_id = 1;
+  string wakeup_event_id = 2;
+  string job_id = 3;
+  string turn_id = 4;
+}
+
+message GetPolicySummaryRequest {}
+
+message GetPolicySummaryResponse {
+  google.protobuf.Struct summary = 1;
+  string policy_version = 2;
+}
+
+message AuditEntry {
+  string entry_id = 1;
+  string event_type = 2;
+  string thread_id = 3;
+  string job_id = 4;
+  string action_id = 5;
+  google.protobuf.Struct payload = 6;
+  google.protobuf.Timestamp occurred_at = 7;
+}
+
+message ListAuditRequest {}
+
+message ListAuditResponse {
+  repeated AuditEntry items = 1;
+}
+
+message Notification {
+  string notification_id = 1;
+  NotificationType type = 2;
+  string resource_kind = 3;
+  string resource_id = 4;
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp read_at = 6;
+}
+
+message ListNotificationsRequest {}
+
+message ListNotificationsResponse {
+  repeated Notification items = 1;
+}

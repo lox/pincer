@@ -30,6 +30,6 @@ Project files:
 ## Notes
 
 - This is intentionally minimal for current Phase 1 implementation.
-- The app uses opaque bearer tokens from pairing (`/v1/pairing/code` + `/v1/pairing/bind`).
+- The app uses opaque bearer tokens from pairing (`AuthService.CreatePairingCode` + `AuthService.BindPairingCode`).
 - Token is stored in `UserDefaults` under `PINCER_BEARER_TOKEN` for simulator/dev flows.
 - If build fails with missing iOS platform/runtime, install it from Xcode -> Settings -> Components, then rerun `mise run ios-build`.

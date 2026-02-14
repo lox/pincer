@@ -1,12 +1,10 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -14,7 +12,11 @@ import (
 	"testing"
 	"time"
 
+	"connectrpc.com/connect"
+	protocolv1 "github.com/lox/pincer/gen/proto/pincer/protocol/v1"
+	"github.com/lox/pincer/gen/proto/pincer/protocol/v1/protocolv1connect"
 	"github.com/lox/pincer/internal/agent"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestEndToEndApprovalFlow(t *testing.T) {
@@ -110,8 +112,8 @@ func TestPostMessageUsesPlannerOutput(t *testing.T) {
 	threadID := createThread(t, srv.URL, token)
 	response := postMessageResponse(t, srv.URL, token, threadID, "hello harness")
 
-	if response.AssistantMessage != "Harness response ready." {
-		t.Fatalf("expected planner assistant message, got %q", response.AssistantMessage)
+	if response.AssistantMessage != "" {
+		t.Fatalf("expected no assistant message when proposal is emitted, got %q", response.AssistantMessage)
 	}
 
 	pending := listApprovals(t, srv.URL, token, "pending")
@@ -328,7 +330,19 @@ func TestListDevicesMarksCurrentDevice(t *testing.T) {
 func TestRejectPendingAction(t *testing.T) {
 	t.Parallel()
 
-	app := newTestApp(t)
+	app := newTestAppWithPlanner(t, stubPlanner{
+		result: agent.PlanResult{
+			AssistantMessage: "Proposing command execution.",
+			ProposedActions: []agent.ProposedAction{
+				{
+					Tool:          "run_bash",
+					Args:          json.RawMessage(`{"command":"pwd"}`),
+					Justification: "User requested shell command.",
+					RiskClass:     "READ",
+				},
+			},
+		},
+	})
 	srv := httptest.NewServer(app.Handler())
 	defer srv.Close()
 
@@ -360,7 +374,19 @@ func TestRejectPendingAction(t *testing.T) {
 func TestApproveRejectNonPendingReturnsConflict(t *testing.T) {
 	t.Parallel()
 
-	app := newTestApp(t)
+	app := newTestAppWithPlanner(t, stubPlanner{
+		result: agent.PlanResult{
+			AssistantMessage: "Proposing command execution.",
+			ProposedActions: []agent.ProposedAction{
+				{
+					Tool:          "run_bash",
+					Args:          json.RawMessage(`{"command":"pwd"}`),
+					Justification: "User requested shell command.",
+					RiskClass:     "READ",
+				},
+			},
+		},
+	})
 	srv := httptest.NewServer(app.Handler())
 	defer srv.Close()
 
@@ -391,7 +417,19 @@ func TestApproveRejectNonPendingReturnsConflict(t *testing.T) {
 func TestPendingActionExpiresToRejected(t *testing.T) {
 	t.Parallel()
 
-	app := newTestApp(t)
+	app := newTestAppWithPlanner(t, stubPlanner{
+		result: agent.PlanResult{
+			AssistantMessage: "Proposing command execution.",
+			ProposedActions: []agent.ProposedAction{
+				{
+					Tool:          "run_bash",
+					Args:          json.RawMessage(`{"command":"pwd"}`),
+					Justification: "User requested shell command.",
+					RiskClass:     "READ",
+				},
+			},
+		},
+	})
 	srv := httptest.NewServer(app.Handler())
 	defer srv.Close()
 
@@ -681,135 +719,151 @@ func bootstrapAuthToken(t *testing.T, baseURL string) string {
 
 func createPairingCode(t *testing.T, baseURL, token string) string {
 	t.Helper()
-	status, body := postJSON(t, http.MethodPost, baseURL+"/v1/pairing/code", token, []byte(`{}`))
-	if status != http.StatusCreated {
-		t.Fatalf("create pairing code status: %d body=%s", status, string(body))
+	client := protocolv1connect.NewAuthServiceClient(connectHTTPClient(token), baseURL)
+	resp, err := client.CreatePairingCode(context.Background(), connect.NewRequest(&protocolv1.CreatePairingCodeRequest{}))
+	if err != nil {
+		t.Fatalf("create pairing code: %v", err)
 	}
-	var out testPairingCodeResponse
-	if err := json.Unmarshal(body, &out); err != nil {
-		t.Fatalf("decode pairing code response: %v", err)
-	}
-	if out.Code == "" {
+	if resp.Msg.GetCode() == "" {
 		t.Fatalf("pairing code is empty")
 	}
-	return out.Code
+	return resp.Msg.GetCode()
 }
 
 func createPairingCodeStatus(t *testing.T, baseURL, token string) int {
 	t.Helper()
-	status, _ := postJSON(t, http.MethodPost, baseURL+"/v1/pairing/code", token, []byte(`{}`))
-	return status
+	client := protocolv1connect.NewAuthServiceClient(connectHTTPClient(token), baseURL)
+	_, err := client.CreatePairingCode(context.Background(), connect.NewRequest(&protocolv1.CreatePairingCodeRequest{}))
+	if err != nil {
+		return connectErrorToHTTPStatus(err)
+	}
+	return http.StatusCreated
 }
 
 func bindPairing(t *testing.T, baseURL, code, deviceName string) string {
 	t.Helper()
-	status, body := postJSON(t, http.MethodPost, baseURL+"/v1/pairing/bind", "", []byte(fmt.Sprintf(`{"code":%q,"device_name":%q}`, code, deviceName)))
-	if status != http.StatusCreated {
-		t.Fatalf("bind pairing status: %d body=%s", status, string(body))
+	client := protocolv1connect.NewAuthServiceClient(http.DefaultClient, baseURL)
+	resp, err := client.BindPairingCode(context.Background(), connect.NewRequest(&protocolv1.BindPairingCodeRequest{
+		Code:       code,
+		DeviceName: deviceName,
+	}))
+	if err != nil {
+		t.Fatalf("bind pairing code: %v", err)
 	}
-	var out testPairingBindResponse
-	if err := json.Unmarshal(body, &out); err != nil {
-		t.Fatalf("decode bind pairing response: %v", err)
-	}
-	if out.Token == "" {
+	if resp.Msg.GetToken() == "" {
 		t.Fatalf("bind pairing token is empty")
 	}
-	return out.Token
+	return resp.Msg.GetToken()
 }
 
 func bindPairingStatus(t *testing.T, baseURL, code, deviceName string) int {
 	t.Helper()
-	status, _ := postJSON(t, http.MethodPost, baseURL+"/v1/pairing/bind", "", []byte(fmt.Sprintf(`{"code":%q,"device_name":%q}`, code, deviceName)))
-	return status
+	client := protocolv1connect.NewAuthServiceClient(http.DefaultClient, baseURL)
+	_, err := client.BindPairingCode(context.Background(), connect.NewRequest(&protocolv1.BindPairingCodeRequest{
+		Code:       code,
+		DeviceName: deviceName,
+	}))
+	if err != nil {
+		return connectErrorToHTTPStatus(err)
+	}
+	return http.StatusCreated
 }
 
 func createThread(t *testing.T, baseURL, token string) string {
 	t.Helper()
-	status, body := postJSON(t, http.MethodPost, baseURL+"/v1/chat/threads", token, []byte(`{}`))
-	if status != http.StatusCreated {
-		t.Fatalf("create thread status: %d body=%s", status, string(body))
+	client := protocolv1connect.NewThreadsServiceClient(connectHTTPClient(token), baseURL)
+	resp, err := client.CreateThread(context.Background(), connect.NewRequest(&protocolv1.CreateThreadRequest{}))
+	if err != nil {
+		t.Fatalf("create thread: %v", err)
 	}
-	var out testThreadResponse
-	if err := json.Unmarshal(body, &out); err != nil {
-		t.Fatalf("decode thread: %v", err)
+	if resp.Msg.GetThreadId() == "" {
+		t.Fatalf("thread id is empty")
 	}
-	return out.ThreadID
+	return resp.Msg.GetThreadId()
 }
 
 func createThreadStatus(t *testing.T, baseURL, token string) int {
 	t.Helper()
-	status, _ := postJSON(t, http.MethodPost, baseURL+"/v1/chat/threads", token, []byte(`{}`))
-	return status
+	client := protocolv1connect.NewThreadsServiceClient(connectHTTPClient(token), baseURL)
+	_, err := client.CreateThread(context.Background(), connect.NewRequest(&protocolv1.CreateThreadRequest{}))
+	if err != nil {
+		return connectErrorToHTTPStatus(err)
+	}
+	return http.StatusCreated
 }
 
 func postMessage(t *testing.T, baseURL, token, threadID, content string) {
 	t.Helper()
-	status, body := postJSON(t, http.MethodPost, baseURL+"/v1/chat/threads/"+threadID+"/messages", token, []byte(`{"content":"`+content+`"}`))
-	if status != http.StatusCreated {
-		t.Fatalf("post message status: %d body=%s", status, string(body))
-	}
+	_ = postMessageResponse(t, baseURL, token, threadID, content)
 }
 
 func postMessageResponse(t *testing.T, baseURL, token, threadID, content string) createMessageResponse {
 	t.Helper()
-	status, body := postJSON(t, http.MethodPost, baseURL+"/v1/chat/threads/"+threadID+"/messages", token, []byte(`{"content":"`+content+`"}`))
-	if status != http.StatusCreated {
-		t.Fatalf("post message status: %d body=%s", status, string(body))
+	client := protocolv1connect.NewTurnsServiceClient(connectHTTPClient(token), baseURL)
+	stream, err := client.StartTurn(context.Background(), connect.NewRequest(&protocolv1.StartTurnRequest{
+		ThreadId:    threadID,
+		UserText:    content,
+		TriggerType: protocolv1.TriggerType_CHAT_MESSAGE,
+	}))
+	if err != nil {
+		t.Fatalf("start turn: %v", err)
 	}
 
 	var out createMessageResponse
-	if err := json.Unmarshal(body, &out); err != nil {
-		t.Fatalf("decode createMessageResponse: %v", err)
+	for stream.Receive() {
+		event := stream.Msg()
+		if msg := event.GetAssistantMessageCommitted(); msg != nil {
+			out.AssistantMessage = msg.GetFullText()
+		}
+		if proposal := event.GetProposedActionCreated(); proposal != nil && out.ActionID == "" {
+			out.ActionID = proposal.GetActionId()
+		}
+	}
+	if err := stream.Err(); err != nil {
+		t.Fatalf("turn stream error: %v", err)
 	}
 	return out
 }
 
 func listDevices(t *testing.T, baseURL, token string) []testDevice {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodGet, baseURL+"/v1/devices", nil)
+	client := protocolv1connect.NewDevicesServiceClient(connectHTTPClient(token), baseURL)
+	resp, err := client.ListDevices(context.Background(), connect.NewRequest(&protocolv1.ListDevicesRequest{}))
 	if err != nil {
-		t.Fatalf("new request: %v", err)
+		t.Fatalf("list devices: %v", err)
 	}
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
+	items := make([]testDevice, 0, len(resp.Msg.GetItems()))
+	for _, item := range resp.Msg.GetItems() {
+		items = append(items, testDevice{
+			DeviceID:  item.GetDeviceId(),
+			Name:      item.GetName(),
+			RevokedAt: formatTimestamp(item.GetRevokedAt()),
+			IsCurrent: item.GetIsCurrent(),
+		})
 	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("do request: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("list devices status: %d", resp.StatusCode)
-	}
-	var out testDevicesResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		t.Fatalf("decode devices: %v", err)
-	}
-	return out.Items
+	return items
 }
 
 func listMessages(t *testing.T, baseURL, token, threadID string) []message {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodGet, baseURL+"/v1/chat/threads/"+threadID+"/messages", nil)
+	client := protocolv1connect.NewThreadsServiceClient(connectHTTPClient(token), baseURL)
+	resp, err := client.ListThreadMessages(context.Background(), connect.NewRequest(&protocolv1.ListThreadMessagesRequest{
+		ThreadId: threadID,
+	}))
 	if err != nil {
-		t.Fatalf("new request: %v", err)
+		t.Fatalf("list thread messages: %v", err)
 	}
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
+	items := make([]message, 0, len(resp.Msg.GetItems()))
+	for _, item := range resp.Msg.GetItems() {
+		items = append(items, message{
+			MessageID: item.GetMessageId(),
+			ThreadID:  threadID,
+			Role:      item.GetRole(),
+			Content:   item.GetContent(),
+			CreatedAt: formatTimestamp(item.GetCreatedAt()),
+		})
 	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("do request: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("list messages status: %d", resp.StatusCode)
-	}
-	var out messagesResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		t.Fatalf("decode messages: %v", err)
-	}
-	return out.Items
+	return items
 }
 
 func revokeDevice(t *testing.T, baseURL, token, deviceID string) {
@@ -822,32 +876,35 @@ func revokeDevice(t *testing.T, baseURL, token, deviceID string) {
 
 func revokeDeviceStatus(t *testing.T, baseURL, token, deviceID string) int {
 	t.Helper()
-	status, _ := postJSON(t, http.MethodPost, baseURL+"/v1/devices/"+deviceID+"/revoke", token, []byte(`{}`))
-	return status
+	client := protocolv1connect.NewDevicesServiceClient(connectHTTPClient(token), baseURL)
+	_, err := client.RevokeDevice(context.Background(), connect.NewRequest(&protocolv1.RevokeDeviceRequest{
+		DeviceId: deviceID,
+	}))
+	if err != nil {
+		return connectErrorToHTTPStatus(err)
+	}
+	return http.StatusOK
 }
 
 func listApprovals(t *testing.T, baseURL, token, status string) []testApproval {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodGet, baseURL+"/v1/approvals?status="+status, nil)
+	client := protocolv1connect.NewApprovalsServiceClient(connectHTTPClient(token), baseURL)
+	resp, err := client.ListApprovals(context.Background(), connect.NewRequest(&protocolv1.ListApprovalsRequest{
+		Status: actionStatusFromString(status),
+	}))
 	if err != nil {
-		t.Fatalf("new request: %v", err)
+		t.Fatalf("list approvals: %v", err)
 	}
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
+	items := make([]testApproval, 0, len(resp.Msg.GetItems()))
+	for _, item := range resp.Msg.GetItems() {
+		items = append(items, testApproval{
+			ActionID:        item.GetActionId(),
+			Tool:            item.GetTool(),
+			Status:          strings.ToLower(item.GetStatus().String()),
+			RejectionReason: item.GetRejectionReason(),
+		})
 	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("do request: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("list approvals status: %d", resp.StatusCode)
-	}
-	var out testApprovalsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		t.Fatalf("decode approvals: %v", err)
-	}
-	return out.Items
+	return items
 }
 
 func approveAction(t *testing.T, baseURL, token, actionID string) {
@@ -869,32 +926,51 @@ func rejectAction(t *testing.T, baseURL, token, actionID, reason string) {
 
 func postApprovalAction(t *testing.T, baseURL, token, actionID, action string, body []byte) int {
 	t.Helper()
-	status, _ := postJSON(t, http.MethodPost, baseURL+"/v1/approvals/"+actionID+"/"+action, token, body)
-	return status
+	client := protocolv1connect.NewApprovalsServiceClient(connectHTTPClient(token), baseURL)
+
+	switch action {
+	case "approve":
+		_, err := client.ApproveAction(context.Background(), connect.NewRequest(&protocolv1.ApproveActionRequest{
+			ActionId: actionID,
+		}))
+		if err != nil {
+			return connectErrorToHTTPStatus(err)
+		}
+		return http.StatusOK
+	case "reject":
+		var reqBody rejectActionRequest
+		if err := json.Unmarshal(body, &reqBody); err != nil {
+			return http.StatusBadRequest
+		}
+		_, err := client.RejectAction(context.Background(), connect.NewRequest(&protocolv1.RejectActionRequest{
+			ActionId: actionID,
+			Reason:   reqBody.Reason,
+		}))
+		if err != nil {
+			return connectErrorToHTTPStatus(err)
+		}
+		return http.StatusOK
+	default:
+		t.Fatalf("unsupported approval action %q", action)
+		return http.StatusInternalServerError
+	}
 }
 
 func listAudit(t *testing.T, baseURL, token string) []testAuditEvent {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodGet, baseURL+"/v1/audit", nil)
+	client := protocolv1connect.NewSystemServiceClient(connectHTTPClient(token), baseURL)
+	resp, err := client.ListAudit(context.Background(), connect.NewRequest(&protocolv1.ListAuditRequest{}))
 	if err != nil {
-		t.Fatalf("new request: %v", err)
+		t.Fatalf("list audit: %v", err)
 	}
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
+	items := make([]testAuditEvent, 0, len(resp.Msg.GetItems()))
+	for _, item := range resp.Msg.GetItems() {
+		items = append(items, testAuditEvent{
+			EventType: item.GetEventType(),
+			EntityID:  item.GetActionId(),
+		})
 	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("do request: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("list audit status: %d", resp.StatusCode)
-	}
-	var out testAuditResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		t.Fatalf("decode audit: %v", err)
-	}
-	return out.Items
+	return items
 }
 
 func waitForApprovalStatus(t *testing.T, baseURL, token, status, actionID string, timeout time.Duration) []testApproval {
@@ -985,27 +1061,57 @@ func insertApprovedActionWithFieldsForTest(
 	return nil
 }
 
-func postJSON(t *testing.T, method, url, token string, body []byte) (int, []byte) {
-	t.Helper()
-	req, err := http.NewRequest(method, url, bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("new request: %v", err)
+func connectHTTPClient(token string) *http.Client {
+	if token == "" {
+		return http.DefaultClient
 	}
-	req.Header.Set("Content-Type", "application/json")
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("do request: %v", err)
-	}
-	defer resp.Body.Close()
+	return newAuthorizedHTTPClient(token)
+}
 
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("read response body: %v", err)
+func actionStatusFromString(status string) protocolv1.ActionStatus {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "pending":
+		return protocolv1.ActionStatus_PENDING
+	case "approved":
+		return protocolv1.ActionStatus_APPROVED
+	case "rejected":
+		return protocolv1.ActionStatus_REJECTED
+	case "executed":
+		return protocolv1.ActionStatus_EXECUTED
+	default:
+		return protocolv1.ActionStatus_ACTION_STATUS_UNSPECIFIED
 	}
-	return resp.StatusCode, respBody
+}
+
+func formatTimestamp(ts *timestamppb.Timestamp) string {
+	if ts == nil {
+		return ""
+	}
+	return ts.AsTime().UTC().Format(time.RFC3339Nano)
+}
+
+func connectErrorToHTTPStatus(err error) int {
+	var connectErr *connect.Error
+	if !errors.As(err, &connectErr) {
+		return http.StatusInternalServerError
+	}
+
+	switch connectErr.Code() {
+	case connect.CodeUnauthenticated:
+		return http.StatusUnauthorized
+	case connect.CodePermissionDenied:
+		return http.StatusForbidden
+	case connect.CodeNotFound:
+		return http.StatusNotFound
+	case connect.CodeAlreadyExists, connect.CodeAborted, connect.CodeFailedPrecondition:
+		return http.StatusConflict
+	case connect.CodeInvalidArgument:
+		return http.StatusBadRequest
+	case connect.CodeUnimplemented:
+		return http.StatusNotImplemented
+	default:
+		return http.StatusInternalServerError
+	}
 }
 
 type stubPlanner struct {

@@ -1,0 +1,1052 @@
+package server
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"connectrpc.com/connect"
+	protocolv1 "github.com/lox/pincer/gen/proto/pincer/protocol/v1"
+	"github.com/lox/pincer/gen/proto/pincer/protocol/v1/protocolv1connect"
+	"google.golang.org/protobuf/types/known/structpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
+)
+
+func (a *App) registerConnectHandlers(mux *http.ServeMux) {
+	for _, reg := range []func(*http.ServeMux){
+		a.registerAuthService,
+		a.registerDevicesService,
+		a.registerThreadsService,
+		a.registerTurnsService,
+		a.registerEventsService,
+		a.registerApprovalsService,
+		a.registerJobsService,
+		a.registerSchedulesService,
+		a.registerSystemService,
+	} {
+		reg(mux)
+	}
+}
+
+func (a *App) registerAuthService(mux *http.ServeMux) {
+	path, handler := protocolv1connect.NewAuthServiceHandler(a)
+	mux.Handle(path, handler)
+}
+
+func (a *App) registerDevicesService(mux *http.ServeMux) {
+	path, handler := protocolv1connect.NewDevicesServiceHandler(a)
+	mux.Handle(path, handler)
+}
+
+func (a *App) registerThreadsService(mux *http.ServeMux) {
+	path, handler := protocolv1connect.NewThreadsServiceHandler(a)
+	mux.Handle(path, handler)
+}
+
+func (a *App) registerTurnsService(mux *http.ServeMux) {
+	path, handler := protocolv1connect.NewTurnsServiceHandler(a)
+	mux.Handle(path, handler)
+}
+
+func (a *App) registerEventsService(mux *http.ServeMux) {
+	path, handler := protocolv1connect.NewEventsServiceHandler(a)
+	mux.Handle(path, handler)
+}
+
+func (a *App) registerApprovalsService(mux *http.ServeMux) {
+	path, handler := protocolv1connect.NewApprovalsServiceHandler(a)
+	mux.Handle(path, handler)
+}
+
+func (a *App) registerJobsService(mux *http.ServeMux) {
+	path, handler := protocolv1connect.NewJobsServiceHandler(a)
+	mux.Handle(path, handler)
+}
+
+func (a *App) registerSchedulesService(mux *http.ServeMux) {
+	path, handler := protocolv1connect.NewSchedulesServiceHandler(a)
+	mux.Handle(path, handler)
+}
+
+func (a *App) registerSystemService(mux *http.ServeMux) {
+	path, handler := protocolv1connect.NewSystemServiceHandler(a)
+	mux.Handle(path, handler)
+}
+
+func (a *App) isPublicPath(path string) bool {
+	switch path {
+	case protocolv1connect.AuthServiceCreatePairingCodeProcedure,
+		protocolv1connect.AuthServiceBindPairingCodeProcedure:
+		return true
+	default:
+		return false
+	}
+}
+
+func (a *App) CreatePairingCode(ctx context.Context, req *connect.Request[protocolv1.CreatePairingCodeRequest]) (*connect.Response[protocolv1.CreatePairingCodeResponse], error) {
+	activeDevices, err := a.activeDeviceCount()
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("check pairing state: %w", err))
+	}
+
+	if activeDevices > 0 {
+		rawToken := bearerTokenFromHeader(req.Header().Get("Authorization"))
+		if rawToken == "" {
+			return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("unauthorized"))
+		}
+		if err := a.validateAndTouchToken(rawToken); err != nil {
+			return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("unauthorized"))
+		}
+	}
+
+	code, err := newPairingCode()
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("generate pairing code: %w", err))
+	}
+	expiresAt := time.Now().UTC().Add(defaultPairingCodeTTL)
+	if _, err := a.db.ExecContext(ctx, `
+		INSERT INTO pairing_codes(code_hash, expires_at, consumed_at, created_at)
+		VALUES(?, ?, '', ?)
+	`, a.hashPairingCode(code), expiresAt.Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("persist pairing code: %w", err))
+	}
+
+	a.logger.Info("pairing code issued", "expires_at", expiresAt.Format(time.RFC3339Nano), "active_devices", activeDevices)
+	return connect.NewResponse(&protocolv1.CreatePairingCodeResponse{
+		Code:      code,
+		ExpiresAt: timestamppb.New(expiresAt),
+	}), nil
+}
+
+func (a *App) BindPairingCode(ctx context.Context, req *connect.Request[protocolv1.BindPairingCodeRequest]) (*connect.Response[protocolv1.BindPairingCodeResponse], error) {
+	msg := req.Msg
+	code := strings.TrimSpace(msg.GetCode())
+	if code == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("code is required"))
+	}
+	deviceName := strings.TrimSpace(msg.GetDeviceName())
+	if deviceName == "" {
+		deviceName = "Pincer Device"
+	}
+
+	tokenID, tokenValue, err := newOpaqueToken()
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("generate token: %w", err))
+	}
+
+	now := time.Now().UTC()
+	nowStr := now.Format(time.RFC3339Nano)
+	expiresAt := now.Add(defaultTokenTTL)
+	expiresAtStr := expiresAt.Format(time.RFC3339Nano)
+	renewAfter := expiresAt.Add(-defaultTokenRenewWindow)
+	deviceID := newID("dev")
+
+	tx, err := a.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("begin transaction: %w", err))
+	}
+	defer tx.Rollback()
+
+	var pairingExpiresAtRaw string
+	var consumedAt string
+	err = tx.QueryRowContext(ctx, `
+		SELECT expires_at, consumed_at
+		FROM pairing_codes
+		WHERE code_hash = ?
+	`, a.hashPairingCode(code)).Scan(&pairingExpiresAtRaw, &consumedAt)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("invalid pairing code"))
+	case err != nil:
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("validate pairing code: %w", err))
+	case consumedAt != "":
+		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("invalid pairing code"))
+	}
+
+	pairingExpiresAt, err := parseTimestamp(pairingExpiresAtRaw)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("parse pairing code expiry: %w", err))
+	}
+	if !pairingExpiresAt.After(now) {
+		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("invalid pairing code"))
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE pairing_codes
+		SET consumed_at = ?
+		WHERE code_hash = ? AND consumed_at = ''
+	`, nowStr, a.hashPairingCode(code)); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("consume pairing code: %w", err))
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE devices
+		SET revoked_at = ?
+		WHERE revoked_at = ''
+	`, nowStr); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("revoke devices: %w", err))
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM auth_tokens`); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("invalidate tokens: %w", err))
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO devices(device_id, user_id, name, public_key, revoked_at, created_at)
+		VALUES(?, ?, ?, ?, '', ?)
+	`, deviceID, a.ownerID, deviceName, msg.GetPublicKey(), nowStr); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("create device: %w", err))
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO auth_tokens(token_id, device_id, token_hash, expires_at, last_used_at, created_at)
+		VALUES(?, ?, ?, ?, ?, ?)
+	`, tokenID, deviceID, a.hashToken(tokenValue), expiresAtStr, nowStr, nowStr); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("create token: %w", err))
+	}
+
+	if err := insertAuditTx(tx, "device_paired", deviceID, fmt.Sprintf(`{"name":%q}`, deviceName), nowStr); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("write audit: %w", err))
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("commit transaction: %w", err))
+	}
+
+	a.logger.Info("device paired", "device_id", deviceID, "device_name", deviceName, "expires_at", expiresAtStr)
+	return connect.NewResponse(&protocolv1.BindPairingCodeResponse{
+		DeviceId:   deviceID,
+		Token:      tokenValue,
+		ExpiresAt:  timestamppb.New(expiresAt),
+		RenewAfter: timestamppb.New(renewAfter),
+	}), nil
+}
+
+func (a *App) RotateToken(ctx context.Context, req *connect.Request[protocolv1.RotateTokenRequest]) (*connect.Response[protocolv1.RotateTokenResponse], error) {
+	rawToken := bearerTokenFromHeader(req.Header().Get("Authorization"))
+	if rawToken == "" {
+		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("unauthorized"))
+	}
+	if err := a.validateAndTouchToken(rawToken); err != nil {
+		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("unauthorized"))
+	}
+
+	tokenID, err := tokenIDFromOpaqueToken(rawToken)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("unauthorized"))
+	}
+
+	newTokenID, newTokenValue, err := newOpaqueToken()
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("generate token: %w", err))
+	}
+
+	now := time.Now().UTC()
+	nowStr := now.Format(time.RFC3339Nano)
+	expiresAt := now.Add(defaultTokenTTL)
+	renewAfter := expiresAt.Add(-defaultTokenRenewWindow)
+
+	tx, err := a.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("begin transaction: %w", err))
+	}
+	defer tx.Rollback()
+
+	var deviceID string
+	err = tx.QueryRowContext(ctx, `
+		SELECT device_id
+		FROM auth_tokens
+		WHERE token_id = ?
+	`, tokenID).Scan(&deviceID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("unauthorized"))
+	}
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("lookup token: %w", err))
+	}
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM auth_tokens WHERE token_id = ?`, tokenID); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("delete old token: %w", err))
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO auth_tokens(token_id, device_id, token_hash, expires_at, last_used_at, created_at)
+		VALUES(?, ?, ?, ?, ?, ?)
+	`, newTokenID, deviceID, a.hashToken(newTokenValue), expiresAt.Format(time.RFC3339Nano), nowStr, nowStr); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("insert rotated token: %w", err))
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("commit token rotation: %w", err))
+	}
+
+	return connect.NewResponse(&protocolv1.RotateTokenResponse{
+		Token:      newTokenValue,
+		ExpiresAt:  timestamppb.New(expiresAt),
+		RenewAfter: timestamppb.New(renewAfter),
+	}), nil
+}
+
+func (a *App) ListDevices(ctx context.Context, req *connect.Request[protocolv1.ListDevicesRequest]) (*connect.Response[protocolv1.ListDevicesResponse], error) {
+	_ = req
+
+	currentDeviceID := ""
+	rawToken := bearerTokenFromHeader(req.Header().Get("Authorization"))
+	if rawToken != "" {
+		id, err := a.deviceIDForToken(rawToken)
+		if err == nil {
+			currentDeviceID = id
+		}
+	}
+
+	rows, err := a.db.QueryContext(ctx, `
+		SELECT device_id, name, revoked_at, created_at
+		FROM devices
+		ORDER BY created_at DESC
+	`)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("list devices: %w", err))
+	}
+	defer rows.Close()
+
+	items := make([]*protocolv1.Device, 0)
+	for rows.Next() {
+		var deviceID string
+		var name string
+		var revokedAtRaw string
+		var createdAtRaw string
+		if err := rows.Scan(&deviceID, &name, &revokedAtRaw, &createdAtRaw); err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("scan device: %w", err))
+		}
+
+		item := &protocolv1.Device{
+			DeviceId:  deviceID,
+			Name:      name,
+			IsCurrent: deviceID == currentDeviceID,
+			CreatedAt: timestampOrNil(createdAtRaw),
+		}
+		if revokedAtRaw != "" {
+			item.RevokedAt = timestampOrNil(revokedAtRaw)
+		}
+		items = append(items, item)
+	}
+
+	return connect.NewResponse(&protocolv1.ListDevicesResponse{Items: items}), nil
+}
+
+func (a *App) RevokeDevice(ctx context.Context, req *connect.Request[protocolv1.RevokeDeviceRequest]) (*connect.Response[protocolv1.RevokeDeviceResponse], error) {
+	deviceID := strings.TrimSpace(req.Msg.GetDeviceId())
+	if deviceID == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("device_id is required"))
+	}
+	if err := a.revokeDevice(deviceID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, connect.NewError(connect.CodeNotFound, errors.New("device not found"))
+		}
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("revoke device: %w", err))
+	}
+	return connect.NewResponse(&protocolv1.RevokeDeviceResponse{DeviceId: deviceID}), nil
+}
+
+func (a *App) CreateThread(ctx context.Context, req *connect.Request[protocolv1.CreateThreadRequest]) (*connect.Response[protocolv1.CreateThreadResponse], error) {
+	_ = req
+
+	threadID := newID("thr")
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := a.db.ExecContext(ctx, `
+		INSERT INTO threads(thread_id, user_id, channel, created_at)
+		VALUES(?, ?, 'ios', ?)
+	`, threadID, a.ownerID, now); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("create thread: %w", err))
+	}
+
+	return connect.NewResponse(&protocolv1.CreateThreadResponse{ThreadId: threadID, LastSequence: 0}), nil
+}
+
+func (a *App) GetThreadSnapshot(ctx context.Context, req *connect.Request[protocolv1.GetThreadSnapshotRequest]) (*connect.Response[protocolv1.GetThreadSnapshotResponse], error) {
+	threadID := strings.TrimSpace(req.Msg.GetThreadId())
+	if threadID == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("thread_id is required"))
+	}
+	if !a.threadExists(threadID) {
+		return nil, connect.NewError(connect.CodeNotFound, errors.New("thread not found"))
+	}
+
+	messages, err := a.loadThreadMessages(ctx, threadID, 0)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	lastSeq, err := a.maxThreadSequence(ctx, threadID)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	return connect.NewResponse(&protocolv1.GetThreadSnapshotResponse{
+		ThreadId:     threadID,
+		LastSequence: lastSeq,
+		Messages:     messages,
+	}), nil
+}
+
+func (a *App) ListThreadMessages(ctx context.Context, req *connect.Request[protocolv1.ListThreadMessagesRequest]) (*connect.Response[protocolv1.ListThreadMessagesResponse], error) {
+	threadID := strings.TrimSpace(req.Msg.GetThreadId())
+	if threadID == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("thread_id is required"))
+	}
+	if !a.threadExists(threadID) {
+		return nil, connect.NewError(connect.CodeNotFound, errors.New("thread not found"))
+	}
+
+	pageSize := int(req.Msg.GetPageSize())
+	if pageSize <= 0 || pageSize > 200 {
+		pageSize = 200
+	}
+
+	offset := 0
+	if token := strings.TrimSpace(req.Msg.GetPageToken()); token != "" {
+		parsed, err := strconv.Atoi(token)
+		if err != nil || parsed < 0 {
+			return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("invalid page_token"))
+		}
+		offset = parsed
+	}
+
+	messages, err := a.loadThreadMessages(ctx, threadID, offset)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	if len(messages) > pageSize {
+		messages = messages[:pageSize]
+	}
+
+	lastSeq, err := a.maxThreadSequence(ctx, threadID)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+
+	nextPageToken := ""
+	if len(messages) == pageSize {
+		nextPageToken = strconv.Itoa(offset + pageSize)
+	}
+
+	return connect.NewResponse(&protocolv1.ListThreadMessagesResponse{
+		Items:         messages,
+		NextPageToken: nextPageToken,
+		LastSequence:  lastSeq,
+	}), nil
+}
+
+func (a *App) SendTurn(ctx context.Context, req *connect.Request[protocolv1.SendTurnRequest]) (*connect.Response[protocolv1.SendTurnResponse], error) {
+	threadID := strings.TrimSpace(req.Msg.GetThreadId())
+	if threadID == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("thread_id is required"))
+	}
+	if !a.threadExists(threadID) {
+		return nil, connect.NewError(connect.CodeNotFound, errors.New("thread not found"))
+	}
+
+	turnID := newID("turn")
+	result, err := a.executeTurn(ctx, threadID, strings.TrimSpace(req.Msg.GetUserText()), turnID, req.Msg.GetTriggerType())
+	if err != nil {
+		if strings.Contains(err.Error(), "user_text is required") {
+			return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("user_text is required"))
+		}
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+
+	firstActionID := ""
+	if len(result.ActionIDs) > 0 {
+		firstActionID = result.ActionIDs[0]
+	}
+
+	return connect.NewResponse(&protocolv1.SendTurnResponse{
+		TurnId:           turnID,
+		AssistantMessage: result.AssistantMessage,
+		ActionId:         firstActionID,
+	}), nil
+}
+
+func (a *App) StartTurn(ctx context.Context, req *connect.Request[protocolv1.StartTurnRequest], stream *connect.ServerStream[protocolv1.ThreadEvent]) error {
+	threadID := strings.TrimSpace(req.Msg.GetThreadId())
+	if threadID == "" {
+		return connect.NewError(connect.CodeInvalidArgument, errors.New("thread_id is required"))
+	}
+	if !a.threadExists(threadID) {
+		return connect.NewError(connect.CodeNotFound, errors.New("thread not found"))
+	}
+
+	turnID := newID("turn")
+	sub := a.subscribeThread(threadID)
+	defer a.unsubscribeThread(threadID, sub)
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := a.executeTurn(ctx, threadID, strings.TrimSpace(req.Msg.GetUserText()), turnID, req.Msg.GetTriggerType())
+		errCh <- err
+	}()
+
+	turnDone := false
+	execDone := false
+
+	for {
+		select {
+		case <-ctx.Done():
+			return connect.NewError(connect.CodeCanceled, ctx.Err())
+		case runErr := <-errCh:
+			errCh = nil
+			if runErr != nil {
+				return connect.NewError(connect.CodeInternal, runErr)
+			}
+			execDone = true
+			if turnDone {
+				return nil
+			}
+		case incoming := <-sub:
+			if incoming == nil || incoming.event == nil {
+				continue
+			}
+			event := incoming.event
+			if event.GetTurnId() != turnID {
+				continue
+			}
+			if err := stream.Send(event); err != nil {
+				return err
+			}
+			if event.GetTurnCompleted() != nil || event.GetTurnFailed() != nil {
+				turnDone = true
+				if execDone {
+					return nil
+				}
+				if errCh != nil {
+					runErr := <-errCh
+					if runErr != nil {
+						return connect.NewError(connect.CodeInternal, runErr)
+					}
+					errCh = nil
+					execDone = true
+				}
+				return nil
+			}
+		}
+	}
+}
+
+func (a *App) WatchThread(ctx context.Context, req *connect.Request[protocolv1.WatchThreadRequest], stream *connect.ServerStream[protocolv1.ThreadEvent]) error {
+	threadID := strings.TrimSpace(req.Msg.GetThreadId())
+	if threadID == "" {
+		return connect.NewError(connect.CodeInvalidArgument, errors.New("thread_id is required"))
+	}
+	if !a.threadExists(threadID) {
+		return connect.NewError(connect.CodeNotFound, errors.New("thread not found"))
+	}
+
+	history, err := a.listThreadEvents(ctx, threadID, req.Msg.GetFromSequence(), 2000)
+	if err != nil {
+		return connect.NewError(connect.CodeInternal, err)
+	}
+	for _, event := range history {
+		if err := stream.Send(event); err != nil {
+			return err
+		}
+	}
+
+	sub := a.subscribeThread(threadID)
+	defer a.unsubscribeThread(threadID, sub)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return connect.NewError(connect.CodeCanceled, ctx.Err())
+		case incoming := <-sub:
+			if incoming == nil || incoming.event == nil {
+				continue
+			}
+			if err := stream.Send(incoming.event); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+func (a *App) ListApprovals(ctx context.Context, req *connect.Request[protocolv1.ListApprovalsRequest]) (*connect.Response[protocolv1.ListApprovalsResponse], error) {
+	status := approvalStatusToDB(req.Msg.GetStatus())
+	if status == "" {
+		status = "PENDING"
+	}
+
+	rows, err := a.db.QueryContext(ctx, `
+		SELECT action_id, source, source_id, tool, status, risk_class, justification, created_at, expires_at, rejection_reason
+		FROM proposed_actions
+		WHERE status = ?
+		ORDER BY created_at ASC
+	`, status)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("list approvals: %w", err))
+	}
+	defer rows.Close()
+
+	items := make([]*protocolv1.Approval, 0)
+	for rows.Next() {
+		var actionID string
+		var source string
+		var sourceID string
+		var tool string
+		var statusRaw string
+		var riskClass string
+		var justification string
+		var createdAtRaw string
+		var expiresAtRaw string
+		var rejectionReason string
+		if err := rows.Scan(&actionID, &source, &sourceID, &tool, &statusRaw, &riskClass, &justification, &createdAtRaw, &expiresAtRaw, &rejectionReason); err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("scan approval: %w", err))
+		}
+		items = append(items, &protocolv1.Approval{
+			ActionId:             actionID,
+			Source:               source,
+			SourceId:             sourceID,
+			Tool:                 tool,
+			Status:               dbStatusToApprovalStatus(statusRaw),
+			RiskClass:            dbRiskToRiskClass(riskClass),
+			Identity:             protocolv1.Identity_IDENTITY_NONE,
+			DeterministicSummary: justification,
+			CreatedAt:            timestampOrNil(createdAtRaw),
+			ExpiresAt:            timestampOrNil(expiresAtRaw),
+			RejectionReason:      rejectionReason,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("iterate approvals: %w", err))
+	}
+	return connect.NewResponse(&protocolv1.ListApprovalsResponse{Items: items}), nil
+}
+
+func (a *App) ApproveAction(ctx context.Context, req *connect.Request[protocolv1.ApproveActionRequest]) (*connect.Response[protocolv1.ApproveActionResponse], error) {
+	actionID := strings.TrimSpace(req.Msg.GetActionId())
+	if actionID == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("action_id is required"))
+	}
+	if err := a.markActionApproved(actionID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, connect.NewError(connect.CodeNotFound, errors.New("action not found"))
+		}
+		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
+	}
+	return connect.NewResponse(&protocolv1.ApproveActionResponse{ActionId: actionID, Status: protocolv1.ActionStatus_APPROVED}), nil
+}
+
+func (a *App) RejectAction(ctx context.Context, req *connect.Request[protocolv1.RejectActionRequest]) (*connect.Response[protocolv1.RejectActionResponse], error) {
+	actionID := strings.TrimSpace(req.Msg.GetActionId())
+	if actionID == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("action_id is required"))
+	}
+	reason := strings.TrimSpace(req.Msg.GetReason())
+	if reason == "" {
+		reason = "rejected_by_user"
+	}
+	if err := a.markActionRejected(actionID, reason); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, connect.NewError(connect.CodeNotFound, errors.New("action not found"))
+		}
+		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
+	}
+	return connect.NewResponse(&protocolv1.RejectActionResponse{ActionId: actionID, Status: protocolv1.ActionStatus_REJECTED}), nil
+}
+
+func (a *App) ListJobs(context.Context, *connect.Request[protocolv1.ListJobsRequest]) (*connect.Response[protocolv1.ListJobsResponse], error) {
+	return connect.NewResponse(&protocolv1.ListJobsResponse{}), nil
+}
+
+func (a *App) CreateJob(context.Context, *connect.Request[protocolv1.CreateJobRequest]) (*connect.Response[protocolv1.CreateJobResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("create job is not implemented"))
+}
+
+func (a *App) GetJob(context.Context, *connect.Request[protocolv1.GetJobRequest]) (*connect.Response[protocolv1.GetJobResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("get job is not implemented"))
+}
+
+func (a *App) CancelJob(context.Context, *connect.Request[protocolv1.CancelJobRequest]) (*connect.Response[protocolv1.CancelJobResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("cancel job is not implemented"))
+}
+
+func (a *App) ListSchedules(context.Context, *connect.Request[protocolv1.ListSchedulesRequest]) (*connect.Response[protocolv1.ListSchedulesResponse], error) {
+	return connect.NewResponse(&protocolv1.ListSchedulesResponse{}), nil
+}
+
+func (a *App) CreateSchedule(context.Context, *connect.Request[protocolv1.CreateScheduleRequest]) (*connect.Response[protocolv1.CreateScheduleResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("create schedule is not implemented"))
+}
+
+func (a *App) UpdateSchedule(context.Context, *connect.Request[protocolv1.UpdateScheduleRequest]) (*connect.Response[protocolv1.UpdateScheduleResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("update schedule is not implemented"))
+}
+
+func (a *App) RunScheduleNow(context.Context, *connect.Request[protocolv1.RunScheduleNowRequest]) (*connect.Response[protocolv1.RunScheduleNowResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("run schedule now is not implemented"))
+}
+
+func (a *App) GetPolicySummary(context.Context, *connect.Request[protocolv1.GetPolicySummaryRequest]) (*connect.Response[protocolv1.GetPolicySummaryResponse], error) {
+	summary, err := structpb.NewStruct(map[string]any{
+		"external_write_requires_approval": true,
+		"background_jobs_propose_only":     true,
+		"run_bash_requires_approval":       true,
+	})
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("build policy summary: %w", err))
+	}
+	return connect.NewResponse(&protocolv1.GetPolicySummaryResponse{
+		Summary:       summary,
+		PolicyVersion: "phase1",
+	}), nil
+}
+
+func (a *App) ListAudit(ctx context.Context, req *connect.Request[protocolv1.ListAuditRequest]) (*connect.Response[protocolv1.ListAuditResponse], error) {
+	_ = req
+
+	rows, err := a.db.QueryContext(ctx, `
+		SELECT entry_id, event_type, entity_id, payload_json, created_at
+		FROM audit_log
+		ORDER BY created_at ASC
+	`)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("list audit: %w", err))
+	}
+	defer rows.Close()
+
+	items := make([]*protocolv1.AuditEntry, 0)
+	for rows.Next() {
+		var entryID string
+		var eventType string
+		var entityID string
+		var payloadRaw string
+		var createdAtRaw string
+		if err := rows.Scan(&entryID, &eventType, &entityID, &payloadRaw, &createdAtRaw); err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("scan audit: %w", err))
+		}
+		payload := jsonStringToStruct(payloadRaw)
+		items = append(items, &protocolv1.AuditEntry{
+			EntryId:    entryID,
+			EventType:  eventType,
+			ActionId:   entityID,
+			Payload:    payload,
+			OccurredAt: timestampOrNil(createdAtRaw),
+			ThreadId:   "",
+			JobId:      "",
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("iterate audit: %w", err))
+	}
+
+	return connect.NewResponse(&protocolv1.ListAuditResponse{Items: items}), nil
+}
+
+func (a *App) ListNotifications(context.Context, *connect.Request[protocolv1.ListNotificationsRequest]) (*connect.Response[protocolv1.ListNotificationsResponse], error) {
+	return connect.NewResponse(&protocolv1.ListNotificationsResponse{}), nil
+}
+
+type turnExecutionResult struct {
+	AssistantMessage string
+	ActionIDs        []string
+}
+
+func (a *App) executeTurn(ctx context.Context, threadID, userText, turnID string, triggerType protocolv1.TriggerType) (*turnExecutionResult, error) {
+	result := &turnExecutionResult{}
+
+	if userText == "" {
+		_, _ = a.appendThreadEvent(ctx, &protocolv1.ThreadEvent{
+			ThreadId:     threadID,
+			TurnId:       turnID,
+			Source:       protocolv1.EventSource_SYSTEM,
+			ContentTrust: protocolv1.ContentTrust_TRUSTED_SYSTEM,
+			Payload:      &protocolv1.ThreadEvent_TurnFailed{TurnFailed: &protocolv1.TurnFailed{Code: "INVALID_ARGUMENT", Message: "user_text is required", Retryable: false}},
+		})
+		return nil, errors.New("user_text is required")
+	}
+
+	plan, err := a.planTurn(ctx, threadID, userText)
+	if err != nil {
+		_, _ = a.appendThreadEvent(ctx, &protocolv1.ThreadEvent{
+			ThreadId:     threadID,
+			TurnId:       turnID,
+			Source:       protocolv1.EventSource_MODEL_UNTRUSTED,
+			ContentTrust: protocolv1.ContentTrust_UNTRUSTED_MODEL,
+			Payload: &protocolv1.ThreadEvent_TurnFailed{TurnFailed: &protocolv1.TurnFailed{
+				Code:      "FAILED_MODEL_OUTPUT",
+				Message:   err.Error(),
+				Retryable: true,
+			}},
+		})
+		return nil, fmt.Errorf("plan turn: %w", err)
+	}
+
+	now := time.Now().UTC()
+	nowStr := now.Format(time.RFC3339Nano)
+	expiresAt := now.Add(defaultActionExpiry).Format(time.RFC3339Nano)
+
+	userMessageID := newID("msg")
+	assistantMessageID := ""
+
+	tx, err := a.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin turn tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO messages(message_id, thread_id, role, content, created_at)
+		VALUES(?, ?, 'user', ?, ?)
+	`, userMessageID, threadID, userText, nowStr); err != nil {
+		return nil, fmt.Errorf("insert user message: %w", err)
+	}
+
+	actions := make([]*protocolv1.ProposedActionCreated, 0, len(plan.ProposedActions))
+	if len(plan.ProposedActions) == 0 {
+		assistantMessageID = newID("msg")
+		result.AssistantMessage = plan.AssistantMessage
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO messages(message_id, thread_id, role, content, created_at)
+			VALUES(?, ?, 'assistant', ?, ?)
+		`, assistantMessageID, threadID, plan.AssistantMessage, nowStr); err != nil {
+			return nil, fmt.Errorf("insert assistant message: %w", err)
+		}
+	} else {
+		for _, proposed := range plan.ProposedActions {
+			actionID := newID("act")
+			idempotencyKey := newID("idem")
+			argsJSON := string(proposed.Args)
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO proposed_actions(
+					action_id, user_id, source, source_id, tool, args_json, risk_class,
+				justification, idempotency_key, status, rejection_reason, expires_at, created_at
+			) VALUES(?, ?, 'chat', ?, ?, ?, ?, ?, ?, 'PENDING', '', ?, ?)
+			`, actionID, a.ownerID, threadID, proposed.Tool, argsJSON, proposed.RiskClass, proposed.Justification, idempotencyKey, expiresAt, nowStr); err != nil {
+				return nil, fmt.Errorf("insert proposed action: %w", err)
+			}
+			if err := insertAuditTx(tx, "action_proposed", actionID, argsJSON, nowStr); err != nil {
+				return nil, fmt.Errorf("insert action_proposed audit: %w", err)
+			}
+			result.ActionIDs = append(result.ActionIDs, actionID)
+			actions = append(actions, &protocolv1.ProposedActionCreated{
+				ActionId:             actionID,
+				Tool:                 proposed.Tool,
+				RiskClass:            dbRiskToRiskClass(proposed.RiskClass),
+				Identity:             protocolv1.Identity_IDENTITY_NONE,
+				IdempotencyKey:       idempotencyKey,
+				Justification:        proposed.Justification,
+				DeterministicSummary: proposed.Justification,
+				Preview:              jsonRawToStruct(proposed.Args),
+				ExpiresAt:            timestampOrNil(expiresAt),
+			})
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit turn tx: %w", err)
+	}
+
+	_, _ = a.appendThreadEvent(ctx, &protocolv1.ThreadEvent{
+		ThreadId:     threadID,
+		TurnId:       turnID,
+		Source:       protocolv1.EventSource_SYSTEM,
+		ContentTrust: protocolv1.ContentTrust_TRUSTED_SYSTEM,
+		Payload: &protocolv1.ThreadEvent_TurnStarted{TurnStarted: &protocolv1.TurnStarted{
+			UserMessageId: userMessageID,
+			TriggerType:   triggerType,
+		}},
+	})
+
+	if len(actions) == 0 {
+		_, _ = a.appendThreadEvent(ctx, &protocolv1.ThreadEvent{
+			ThreadId:     threadID,
+			TurnId:       turnID,
+			Source:       protocolv1.EventSource_MODEL_UNTRUSTED,
+			ContentTrust: protocolv1.ContentTrust_UNTRUSTED_MODEL,
+			Payload: &protocolv1.ThreadEvent_AssistantTextDelta{AssistantTextDelta: &protocolv1.AssistantTextDelta{
+				SegmentId: "assistant",
+				Delta:     plan.AssistantMessage,
+			}},
+		})
+		_, _ = a.appendThreadEvent(ctx, &protocolv1.ThreadEvent{
+			ThreadId:     threadID,
+			TurnId:       turnID,
+			Source:       protocolv1.EventSource_SYSTEM,
+			ContentTrust: protocolv1.ContentTrust_TRUSTED_SYSTEM,
+			Payload: &protocolv1.ThreadEvent_AssistantMessageCommitted{AssistantMessageCommitted: &protocolv1.AssistantMessageCommitted{
+				MessageId: assistantMessageID,
+				FullText:  plan.AssistantMessage,
+			}},
+		})
+	} else {
+		for _, action := range actions {
+			_, _ = a.appendThreadEvent(ctx, &protocolv1.ThreadEvent{
+				ThreadId:     threadID,
+				TurnId:       turnID,
+				Source:       protocolv1.EventSource_POLICY_ENGINE,
+				ContentTrust: protocolv1.ContentTrust_TRUSTED_VALIDATED,
+				Payload: &protocolv1.ThreadEvent_PolicyDecisionMade{PolicyDecisionMade: &protocolv1.PolicyDecisionMade{
+					PolicyId: "phase1",
+					Decision: protocolv1.PolicyDecision_REQUIRE_APPROVAL,
+					Reason:   "requires_approval",
+				}},
+			})
+			_, _ = a.appendThreadEvent(ctx, &protocolv1.ThreadEvent{
+				ThreadId:     threadID,
+				TurnId:       turnID,
+				Source:       protocolv1.EventSource_POLICY_ENGINE,
+				ContentTrust: protocolv1.ContentTrust_TRUSTED_VALIDATED,
+				Payload:      &protocolv1.ThreadEvent_ProposedActionCreated{ProposedActionCreated: action},
+			})
+		}
+	}
+
+	_, _ = a.appendThreadEvent(ctx, &protocolv1.ThreadEvent{
+		ThreadId:     threadID,
+		TurnId:       turnID,
+		Source:       protocolv1.EventSource_SYSTEM,
+		ContentTrust: protocolv1.ContentTrust_TRUSTED_SYSTEM,
+		Payload: &protocolv1.ThreadEvent_TurnCompleted{TurnCompleted: &protocolv1.TurnCompleted{
+			AssistantMessageId: assistantMessageID,
+		}},
+	})
+	return result, nil
+}
+
+func (a *App) loadThreadMessages(ctx context.Context, threadID string, offset int) ([]*protocolv1.ThreadMessage, error) {
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := a.db.QueryContext(ctx, `
+		SELECT message_id, role, content, created_at
+		FROM messages
+		WHERE thread_id = ?
+		ORDER BY created_at ASC
+		LIMIT 500 OFFSET ?
+	`, threadID, offset)
+	if err != nil {
+		return nil, fmt.Errorf("list messages: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]*protocolv1.ThreadMessage, 0)
+	for rows.Next() {
+		var messageID string
+		var role string
+		var content string
+		var createdAtRaw string
+		if err := rows.Scan(&messageID, &role, &content, &createdAtRaw); err != nil {
+			return nil, fmt.Errorf("scan message: %w", err)
+		}
+		items = append(items, &protocolv1.ThreadMessage{
+			MessageId:    messageID,
+			Role:         role,
+			Content:      content,
+			ContentTrust: roleToContentTrust(role),
+			CreatedAt:    timestampOrNil(createdAtRaw),
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate messages: %w", err)
+	}
+	return items, nil
+}
+
+func roleToContentTrust(role string) protocolv1.ContentTrust {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "assistant":
+		return protocolv1.ContentTrust_UNTRUSTED_MODEL
+	case "system":
+		return protocolv1.ContentTrust_TRUSTED_SYSTEM
+	default:
+		return protocolv1.ContentTrust_TRUSTED_VALIDATED
+	}
+}
+
+func approvalStatusToDB(status protocolv1.ActionStatus) string {
+	switch status {
+	case protocolv1.ActionStatus_PENDING:
+		return "PENDING"
+	case protocolv1.ActionStatus_APPROVED:
+		return "APPROVED"
+	case protocolv1.ActionStatus_REJECTED:
+		return "REJECTED"
+	case protocolv1.ActionStatus_EXECUTED:
+		return "EXECUTED"
+	default:
+		return ""
+	}
+}
+
+func dbStatusToApprovalStatus(status string) protocolv1.ActionStatus {
+	switch strings.ToUpper(strings.TrimSpace(status)) {
+	case "PENDING":
+		return protocolv1.ActionStatus_PENDING
+	case "APPROVED":
+		return protocolv1.ActionStatus_APPROVED
+	case "REJECTED":
+		return protocolv1.ActionStatus_REJECTED
+	case "EXECUTED":
+		return protocolv1.ActionStatus_EXECUTED
+	default:
+		return protocolv1.ActionStatus_ACTION_STATUS_UNSPECIFIED
+	}
+}
+
+func dbRiskToRiskClass(risk string) protocolv1.RiskClass {
+	switch strings.ToUpper(strings.TrimSpace(risk)) {
+	case "READ":
+		return protocolv1.RiskClass_READ
+	case "WRITE":
+		return protocolv1.RiskClass_WRITE
+	case "EXFILTRATION":
+		return protocolv1.RiskClass_EXFILTRATION
+	case "DESTRUCTIVE":
+		return protocolv1.RiskClass_DESTRUCTIVE
+	case "HIGH":
+		return protocolv1.RiskClass_HIGH
+	default:
+		return protocolv1.RiskClass_RISK_CLASS_UNSPECIFIED
+	}
+}
+
+func timestampOrNil(raw string) *timestamppb.Timestamp {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	parsed, err := parseTimestamp(raw)
+	if err != nil {
+		return nil
+	}
+	return timestamppb.New(parsed)
+}
+
+func jsonRawToStruct(raw json.RawMessage) *structpb.Struct {
+	if len(raw) == 0 {
+		return nil
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return nil
+	}
+	result, err := structpb.NewStruct(obj)
+	if err != nil {
+		return nil
+	}
+	return result
+}
+
+func jsonStringToStruct(raw string) *structpb.Struct {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(raw), &obj); err != nil {
+		return nil
+	}
+	result, err := structpb.NewStruct(obj)
+	if err != nil {
+		return nil
+	}
+	return result
+}

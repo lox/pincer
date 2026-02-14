@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bufio"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -23,6 +24,7 @@ import (
 	"time"
 
 	charmLog "github.com/charmbracelet/log"
+	protocolv1 "github.com/lox/pincer/gen/proto/pincer/protocol/v1"
 	"github.com/lox/pincer/internal/agent"
 	_ "modernc.org/sqlite"
 )
@@ -71,6 +73,9 @@ type App struct {
 	doneCh                 chan struct{}
 	closeOnce              sync.Once
 	actionExecutorInterval time.Duration
+	eventAppendMu          sync.Mutex
+	eventSubsMu            sync.RWMutex
+	eventSubs              map[string]map[chan *threadEvent]struct{}
 }
 
 type threadResponse struct {
@@ -254,6 +259,7 @@ func New(cfg AppConfig) (*App, error) {
 		stopCh:                 make(chan struct{}),
 		doneCh:                 make(chan struct{}),
 		actionExecutorInterval: interval,
+		eventSubs:              make(map[string]map[chan *threadEvent]struct{}),
 	}
 
 	if !cfg.DisableBackgroundWorker {
@@ -277,16 +283,7 @@ func (a *App) Close() error {
 
 func (a *App) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/pairing/code", a.handlePairingCode)
-	mux.HandleFunc("/v1/pairing/bind", a.handlePairingBind)
-	mux.HandleFunc("/v1/chat/threads", a.handleThreads)
-	mux.HandleFunc("/v1/chat/threads/", a.handleThreadSubroutes)
-	mux.HandleFunc("/v1/devices", a.handleDevices)
-	mux.HandleFunc("/v1/devices/", a.handleDeviceSubroutes)
-	mux.HandleFunc("/v1/approvals", a.handleApprovals)
-	mux.HandleFunc("/v1/approvals/", a.handleApprovalSubroutes)
-	mux.HandleFunc("/v1/audit", a.handleAudit)
-
+	a.registerConnectHandlers(mux)
 	return a.loggingMiddleware(a.authMiddleware(mux))
 }
 
@@ -352,9 +349,33 @@ func (r *statusRecorder) status() int {
 	return r.statusCode
 }
 
+func (r *statusRecorder) Flush() {
+	flusher, ok := r.ResponseWriter.(http.Flusher)
+	if !ok {
+		return
+	}
+	flusher.Flush()
+}
+
+func (r *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hijacker, ok := r.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, errors.New("hijacker not supported")
+	}
+	return hijacker.Hijack()
+}
+
+func (r *statusRecorder) Push(target string, opts *http.PushOptions) error {
+	pusher, ok := r.ResponseWriter.(http.Pusher)
+	if !ok {
+		return http.ErrNotSupported
+	}
+	return pusher.Push(target, opts)
+}
+
 func (a *App) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/v1/pairing/") {
+		if a.isPublicPath(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -370,538 +391,6 @@ func (a *App) authMiddleware(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
-}
-
-func (a *App) handlePairingCode(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
-
-	activeDevices, err := a.activeDeviceCount()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to check pairing state"})
-		return
-	}
-
-	if activeDevices > 0 {
-		rawToken := bearerTokenFromHeader(r.Header.Get("Authorization"))
-		if rawToken == "" {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-			return
-		}
-		if err := a.validateAndTouchToken(rawToken); err != nil {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-			return
-		}
-	}
-
-	code, err := newPairingCode()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate pairing code"})
-		return
-	}
-	expiresAt := time.Now().UTC().Add(defaultPairingCodeTTL)
-
-	if _, err := a.db.Exec(`
-		INSERT INTO pairing_codes(code_hash, expires_at, consumed_at, created_at)
-		VALUES(?, ?, '', ?)
-	`, a.hashPairingCode(code), expiresAt.Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist pairing code"})
-		return
-	}
-
-	a.logger.Info(
-		"pairing code issued",
-		"expires_at", expiresAt.Format(time.RFC3339Nano),
-		"active_devices", activeDevices,
-	)
-
-	writeJSON(w, http.StatusCreated, createPairingCodeResponse{
-		Code:      code,
-		ExpiresAt: expiresAt.Format(time.RFC3339Nano),
-	})
-}
-
-func (a *App) handlePairingBind(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
-
-	var req bindPairingRequest
-	if err := decodeJSON(r.Body, &req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
-		return
-	}
-
-	code := strings.TrimSpace(req.Code)
-	if code == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "code is required"})
-		return
-	}
-	deviceName := strings.TrimSpace(req.DeviceName)
-	if deviceName == "" {
-		deviceName = "Pincer Device"
-	}
-
-	tokenID, tokenValue, err := newOpaqueToken()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate token"})
-		return
-	}
-
-	now := time.Now().UTC()
-	nowStr := now.Format(time.RFC3339Nano)
-	expiresAt := now.Add(defaultTokenTTL)
-	expiresAtStr := expiresAt.Format(time.RFC3339Nano)
-	deviceID := newID("dev")
-
-	tx, err := a.db.Begin()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to begin transaction"})
-		return
-	}
-	defer tx.Rollback()
-
-	var pairingExpiresAtRaw string
-	var consumedAt string
-	err = tx.QueryRow(`
-		SELECT expires_at, consumed_at
-		FROM pairing_codes
-		WHERE code_hash = ?
-	`, a.hashPairingCode(code)).Scan(&pairingExpiresAtRaw, &consumedAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid pairing code"})
-		return
-	}
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to validate pairing code"})
-		return
-	}
-	if consumedAt != "" {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid pairing code"})
-		return
-	}
-	pairingExpiresAt, err := parseTimestamp(pairingExpiresAtRaw)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to parse pairing code expiry"})
-		return
-	}
-	if !pairingExpiresAt.After(now) {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid pairing code"})
-		return
-	}
-
-	if _, err := tx.Exec(`
-		UPDATE pairing_codes
-		SET consumed_at = ?
-		WHERE code_hash = ? AND consumed_at = ''
-	`, nowStr, a.hashPairingCode(code)); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to consume pairing code"})
-		return
-	}
-
-	// Phase 1 default: one active device. Revoke existing devices and remove their tokens.
-	if _, err := tx.Exec(`
-		UPDATE devices
-		SET revoked_at = ?
-		WHERE revoked_at = ''
-	`, nowStr); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to revoke existing devices"})
-		return
-	}
-	if _, err := tx.Exec(`DELETE FROM auth_tokens`); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to invalidate existing tokens"})
-		return
-	}
-
-	if _, err := tx.Exec(`
-		INSERT INTO devices(device_id, user_id, name, public_key, revoked_at, created_at)
-		VALUES(?, ?, ?, ?, '', ?)
-	`, deviceID, a.ownerID, deviceName, req.PublicKey, nowStr); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create device"})
-		return
-	}
-	if _, err := tx.Exec(`
-		INSERT INTO auth_tokens(token_id, device_id, token_hash, expires_at, last_used_at, created_at)
-		VALUES(?, ?, ?, ?, ?, ?)
-	`, tokenID, deviceID, a.hashToken(tokenValue), expiresAtStr, nowStr, nowStr); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create token"})
-		return
-	}
-
-	if err := insertAuditTx(tx, "device_paired", deviceID, fmt.Sprintf(`{"name":%q}`, deviceName), nowStr); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to write audit event"})
-		return
-	}
-
-	if err := tx.Commit(); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to commit transaction"})
-		return
-	}
-
-	a.logger.Info("device paired", "device_id", deviceID, "device_name", deviceName, "expires_at", expiresAtStr)
-
-	writeJSON(w, http.StatusCreated, bindPairingResponse{
-		DeviceID:  deviceID,
-		Token:     tokenValue,
-		ExpiresAt: expiresAtStr,
-	})
-}
-
-func (a *App) handleThreads(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
-
-	threadID := newID("thr")
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := a.db.Exec(`
-		INSERT INTO threads(thread_id, user_id, channel, created_at)
-		VALUES(?, ?, 'ios', ?)
-	`, threadID, a.ownerID, now); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create thread"})
-		return
-	}
-
-	a.logger.Info("thread created", "thread_id", threadID, "channel", "ios")
-
-	writeJSON(w, http.StatusCreated, threadResponse{ThreadID: threadID})
-}
-
-func (a *App) handleThreadSubroutes(w http.ResponseWriter, r *http.Request) {
-	rest := strings.TrimPrefix(r.URL.Path, "/v1/chat/threads/")
-	parts := strings.Split(rest, "/")
-	if len(parts) != 2 || parts[1] != "messages" {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
-		return
-	}
-	threadID := parts[0]
-	if threadID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing thread id"})
-		return
-	}
-
-	switch r.Method {
-	case http.MethodPost:
-		a.handlePostMessage(w, r, threadID)
-	case http.MethodGet:
-		a.handleListMessages(w, threadID)
-	default:
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-	}
-}
-
-func (a *App) handlePostMessage(w http.ResponseWriter, r *http.Request, threadID string) {
-	var req createMessageRequest
-	if err := decodeJSON(r.Body, &req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
-		return
-	}
-	if strings.TrimSpace(req.Content) == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "content is required"})
-		return
-	}
-	if !a.threadExists(threadID) {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "thread not found"})
-		return
-	}
-
-	plan, err := a.planTurn(r.Context(), threadID, req.Content)
-	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "failed to plan response"})
-		return
-	}
-
-	now := time.Now().UTC()
-	nowStr := now.Format(time.RFC3339Nano)
-	expiresAt := now.Add(defaultActionExpiry).Format(time.RFC3339Nano)
-
-	tx, err := a.db.Begin()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to begin transaction"})
-		return
-	}
-	defer tx.Rollback()
-
-	if _, err := tx.Exec(`
-		INSERT INTO messages(message_id, thread_id, role, content, created_at)
-		VALUES(?, ?, 'user', ?, ?)
-	`, newID("msg"), threadID, req.Content, nowStr); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to insert user message"})
-		return
-	}
-	shouldInsertAssistantMessage := len(plan.ProposedActions) == 0
-	if shouldInsertAssistantMessage {
-		if _, err := tx.Exec(`
-			INSERT INTO messages(message_id, thread_id, role, content, created_at)
-			VALUES(?, ?, 'assistant', ?, ?)
-		`, newID("msg"), threadID, plan.AssistantMessage, nowStr); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to insert assistant message"})
-			return
-		}
-	}
-
-	firstActionID := ""
-	for _, proposed := range plan.ProposedActions {
-		actionID := newID("act")
-		idempotencyKey := newID("idem")
-		argsJSON := string(proposed.Args)
-		if _, err := tx.Exec(`
-			INSERT INTO proposed_actions(
-				action_id, user_id, source, source_id, tool, args_json, risk_class,
-				justification, idempotency_key, status, rejection_reason, expires_at, created_at
-			) VALUES(?, ?, 'chat', ?, ?, ?, ?,
-				?, ?, 'PENDING', '', ?, ?)
-		`, actionID, a.ownerID, threadID, proposed.Tool, argsJSON, proposed.RiskClass, proposed.Justification, idempotencyKey, expiresAt, nowStr); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to insert action"})
-			return
-		}
-		if err := insertAuditTx(tx, "action_proposed", actionID, argsJSON, nowStr); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to insert audit"})
-			return
-		}
-		if firstActionID == "" {
-			firstActionID = actionID
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to commit transaction"})
-		return
-	}
-
-	a.logger.Info(
-		"chat turn planned",
-		"thread_id", threadID,
-		"proposed_actions", len(plan.ProposedActions),
-	)
-
-	writeJSON(w, http.StatusCreated, createMessageResponse{
-		AssistantMessage: plan.AssistantMessage,
-		ActionID:         firstActionID,
-	})
-}
-
-func (a *App) handleListMessages(w http.ResponseWriter, threadID string) {
-	rows, err := a.db.Query(`
-		SELECT message_id, thread_id, role, content, created_at
-		FROM messages
-		WHERE thread_id = ?
-		ORDER BY created_at ASC
-	`, threadID)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list messages"})
-		return
-	}
-	defer rows.Close()
-
-	items := make([]message, 0)
-	for rows.Next() {
-		var m message
-		if err := rows.Scan(&m.MessageID, &m.ThreadID, &m.Role, &m.Content, &m.CreatedAt); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to scan message"})
-			return
-		}
-		items = append(items, m)
-	}
-
-	writeJSON(w, http.StatusOK, messagesResponse{Items: items})
-}
-
-func (a *App) handleApprovals(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
-	status := r.URL.Query().Get("status")
-	if status == "" {
-		status = "pending"
-	}
-	status = strings.ToUpper(status)
-
-	rows, err := a.db.Query(`
-		SELECT action_id, source, source_id, tool, status, risk_class, idempotency_key, justification, created_at, expires_at, rejection_reason
-		FROM proposed_actions
-		WHERE status = ?
-		ORDER BY created_at ASC
-	`, status)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list approvals"})
-		return
-	}
-	defer rows.Close()
-
-	items := make([]approval, 0)
-	for rows.Next() {
-		var aItem approval
-		if err := rows.Scan(
-			&aItem.ActionID,
-			&aItem.Source,
-			&aItem.SourceID,
-			&aItem.Tool,
-			&aItem.Status,
-			&aItem.RiskClass,
-			&aItem.IdempotencyKey,
-			&aItem.Justification,
-			&aItem.CreatedAt,
-			&aItem.ExpiresAt,
-			&aItem.RejectionReason,
-		); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to scan approval"})
-			return
-		}
-		items = append(items, aItem)
-	}
-
-	writeJSON(w, http.StatusOK, approvalsResponse{Items: items})
-}
-
-func (a *App) handleDevices(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
-
-	currentDeviceID := ""
-	rawToken := bearerTokenFromHeader(r.Header.Get("Authorization"))
-	if rawToken != "" {
-		id, err := a.deviceIDForToken(rawToken)
-		if err == nil {
-			currentDeviceID = id
-		}
-	}
-
-	rows, err := a.db.Query(`
-		SELECT device_id, name, revoked_at, created_at
-		FROM devices
-		ORDER BY created_at DESC
-	`)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list devices"})
-		return
-	}
-	defer rows.Close()
-
-	items := make([]device, 0)
-	for rows.Next() {
-		var item device
-		if err := rows.Scan(&item.DeviceID, &item.Name, &item.RevokedAt, &item.CreatedAt); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to scan device"})
-			return
-		}
-		item.IsCurrent = item.DeviceID == currentDeviceID
-		items = append(items, item)
-	}
-
-	writeJSON(w, http.StatusOK, devicesResponse{Items: items})
-}
-
-func (a *App) handleDeviceSubroutes(w http.ResponseWriter, r *http.Request) {
-	rest := strings.TrimPrefix(r.URL.Path, "/v1/devices/")
-	parts := strings.Split(rest, "/")
-	if len(parts) != 2 || parts[1] != "revoke" || r.Method != http.MethodPost {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
-		return
-	}
-	deviceID := strings.TrimSpace(parts[0])
-	if deviceID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing device id"})
-		return
-	}
-
-	if err := a.revokeDevice(deviceID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "device not found"})
-			return
-		}
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to revoke device"})
-		return
-	}
-
-	a.logger.Info("device revoked", "device_id", deviceID)
-
-	writeJSON(w, http.StatusOK, map[string]string{"device_id": deviceID, "status": "REVOKED"})
-}
-
-func (a *App) handleApprovalSubroutes(w http.ResponseWriter, r *http.Request) {
-	rest := strings.TrimPrefix(r.URL.Path, "/v1/approvals/")
-	parts := strings.Split(rest, "/")
-	if len(parts) != 2 || r.Method != http.MethodPost {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
-		return
-	}
-	actionID := parts[0]
-	if actionID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing action id"})
-		return
-	}
-
-	switch parts[1] {
-	case "approve":
-		if err := a.markActionApproved(actionID); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				writeJSON(w, http.StatusNotFound, map[string]string{"error": "action not found"})
-				return
-			}
-			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
-			return
-		}
-		a.logger.Info("action approved", "action_id", actionID)
-		writeJSON(w, http.StatusOK, map[string]string{"action_id": actionID, "status": "APPROVED"})
-	case "reject":
-		var req rejectActionRequest
-		if err := decodeJSON(r.Body, &req); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
-			return
-		}
-		reason := strings.TrimSpace(req.Reason)
-		if reason == "" {
-			reason = "rejected_by_user"
-		}
-		if err := a.markActionRejected(actionID, reason); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				writeJSON(w, http.StatusNotFound, map[string]string{"error": "action not found"})
-				return
-			}
-			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
-			return
-		}
-		a.logger.Info("action rejected", "action_id", actionID, "reason", reason)
-		writeJSON(w, http.StatusOK, map[string]string{"action_id": actionID, "status": "REJECTED"})
-	default:
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
-	}
-}
-
-func (a *App) handleAudit(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
-	rows, err := a.db.Query(`
-		SELECT entry_id, event_type, entity_id, payload_json, created_at
-		FROM audit_log
-		ORDER BY created_at ASC
-	`)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list audit"})
-		return
-	}
-	defer rows.Close()
-
-	items := make([]auditEvent, 0)
-	for rows.Next() {
-		var e auditEvent
-		if err := rows.Scan(&e.EntryID, &e.EventType, &e.EntityID, &e.Payload, &e.CreatedAt); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to scan audit"})
-			return
-		}
-		items = append(items, e)
-	}
-	writeJSON(w, http.StatusOK, auditResponse{Items: items})
 }
 
 func (a *App) markActionApproved(actionID string) error {
@@ -948,6 +437,7 @@ func (a *App) markActionApproved(actionID string) error {
 		if err := tx.Commit(); err != nil {
 			return err
 		}
+		a.emitActionStatusEvent(context.Background(), source, sourceID, "", actionID, protocolv1.ActionStatus_REJECTED, "expired")
 		return fmt.Errorf("action is expired")
 	}
 
@@ -970,6 +460,7 @@ func (a *App) markActionApproved(actionID string) error {
 	if err := tx.Commit(); err != nil {
 		return err
 	}
+	a.emitActionStatusEvent(context.Background(), source, sourceID, "", actionID, protocolv1.ActionStatus_APPROVED, "")
 	return nil
 }
 
@@ -1025,7 +516,13 @@ func (a *App) markActionRejected(actionID, reason string) error {
 	defer tx.Rollback()
 
 	var status string
-	if err := tx.QueryRow(`SELECT status FROM proposed_actions WHERE action_id = ?`, actionID).Scan(&status); err != nil {
+	var source string
+	var sourceID string
+	if err := tx.QueryRow(`
+		SELECT status, source, source_id
+		FROM proposed_actions
+		WHERE action_id = ?
+	`, actionID).Scan(&status, &source, &sourceID); err != nil {
 		return err
 	}
 	if status != "PENDING" {
@@ -1049,18 +546,21 @@ func (a *App) markActionRejected(actionID, reason string) error {
 	if err := tx.Commit(); err != nil {
 		return err
 	}
+	a.emitActionStatusEvent(context.Background(), source, sourceID, "", actionID, protocolv1.ActionStatus_REJECTED, reason)
 	return nil
 }
 
 func (a *App) executeApprovedAction(actionID string) error {
-	tx, err := a.db.Begin()
+	streamCtx := context.Background()
+
+	preflightTx, err := a.db.Begin()
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer preflightTx.Rollback()
 
 	var item approval
-	err = tx.QueryRow(`
+	err = preflightTx.QueryRow(`
 		SELECT action_id, user_id, source, source_id, tool, args_json, status, idempotency_key
 		FROM proposed_actions
 		WHERE action_id = ?
@@ -1085,14 +585,14 @@ func (a *App) executeApprovedAction(actionID string) error {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 
 	var existingArgsHash string
-	err = tx.QueryRow(`
+	err = preflightTx.QueryRow(`
 		SELECT args_hash FROM idempotency
 		WHERE owner_id = ? AND tool_name = ? AND key = ?
 	`, item.UserID, item.Tool, item.IdempotencyKey).Scan(&existingArgsHash)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		resultHash := sha256Hex("executed:" + item.ActionID)
-		if _, err := tx.Exec(`
+		if _, err := preflightTx.Exec(`
 			INSERT INTO idempotency(owner_id, tool_name, key, args_hash, result_hash, created_at)
 			VALUES(?, ?, ?, ?, ?, ?)
 		`, item.UserID, item.Tool, item.IdempotencyKey, argsHash, resultHash, now); err != nil {
@@ -1102,35 +602,72 @@ func (a *App) executeApprovedAction(actionID string) error {
 		return err
 	default:
 		if existingArgsHash != argsHash {
-			_ = insertAuditTx(tx, "idempotency_conflict", actionID, `{"reason":"args_hash_mismatch"}`, now)
-			if _, updateErr := tx.Exec(`
+			_ = insertAuditTx(preflightTx, "idempotency_conflict", actionID, `{"reason":"args_hash_mismatch"}`, now)
+			if _, updateErr := preflightTx.Exec(`
 				UPDATE proposed_actions
 				SET status = 'REJECTED', rejection_reason = 'idempotency_conflict'
 				WHERE action_id = ? AND status = 'APPROVED'
 			`, actionID); updateErr != nil {
 				return updateErr
 			}
-			if commitErr := tx.Commit(); commitErr != nil {
+			if commitErr := preflightTx.Commit(); commitErr != nil {
 				return commitErr
 			}
+			a.emitActionStatusEvent(streamCtx, item.Source, item.SourceID, "", actionID, protocolv1.ActionStatus_REJECTED, "idempotency_conflict")
 			return errIdempotencyConflict
 		}
+	}
+	if err := preflightTx.Commit(); err != nil {
+		return err
 	}
 
 	executionSystemMsg := fmt.Sprintf("Action %s executed.", item.ActionID)
 	actionExecutedAuditPayload := item.ArgsJSON
 	if isBashTool(item.Tool) {
-		result := executeBashAction(item.ArgsJSON)
+		executionID := newID("exec")
+		displayCommand := strings.TrimSpace(item.ArgsJSON)
+		var parsedArgs bashActionArgs
+		if err := json.Unmarshal([]byte(item.ArgsJSON), &parsedArgs); err == nil && strings.TrimSpace(parsedArgs.Command) != "" {
+			displayCommand = strings.TrimSpace(parsedArgs.Command)
+		}
+		if item.Source == "chat" {
+			a.emitToolExecutionStarted(streamCtx, item.SourceID, "", executionID, item.ActionID, item.Tool, displayCommand)
+		}
+
+		result := executeBashActionStreaming(item.ArgsJSON, func(stream protocolv1.OutputStream, chunk []byte, offset uint64) {
+			if item.Source == "chat" {
+				a.emitToolExecutionOutputDelta(streamCtx, item.SourceID, "", executionID, stream, chunk, offset)
+			}
+		})
+
+		if item.Source == "chat" {
+			a.emitToolExecutionFinished(streamCtx, item.SourceID, "", executionID, result)
+		}
+
 		executionSystemMsg = bashExecutionSystemMessage(item.ActionID, result)
 		actionExecutedAuditPayload = bashExecutionAuditPayload(item.Tool, result)
 	}
 
-	if _, err := tx.Exec(`UPDATE proposed_actions SET status = 'EXECUTED' WHERE action_id = ?`, actionID); err != nil {
+	finalizeTx, err := a.db.Begin()
+	if err != nil {
 		return err
+	}
+	defer finalizeTx.Rollback()
+
+	res, err := finalizeTx.Exec(`UPDATE proposed_actions SET status = 'EXECUTED' WHERE action_id = ? AND status = 'APPROVED'`, actionID)
+	if err != nil {
+		return err
+	}
+	rowsAffected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("action is not approved")
 	}
 
 	if item.Source == "chat" {
-		if _, err := tx.Exec(`
+		if _, err := finalizeTx.Exec(`
 			INSERT INTO messages(message_id, thread_id, role, content, created_at)
 			VALUES(?, ?, 'system', ?, ?)
 		`, newID("msg"), item.SourceID, executionSystemMsg, now); err != nil {
@@ -1138,14 +675,15 @@ func (a *App) executeApprovedAction(actionID string) error {
 		}
 	}
 
-	if err := insertAuditTx(tx, "action_executed", actionID, actionExecutedAuditPayload, now); err != nil {
+	if err := insertAuditTx(finalizeTx, "action_executed", actionID, actionExecutedAuditPayload, now); err != nil {
 		return err
 	}
 
-	if err := tx.Commit(); err != nil {
+	if err := finalizeTx.Commit(); err != nil {
 		return err
 	}
 
+	a.emitActionStatusEvent(streamCtx, item.Source, item.SourceID, "", actionID, protocolv1.ActionStatus_EXECUTED, "")
 	a.logger.Info("action executed", "action_id", actionID, "tool", item.Tool, "source", item.Source)
 	return nil
 }
@@ -1333,6 +871,10 @@ func riskClassForBashArgs(args json.RawMessage) string {
 }
 
 func executeBashAction(argsJSON string) bashExecutionResult {
+	return executeBashActionStreaming(argsJSON, nil)
+}
+
+func executeBashActionStreaming(argsJSON string, onChunk func(stream protocolv1.OutputStream, chunk []byte, offset uint64)) bashExecutionResult {
 	result := bashExecutionResult{ExitCode: -1}
 
 	var args bashActionArgs
@@ -1349,7 +891,7 @@ func executeBashAction(argsJSON string) bashExecutionResult {
 		return result
 	}
 
-	output, duration, exitCode, timedOut, truncated := runBashCommand(result.Command, result.CWD)
+	output, duration, exitCode, timedOut, truncated := runBashCommandStreaming(result.Command, result.CWD, onChunk)
 	result.Output = output
 	result.Duration = duration
 	result.ExitCode = exitCode
@@ -1359,6 +901,10 @@ func executeBashAction(argsJSON string) bashExecutionResult {
 }
 
 func runBashCommand(command, cwd string) (output string, duration time.Duration, exitCode int, timedOut bool, truncated bool) {
+	return runBashCommandStreaming(command, cwd, nil)
+}
+
+func runBashCommandStreaming(command, cwd string, onChunk func(stream protocolv1.OutputStream, chunk []byte, offset uint64)) (output string, duration time.Duration, exitCode int, timedOut bool, truncated bool) {
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), defaultBashExecTimeout)
 	defer cancel()
@@ -1368,17 +914,76 @@ func runBashCommand(command, cwd string) (output string, duration time.Duration,
 		cmd.Dir = cwd
 	}
 
-	buffer := newBoundedOutputBuffer(maxBashOutputBytes)
-	cmd.Stdout = buffer
-	cmd.Stderr = buffer
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		duration = time.Since(start)
+		return appendOutputLine("", fmt.Sprintf("failed to attach stdout pipe: %v", err)), duration, -1, false, false
+	}
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		_ = stdoutPipe.Close()
+		duration = time.Since(start)
+		return appendOutputLine("", fmt.Sprintf("failed to attach stderr pipe: %v", err)), duration, -1, false, false
+	}
 
-	err := cmd.Run()
+	if err := cmd.Start(); err != nil {
+		_ = stdoutPipe.Close()
+		_ = stderrPipe.Close()
+		duration = time.Since(start)
+		return appendOutputLine("", fmt.Sprintf("failed to start bash command: %v", err)), duration, -1, false, false
+	}
+
+	type outputChunk struct {
+		stream protocolv1.OutputStream
+		data   []byte
+	}
+	chunks := make(chan outputChunk, 64)
+	var readerWG sync.WaitGroup
+	readerWG.Add(2)
+	readPipe := func(stream protocolv1.OutputStream, pipe io.ReadCloser) {
+		defer readerWG.Done()
+		defer pipe.Close()
+
+		buffer := make([]byte, 1024)
+		for {
+			n, readErr := pipe.Read(buffer)
+			if n > 0 {
+				copied := make([]byte, n)
+				copy(copied, buffer[:n])
+				chunks <- outputChunk{stream: stream, data: copied}
+			}
+			if readErr != nil {
+				if errors.Is(readErr, io.EOF) {
+					return
+				}
+				return
+			}
+		}
+	}
+	go readPipe(protocolv1.OutputStream_STDOUT, stdoutPipe)
+	go readPipe(protocolv1.OutputStream_STDERR, stderrPipe)
+	go func() {
+		readerWG.Wait()
+		close(chunks)
+	}()
+
+	bounded := newBoundedOutputBuffer(maxBashOutputBytes)
+	var offset uint64
+	for chunk := range chunks {
+		_, _ = bounded.Write(chunk.data)
+		if onChunk != nil {
+			onChunk(chunk.stream, chunk.data, offset)
+		}
+		offset += uint64(len(chunk.data))
+	}
+
+	err = cmd.Wait()
 	duration = time.Since(start)
 
-	output = strings.TrimSpace(buffer.String())
+	output = strings.TrimSpace(bounded.String())
 	exitCode = 0
 	timedOut = false
-	truncated = buffer.Truncated()
+	truncated = bounded.Truncated()
 
 	switch {
 	case err == nil:
@@ -1611,7 +1216,7 @@ func (a *App) expirePendingActions(now time.Time) error {
 	defer tx.Rollback()
 
 	rows, err := tx.Query(`
-		SELECT action_id, expires_at
+		SELECT action_id, source, source_id, expires_at
 		FROM proposed_actions
 		WHERE status = 'PENDING'
 	`)
@@ -1620,11 +1225,18 @@ func (a *App) expirePendingActions(now time.Time) error {
 	}
 	defer rows.Close()
 
-	expiredActionIDs := make([]string, 0)
+	type expiredAction struct {
+		actionID string
+		source   string
+		sourceID string
+	}
+	expiredActions := make([]expiredAction, 0)
 	for rows.Next() {
 		var actionID string
+		var source string
+		var sourceID string
 		var expiresAtRaw string
-		if err := rows.Scan(&actionID, &expiresAtRaw); err != nil {
+		if err := rows.Scan(&actionID, &source, &sourceID, &expiresAtRaw); err != nil {
 			return err
 		}
 		expiresAt, err := parseTimestamp(expiresAtRaw)
@@ -1632,21 +1244,25 @@ func (a *App) expirePendingActions(now time.Time) error {
 			return fmt.Errorf("parse expires_at for action %s: %w", actionID, err)
 		}
 		if !expiresAt.After(now) {
-			expiredActionIDs = append(expiredActionIDs, actionID)
+			expiredActions = append(expiredActions, expiredAction{
+				actionID: actionID,
+				source:   source,
+				sourceID: sourceID,
+			})
 		}
 	}
 
-	if len(expiredActionIDs) == 0 {
+	if len(expiredActions) == 0 {
 		return tx.Commit()
 	}
 
 	nowStr := now.Format(time.RFC3339Nano)
-	for _, actionID := range expiredActionIDs {
+	for _, action := range expiredActions {
 		res, err := tx.Exec(`
 			UPDATE proposed_actions
 			SET status = 'REJECTED', rejection_reason = 'expired'
 			WHERE action_id = ? AND status = 'PENDING'
-		`, actionID)
+		`, action.actionID)
 		if err != nil {
 			return err
 		}
@@ -1657,7 +1273,7 @@ func (a *App) expirePendingActions(now time.Time) error {
 		if rowsAffected == 0 {
 			continue
 		}
-		if err := insertAuditTx(tx, "action_expired", actionID, `{"reason":"expired"}`, nowStr); err != nil {
+		if err := insertAuditTx(tx, "action_expired", action.actionID, `{"reason":"expired"}`, nowStr); err != nil {
 			return err
 		}
 	}
@@ -1665,7 +1281,10 @@ func (a *App) expirePendingActions(now time.Time) error {
 	if err := tx.Commit(); err != nil {
 		return err
 	}
-	a.logger.Info("pending actions expired", "count", len(expiredActionIDs))
+	for _, action := range expiredActions {
+		a.emitActionStatusEvent(context.Background(), action.source, action.sourceID, "", action.actionID, protocolv1.ActionStatus_REJECTED, "expired")
+	}
+	a.logger.Info("pending actions expired", "count", len(expiredActions))
 	return nil
 }
 
@@ -1840,6 +1459,16 @@ func migrate(db *sql.DB) error {
 			entity_id TEXT NOT NULL,
 			payload_json TEXT NOT NULL,
 			created_at TEXT NOT NULL
+		);`,
+		`CREATE TABLE IF NOT EXISTS thread_events(
+			event_id TEXT PRIMARY KEY,
+			thread_id TEXT NOT NULL,
+			job_id TEXT NOT NULL,
+			turn_id TEXT NOT NULL,
+			sequence INTEGER NOT NULL,
+			occurred_at TEXT NOT NULL,
+			event_blob BLOB NOT NULL,
+			UNIQUE(thread_id, sequence)
 		);`,
 	}
 	for _, stmt := range stmts {

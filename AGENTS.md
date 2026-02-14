@@ -130,8 +130,8 @@ Use the provided tasks:
 Behavior of `backend-up`:
 
 - creates tmux session `pincer-backend` (or `PINCER_TMUX_SESSION`)
-- starts backend via `mise run run`
-- waits for `POST /v1/pairing/code` to return `201`
+- starts backend via `go run ./cmd/pincer`
+- waits for `POST /pincer.protocol.v1.AuthService/CreatePairingCode` to return `200` (or `401` when auth is required)
 - defaults to persistent DB `./pincer.db`
 
 E2E scripts use isolated defaults:
@@ -155,12 +155,13 @@ Run:
 
 This validates:
 
-1. `POST /v1/chat/threads`
-2. `POST /v1/chat/threads/{thread_id}/messages`
-3. `GET /v1/approvals?status=pending`
-4. `POST /v1/approvals/{action_id}/approve`
-5. `GET /v1/approvals?status=executed`
-6. `GET /v1/audit` includes:
+1. `AuthService.CreatePairingCode` + `AuthService.BindPairingCode`
+2. `ThreadsService.CreateThread`
+3. `TurnsService.SendTurn`
+4. `ApprovalsService.ListApprovals` (`PENDING`)
+5. `ApprovalsService.ApproveAction`
+6. `ApprovalsService.ListApprovals` (`EXECUTED`)
+7. `SystemService.ListAudit` includes:
    - `action_proposed`
    - `action_approved`
    - `action_executed`
@@ -181,7 +182,7 @@ App config defaults in `ios/Pincer/AppConfig.swift`:
 
 - `baseURL = http://127.0.0.1:8080`
 - `bearerToken` loads from `UserDefaults` key `PINCER_BEARER_TOKEN`
-- if no token exists, client auto-pairs via `/v1/pairing/code` and `/v1/pairing/bind`
+- if no token exists, client auto-pairs via `AuthService.CreatePairingCode` and `AuthService.BindPairingCode`
 
 Manual check path in app:
 
@@ -191,10 +192,10 @@ Manual check path in app:
 4. Approve pending action
 5. Confirm action disappears from pending list
 6. Fetch a bearer token (if needed), then confirm backend state:
-   - `PAIRING_CODE="$(curl -sS -X POST 'http://127.0.0.1:8080/v1/pairing/code' -H 'Content-Type: application/json' -d '{}' | jq -r '.code')"`
-   - `TOKEN="$(curl -sS -X POST 'http://127.0.0.1:8080/v1/pairing/bind' -H 'Content-Type: application/json' -d "{\"code\":\"${PAIRING_CODE}\",\"device_name\":\"manual-check\"}" | jq -r '.token')"`
-   - `curl -sS 'http://127.0.0.1:8080/v1/approvals?status=executed' -H "Authorization: Bearer ${TOKEN}" | jq`
-   - `curl -sS 'http://127.0.0.1:8080/v1/audit' -H "Authorization: Bearer ${TOKEN}" | jq`
+   - `PAIRING_CODE="$(curl -sS -X POST 'http://127.0.0.1:8080/pincer.protocol.v1.AuthService/CreatePairingCode' -H 'Content-Type: application/json' -d '{}' | jq -r '.code')"`
+   - `TOKEN="$(curl -sS -X POST 'http://127.0.0.1:8080/pincer.protocol.v1.AuthService/BindPairingCode' -H 'Content-Type: application/json' -d "{\"code\":\"${PAIRING_CODE}\",\"deviceName\":\"manual-check\"}" | jq -r '.token')"`
+   - `curl -sS -X POST 'http://127.0.0.1:8080/pincer.protocol.v1.ApprovalsService/ListApprovals' -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' -d '{"status":"EXECUTED"}' | jq`
+   - `curl -sS -X POST 'http://127.0.0.1:8080/pincer.protocol.v1.SystemService/ListAudit' -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' -d '{}' | jq`
 
 Agent-driven option:
 

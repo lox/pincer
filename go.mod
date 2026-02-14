@@ -1,10 +1,12 @@
 module github.com/lox/pincer
 
-go 1.22.0
+go 1.23
 
 require (
+	connectrpc.com/connect v1.18.1
 	github.com/alecthomas/kong v1.14.0
 	github.com/charmbracelet/log v0.4.2
+	google.golang.org/protobuf v1.36.11
 	modernc.org/sqlite v1.34.5
 )
 

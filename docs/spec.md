@@ -49,7 +49,7 @@ Operating principle:
 
 Primary components:
 
-- HTTP API server (Go)
+- ConnectRPC API server (Go, protobuf-defined control-plane contract)
 - Trigger ingestion layer (chat message, job, schedule, heartbeat, delegate callbacks)
 - Ingress work queue and durable outbox
 - SQLite (WAL)
@@ -301,35 +301,42 @@ Invalid output handling:
 
 ## 13. API surface
 
-Core API groups:
+Control-plane API is ConnectRPC over protobuf. Service/method groups:
 
-- pairing/auth:
-  - `POST /v1/pairing/code`
-  - `POST /v1/pairing/bind`
-  - `GET /v1/devices`
-  - `POST /v1/devices/{device_id}/revoke`
-- chat:
-  - `POST /v1/chat/threads`
-  - `POST /v1/chat/threads/{thread_id}/messages`
-  - `GET /v1/chat/threads/{thread_id}/messages`
+- auth and devices:
+  - `AuthService.CreatePairingCode`
+  - `AuthService.BindPairingCode`
+  - `AuthService.RotateToken`
+  - `DevicesService.ListDevices`
+  - `DevicesService.RevokeDevice`
+- chat and thread state:
+  - `ThreadsService.CreateThread`
+  - `ThreadsService.GetThreadSnapshot`
+  - `ThreadsService.ListThreadMessages`
+  - `TurnsService.SendTurn` (unary turn submission for clients that do not consume stream framing)
+  - `TurnsService.StartTurn` (server-streaming turn execution events)
+  - `EventsService.WatchThread` (server-streaming thread event replay/live updates)
 - approvals:
-  - `GET /v1/approvals`
-  - `POST /v1/approvals/{action_id}/approve`
-  - `POST /v1/approvals/{action_id}/reject`
+  - `ApprovalsService.ListApprovals`
+  - `ApprovalsService.ApproveAction`
+  - `ApprovalsService.RejectAction`
 - jobs:
-  - `GET /v1/jobs`
-  - `POST /v1/jobs`
-  - `GET /v1/jobs/{job_id}`
-  - `POST /v1/jobs/{job_id}/cancel`
+  - `JobsService.ListJobs`
+  - `JobsService.CreateJob`
+  - `JobsService.GetJob`
+  - `JobsService.CancelJob`
 - schedules:
-  - `GET /v1/schedules`
-  - `POST /v1/schedules`
-  - `PATCH /v1/schedules/{schedule_id}`
-  - `POST /v1/schedules/{schedule_id}/run-now`
+  - `SchedulesService.ListSchedules`
+  - `SchedulesService.CreateSchedule`
+  - `SchedulesService.UpdateSchedule`
+  - `SchedulesService.RunScheduleNow`
 - system:
-  - `GET /v1/settings/policy`
-  - `GET /v1/audit`
-  - `GET /v1/notifications`
+  - `SystemService.GetPolicySummary`
+  - `SystemService.ListAudit`
+  - `SystemService.ListNotifications`
+
+Control-plane REST endpoints are not part of the canonical API contract.
+If temporary REST compatibility shims exist during migration, they must map to the same trusted policy/idempotency/audit paths and are removed after Connect cutover.
 
 ## 14. iOS control-plane contract
 
