@@ -1,24 +1,56 @@
 import Foundation
+import Connect
+import SwiftProtobuf
 
 enum APIError: Error {
     case invalidResponse
-    case httpStatus(Int)
+    case rpc(String)
     case unauthorized
 }
 
 actor APIClient {
-    private let baseURL: URL
+    private var baseURL: URL
     private var token: String
-    private let session: URLSession
-    private let decoder: JSONDecoder
-    private let encoder: JSONEncoder
+    private var authClient: Pincer_Protocol_V1_AuthServiceClient
+    private var threadsClient: Pincer_Protocol_V1_ThreadsServiceClient
+    private var turnsClient: Pincer_Protocol_V1_TurnsServiceClient
+    private var approvalsClient: Pincer_Protocol_V1_ApprovalsServiceClient
+    private var devicesClient: Pincer_Protocol_V1_DevicesServiceClient
 
-    init(baseURL: URL, token: String, session: URLSession = .shared) {
+    private static let timestampFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    init(baseURL: URL, token: String) {
         self.baseURL = baseURL
         self.token = token
-        self.session = session
-        self.decoder = JSONDecoder()
-        self.encoder = JSONEncoder()
+
+        let transport = Self.makeTransport(baseURL: baseURL)
+        self.authClient = Pincer_Protocol_V1_AuthServiceClient(client: transport)
+        self.threadsClient = Pincer_Protocol_V1_ThreadsServiceClient(client: transport)
+        self.turnsClient = Pincer_Protocol_V1_TurnsServiceClient(client: transport)
+        self.approvalsClient = Pincer_Protocol_V1_ApprovalsServiceClient(client: transport)
+        self.devicesClient = Pincer_Protocol_V1_DevicesServiceClient(client: transport)
+
+        AppConfig.setBaseURL(baseURL)
+    }
+
+    func setBaseURL(_ baseURL: URL) {
+        guard self.baseURL.absoluteString != baseURL.absoluteString else { return }
+
+        self.baseURL = baseURL
+        AppConfig.setBaseURL(baseURL)
+
+        let transport = Self.makeTransport(baseURL: baseURL)
+        self.authClient = Pincer_Protocol_V1_AuthServiceClient(client: transport)
+        self.threadsClient = Pincer_Protocol_V1_ThreadsServiceClient(client: transport)
+        self.turnsClient = Pincer_Protocol_V1_TurnsServiceClient(client: transport)
+        self.approvalsClient = Pincer_Protocol_V1_ApprovalsServiceClient(client: transport)
+        self.devicesClient = Pincer_Protocol_V1_DevicesServiceClient(client: transport)
+
+        clearToken()
     }
 
     func ensurePaired(force: Bool = false, deviceName: String = "Pincer iOS") async throws {
@@ -26,83 +58,138 @@ actor APIClient {
             return
         }
 
-        let codeRequest = try makeRequest(path: "/pincer.protocol.v1.AuthService/CreatePairingCode", method: "POST", body: EmptyRequest(), includeAuth: false)
-        let codeResponse: PairingCodeResponse = try await send(codeRequest)
+        let codeResponse = await authClient.createPairingCode(
+            request: .init(),
+            headers: [:]
+        )
+        let codeMessage = try responseMessage(codeResponse)
 
-        let bindBody = PairingBindRequest(code: codeResponse.code, deviceName: deviceName)
-        let bindRequest = try makeRequest(path: "/pincer.protocol.v1.AuthService/BindPairingCode", method: "POST", body: bindBody, includeAuth: false)
-        let bindResponse: PairingBindResponse = try await send(bindRequest)
+        var bindRequest = Pincer_Protocol_V1_BindPairingCodeRequest()
+        bindRequest.code = codeMessage.code
+        bindRequest.deviceName = deviceName
+        let bindResponse = await authClient.bindPairingCode(
+            request: bindRequest,
+            headers: [:]
+        )
+        let bindMessage = try responseMessage(bindResponse)
 
-        token = bindResponse.token
-        UserDefaults.standard.set(bindResponse.token, forKey: AppConfig.tokenDefaultsKey)
+        token = bindMessage.token
+        UserDefaults.standard.set(bindMessage.token, forKey: AppConfig.tokenDefaultsKey)
     }
 
     func createThread() async throws -> String {
         try await withAuthorizedRetry {
-            let request = try makeRequest(path: "/pincer.protocol.v1.ThreadsService/CreateThread", method: "POST", body: EmptyRequest())
-            let response: ThreadResponse = try await send(request)
-            return response.threadID
+            let response = await threadsClient.createThread(
+                request: .init(),
+                headers: authHeaders()
+            )
+            let message = try responseMessage(response)
+            return message.threadID
         }
     }
 
     func sendMessage(threadID: String, content: String) async throws {
         try await withAuthorizedRetry {
-            let body = SendTurnRequest(threadID: threadID, userText: content, triggerType: "CHAT_MESSAGE")
-            let request = try makeRequest(path: "/pincer.protocol.v1.TurnsService/SendTurn", method: "POST", body: body)
-            let _: SendTurnResponse = try await send(request)
+            var request = Pincer_Protocol_V1_SendTurnRequest()
+            request.threadID = threadID
+            request.userText = content
+            request.triggerType = .chatMessage
+
+            let response = await turnsClient.sendTurn(
+                request: request,
+                headers: authHeaders()
+            )
+            _ = try responseMessage(response) as Pincer_Protocol_V1_SendTurnResponse
         }
     }
 
     func fetchMessages(threadID: String) async throws -> [Message] {
         try await withAuthorizedRetry {
-            let requestBody = ListThreadMessagesRequest(threadID: threadID)
-            let request = try makeRequest(path: "/pincer.protocol.v1.ThreadsService/ListThreadMessages", method: "POST", body: requestBody)
-            let response: MessagesResponse = try await send(request)
-            return response.items.map { message in
-                if message.threadID.isEmpty {
-                    return Message(
-                        messageID: message.messageID,
-                        threadID: threadID,
-                        role: message.role,
-                        content: message.content,
-                        createdAt: message.createdAt
-                    )
-                }
-                return message
+            var request = Pincer_Protocol_V1_ListThreadMessagesRequest()
+            request.threadID = threadID
+
+            let response = await threadsClient.listThreadMessages(
+                request: request,
+                headers: authHeaders()
+            )
+            let message = try responseMessage(response)
+            return message.items.map { item in
+                Message(
+                    messageID: item.messageID,
+                    threadID: threadID,
+                    role: item.role,
+                    content: item.content,
+                    createdAt: timestampString(item.createdAt, hasValue: item.hasCreatedAt)
+                )
             }
         }
     }
 
     func fetchApprovals(status: String = "pending") async throws -> [Approval] {
         try await withAuthorizedRetry {
-            let requestBody = ListApprovalsRequest(status: status.uppercased())
-            let request = try makeRequest(path: "/pincer.protocol.v1.ApprovalsService/ListApprovals", method: "POST", body: requestBody)
-            let response: ApprovalsResponse = try await send(request)
-            return response.items
+            var request = Pincer_Protocol_V1_ListApprovalsRequest()
+            request.status = actionStatus(status)
+
+            let response = await approvalsClient.listApprovals(
+                request: request,
+                headers: authHeaders()
+            )
+            let message = try responseMessage(response)
+            return message.items.map { item in
+                Approval(
+                    actionID: item.actionID,
+                    source: item.source,
+                    sourceID: item.sourceID,
+                    tool: item.tool,
+                    status: actionStatusName(item.status),
+                    riskClass: riskClassName(item.riskClass),
+                    createdAt: timestampString(item.createdAt, hasValue: item.hasCreatedAt),
+                    expiresAt: timestampString(item.expiresAt, hasValue: item.hasExpiresAt)
+                )
+            }
         }
     }
 
     func approve(actionID: String) async throws {
         try await withAuthorizedRetry {
-            let requestBody = ApproveActionRequest(actionID: actionID)
-            let request = try makeRequest(path: "/pincer.protocol.v1.ApprovalsService/ApproveAction", method: "POST", body: requestBody)
-            let _: EmptyResponse = try await send(request)
+            var request = Pincer_Protocol_V1_ApproveActionRequest()
+            request.actionID = actionID
+            let response = await approvalsClient.approveAction(
+                request: request,
+                headers: authHeaders()
+            )
+            _ = try responseMessage(response) as Pincer_Protocol_V1_ApproveActionResponse
         }
     }
 
     func fetchDevices() async throws -> [Device] {
         try await withAuthorizedRetry {
-            let request = try makeRequest(path: "/pincer.protocol.v1.DevicesService/ListDevices", method: "POST", body: EmptyRequest())
-            let response: DevicesResponse = try await send(request)
-            return response.items
+            let response = await devicesClient.listDevices(
+                request: .init(),
+                headers: authHeaders()
+            )
+            let message = try responseMessage(response)
+            return message.items.map { item in
+                Device(
+                    deviceID: item.deviceID,
+                    name: item.name,
+                    revokedAt: timestampString(item.revokedAt, hasValue: item.hasRevokedAt),
+                    createdAt: timestampString(item.createdAt, hasValue: item.hasCreatedAt),
+                    isCurrent: item.isCurrent
+                )
+            }
         }
     }
 
     func revokeDevice(deviceID: String) async throws {
         try await withAuthorizedRetry {
-            let requestBody = RevokeDeviceRequest(deviceID: deviceID)
-            let request = try makeRequest(path: "/pincer.protocol.v1.DevicesService/RevokeDevice", method: "POST", body: requestBody)
-            let _: EmptyResponse = try await send(request)
+            var request = Pincer_Protocol_V1_RevokeDeviceRequest()
+            request.deviceID = deviceID
+            let response = await devicesClient.revokeDevice(
+                request: request,
+                headers: authHeaders()
+            )
+            _ = try responseMessage(response) as Pincer_Protocol_V1_RevokeDeviceResponse
         }
     }
 
@@ -116,39 +203,104 @@ actor APIClient {
         }
     }
 
-    private func makeRequest<T: Encodable>(path: String, method: String, body: T?, includeAuth: Bool = true) throws -> URLRequest {
-        guard let url = URL(string: path, relativeTo: baseURL) else {
-            throw APIError.invalidResponse
-        }
-        var request = URLRequest(url: url)
-        request.httpMethod = method
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if includeAuth, !token.isEmpty {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
-        if let body {
-            request.httpBody = try encoder.encode(body)
-        }
-        return request
+    private static func makeTransport(baseURL: URL) -> ProtocolClient {
+        let host = baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        return ProtocolClient(config: .init(
+            host: host,
+            networkProtocol: .connect,
+            codec: JSONCodec()
+        ))
     }
 
-    private func send<T: Decodable>(_ request: URLRequest) async throws -> T {
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw APIError.invalidResponse
+    private func authHeaders() -> Connect.Headers {
+        var headers: Connect.Headers = [:]
+        if !token.isEmpty {
+            headers["Authorization"] = ["Bearer \(token)"]
         }
-        guard (200...299).contains(http.statusCode) else {
-            if http.statusCode == 401 {
+        return headers
+    }
+
+    private func responseMessage<T: SwiftProtobuf.Message>(_ response: ResponseMessage<T>) throws -> T {
+        if let message = response.message {
+            return message
+        }
+
+        if let rpcError = response.error {
+            if rpcError.code == .unauthenticated {
                 clearToken()
                 throw APIError.unauthorized
             }
-            throw APIError.httpStatus(http.statusCode)
+            throw APIError.rpc(rpcError.code.name)
         }
 
-        if T.self == EmptyResponse.self {
-            return EmptyResponse() as! T
+        if response.code == .unauthenticated {
+            clearToken()
+            throw APIError.unauthorized
         }
-        return try decoder.decode(T.self, from: data)
+
+        if response.code != .ok {
+            throw APIError.rpc(response.code.name)
+        }
+
+        throw APIError.invalidResponse
+    }
+
+    private func timestampString(_ timestamp: SwiftProtobuf.Google_Protobuf_Timestamp, hasValue: Bool) -> String {
+        guard hasValue else {
+            return ""
+        }
+
+        let seconds = TimeInterval(timestamp.seconds)
+        let nanos = TimeInterval(timestamp.nanos) / 1_000_000_000
+        let date = Date(timeIntervalSince1970: seconds + nanos)
+        return Self.timestampFormatter.string(from: date)
+    }
+
+    private func actionStatus(_ value: String) -> Pincer_Protocol_V1_ActionStatus {
+        switch value.uppercased() {
+        case "PENDING":
+            return .pending
+        case "APPROVED":
+            return .approved
+        case "REJECTED":
+            return .rejected
+        case "EXECUTED":
+            return .executed
+        default:
+            return .unspecified
+        }
+    }
+
+    private func actionStatusName(_ value: Pincer_Protocol_V1_ActionStatus) -> String {
+        switch value {
+        case .pending:
+            return "PENDING"
+        case .approved:
+            return "APPROVED"
+        case .rejected:
+            return "REJECTED"
+        case .executed:
+            return "EXECUTED"
+        case .unspecified, .UNRECOGNIZED:
+            return "UNSPECIFIED"
+        }
+    }
+
+    private func riskClassName(_ value: Pincer_Protocol_V1_RiskClass) -> String {
+        switch value {
+        case .read:
+            return "READ"
+        case .write:
+            return "WRITE"
+        case .exfiltration:
+            return "EXFILTRATION"
+        case .destructive:
+            return "DESTRUCTIVE"
+        case .high:
+            return "HIGH"
+        case .unspecified, .UNRECOGNIZED:
+            return "UNSPECIFIED"
+        }
     }
 
     private func clearToken() {
@@ -156,5 +308,3 @@ actor APIClient {
         UserDefaults.standard.removeObject(forKey: AppConfig.tokenDefaultsKey)
     }
 }
-
-private struct EmptyResponse: Decodable {}

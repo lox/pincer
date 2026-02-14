@@ -81,6 +81,7 @@ Backend runtime config is now CLI+env via `kong`:
 ## Documentation
 
 - `docs/spec.md` - end-state system design and contracts.
+- `docs/protocol.md` - ConnectRPC/protobuf wire contract and streaming event model.
 - `PLAN.md` - phased implementation plan and steps.
 - `docs/ios-ui-plan.md` - iOS UI/UX planning details.
 - `SOUL.md` - assistant phrasing guidance used by the planner when present.

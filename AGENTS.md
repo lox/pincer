@@ -17,11 +17,12 @@ Primary goal: autonomy within strict safety constraints.
 Before making changes, read:
 
 1. `docs/spec.md`
-2. `docs/ios-ui-plan.md`
-3. `PLAN.md`
-4. `README.md`
+2. `docs/protocol.md`
+3. `docs/ios-ui-plan.md`
+4. `PLAN.md`
+5. `README.md`
 
-Treat `docs/spec.md` as the canonical system contract.
+Treat `docs/spec.md` as the canonical system contract and `docs/protocol.md` as the canonical ConnectRPC wire contract.
 
 ## 3. Non-negotiable invariants
 
@@ -50,6 +51,7 @@ Keep this slice working while iterating.
 - `internal/server` - HTTP handlers, persistence, approval flow
 - `ios/Pincer` - SwiftUI app + generated Xcode project
 - `docs/spec.md` - backend and security spec
+- `docs/protocol.md` - ConnectRPC/protobuf protocol and streaming contract
 - `docs/ios-ui-plan.md` - iOS UI/UX plan
 - `PLAN.md` - phased implementation plan
 

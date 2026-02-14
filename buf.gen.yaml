@@ -8,3 +8,13 @@ plugins:
     out: gen
     opt:
       - paths=source_relative
+  - plugin: buf.build/apple/swift
+    out: ios/Pincer/Generated
+    opt:
+      - Visibility=Public
+  - plugin: buf.build/connectrpc/swift
+    out: ios/Pincer/Generated
+    opt:
+      - GenerateAsyncMethods=true
+      - GenerateCallbackMethods=false
+      - Visibility=Public

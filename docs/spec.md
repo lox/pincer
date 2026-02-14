@@ -5,6 +5,7 @@ Date: 2026-02-14
 
 This document defines the target system design for Pincer.
 Implementation sequencing and phase gates are tracked in `PLAN.md`.
+Control-plane protobuf/service and streaming event contract details are tracked in `docs/protocol.md`.
 
 ## 1. Purpose
 
@@ -302,6 +303,7 @@ Invalid output handling:
 ## 13. API surface
 
 Control-plane API is ConnectRPC over protobuf. Service/method groups:
+`docs/protocol.md` is the canonical wire-level reference for RPC request/response shapes and streamed event envelopes.
 
 - auth and devices:
   - `AuthService.CreatePairingCode`

@@ -1,11 +1,19 @@
 # Pincer ConnectRPC Streaming Protocol
 
-Status: Proposal
+Status: Active (partially implemented)
 Date: 2026-02-14
 References: `docs/spec.md`, `docs/ios-ui-plan.md`
 
 This document defines a ConnectRPC + protobuf protocol for Pincer with first-class event streaming.
 It targets full coverage of the canonical system contract in `docs/spec.md`.
+
+## 0. Current Implementation Status (2026-02-14)
+
+1. Backend control-plane APIs are served via protobuf-defined ConnectRPC handlers.
+2. Turn/thread streaming is implemented for `TurnsService.StartTurn` and `EventsService.WatchThread`, including incremental command output events.
+3. iOS uses generated Connect Swift unary clients for current chat/approvals/settings surfaces.
+4. Proto/Go/Swift generation is wired through `buf` and checked into the repo.
+5. Remaining work includes stream-first iOS chat consumption and completion of currently unimplemented Jobs/Schedules RPC methods.
 
 ## 1. Goals
 
@@ -928,6 +936,13 @@ Settings:
 2. `GetPolicySummary` and `ListAudit` satisfy trust surfaces.
 
 ## 11. Connect-Only Cutover Plan
+
+Current phase status:
+
+1. Phase A and Phase B are complete for the currently implemented service set.
+2. Phase C is in progress (iOS unary cutover complete; stream-first chat rendering pending).
+3. Phase D is complete for app-facing control-plane route registration.
+4. Phase E stabilization remains in progress.
 
 ### 11.1 Cutover Rules
 

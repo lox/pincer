@@ -5,6 +5,7 @@ Last updated: 2026-02-14
 
 This document tracks phased delivery and concrete implementation status.
 The canonical end-state design is in `docs/spec.md`.
+The canonical control-plane wire contract is in `docs/protocol.md`.
 
 ## 1. Planning assumptions
 
@@ -30,15 +31,18 @@ Goal:
 Steps:
 
 - [x] Implement pairing and opaque bearer auth.
+- [x] Migrate control-plane transport to ConnectRPC/protobuf handlers.
 - [x] Implement chat thread/message primitives.
 - [x] Implement proposed action persistence.
 - [x] Implement approval endpoints and state transitions.
 - [x] Implement action executor with idempotency.
 - [x] Add explicit-approval `run_bash` execution with bounded timeout/output capture and audited results.
+- [x] Stream turn/thread events for tool execution and command output deltas (`TurnsService.StartTurn`, `EventsService.WatchThread`).
 - [x] Implement audit logging for all side-effect transitions.
 - [x] Implement iOS Chat + Approvals + Settings session controls.
 - [x] Unify approval state between Approvals tab and inline Chat indicators.
 - [x] Render approval and execution outcomes directly in the Chat timeline.
+- [x] Generate and wire iOS Connect Swift stubs from protobuf (`buf` + `connect-swift`).
 - [x] Add reproducible API and iOS E2E scripts.
 
 Exit criteria:
@@ -46,6 +50,7 @@ Exit criteria:
 - [x] `chat -> proposed -> approved -> executed -> audited` works end to end.
 - [x] No external side effect executes without approval.
 - [x] Device revoke invalidates its token path.
+- [x] App-facing control-plane flows run through ConnectRPC services.
 - [x] E2E scripts pass reliably.
 
 ## 4. Phase 2 - Integration reads and draft flows
@@ -149,17 +154,22 @@ Exit criteria:
 ## 9. Current checkpoint
 
 - [x] Pairing + opaque bearer auth.
+- [x] ConnectRPC/protobuf control-plane handlers registered for auth/devices/threads/turns/events/approvals/jobs/schedules/system.
 - [x] Chat + approvals + action executor + audit conveyor.
 - [x] SOUL-guided planner prompt loading from `SOUL.md`.
 - [x] `run_bash` tool path with approval gating and auditable execution output in chat.
+- [x] Turn/thread event streaming with incremental command output events.
 - [x] Inline chat approval/execution timeline with shared approval state from Approvals tab.
 - [x] Basic native markdown rendering in iOS chat messages using `AttributedString` (`inlineOnlyPreservingWhitespace`).
 - [x] Device session list + revoke controls.
+- [x] iOS migrated to generated Connect Swift unary clients for current app surfaces.
 - [x] Reproducible API and iOS E2E flows.
+- [x] `buf` is pinned in `mise` and used for Go + Swift code generation.
+- [ ] iOS consumes `StartTurn`/`WatchThread` for live streaming thinking/output rendering.
 - [ ] Upgrade iOS chat markdown rendering to `Textual` for full block-level markdown support.
 - [ ] Phase 2 integrations started.
 - [ ] Turn orchestration and bounded tool-loop implementation is planned.
 
 Next priority:
 
-- [ ] Begin Phase 3 by implementing the governed turn execution kernel and event routing before expanding external tool coverage.
+- [ ] Complete stream-first iOS chat wiring (`StartTurn` + `WatchThread`) for live thinking/work/output UX, then continue Phase 3 turn-kernel work.

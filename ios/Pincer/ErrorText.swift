@@ -5,8 +5,8 @@ func userFacingErrorMessage(_ error: Error, fallback: String) -> String {
         switch apiError {
         case .unauthorized:
             return "Session unauthorized. Open Settings and re-pair the device."
-        case .httpStatus(let status):
-            return "Backend returned HTTP \(status)."
+        case .rpc(let code):
+            return "Backend returned RPC error \(code)."
         case .invalidResponse:
             return fallback
         }

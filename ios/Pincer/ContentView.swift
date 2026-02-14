@@ -19,6 +19,10 @@ private enum A11y {
 
     static let approvalsHeading = "approvals_heading"
     static let approvalsApproveFirst = "approval_approve_first"
+
+    static let settingsBackendURLInput = "settings_backend_url_input"
+    static let settingsBackendSaveButton = "settings_backend_save_button"
+    static let settingsBackendResetButton = "settings_backend_reset_button"
 }
 
 struct ContentView: View {
@@ -817,11 +821,28 @@ private struct SettingsView: View {
 
                 ScrollView(showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("Paired Devices")
+                        Text("Backend")
                             .font(.system(.title3, design: .rounded).weight(.semibold))
                             .foregroundStyle(PincerPalette.textPrimary)
                             .padding(.horizontal, 16)
                             .padding(.top, 8)
+
+                        BackendConfigCard(
+                            backendURL: $model.backendURL,
+                            isBusy: model.isBusy,
+                            onSave: {
+                                Task { await model.saveBackendURL() }
+                            },
+                            onReset: {
+                                Task { await model.resetBackendURL() }
+                            }
+                        )
+                        .padding(.horizontal, 16)
+
+                        Text("Paired Devices")
+                            .font(.system(.title3, design: .rounded).weight(.semibold))
+                            .foregroundStyle(PincerPalette.textPrimary)
+                            .padding(.horizontal, 16)
 
                         if model.devices.isEmpty {
                             Text("No devices found.")
@@ -883,6 +904,57 @@ private struct SettingsView: View {
                 }
             }
         }
+    }
+}
+
+private struct BackendConfigCard: View {
+    @Binding var backendURL: String
+    let isBusy: Bool
+    let onSave: () -> Void
+    let onReset: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Address")
+                .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                .foregroundStyle(PincerPalette.textPrimary)
+
+            TextField("http://192.168.1.50:8080", text: $backendURL)
+                .font(.system(.body, design: .rounded))
+                .foregroundStyle(PincerPalette.textPrimary)
+                .textInputAutocapitalization(.never)
+                .keyboardType(.URL)
+                .autocorrectionDisabled()
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .background(PincerPalette.page)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .accessibilityIdentifier(A11y.settingsBackendURLInput)
+
+            Text("Use your Mac's LAN URL for physical iPhone installs.")
+                .font(.system(.footnote, design: .rounded))
+                .foregroundStyle(PincerPalette.textSecondary)
+
+            HStack(spacing: 10) {
+                Button(action: onSave) {
+                    Text(isBusy ? "Saving..." : "Save")
+                        .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                        .foregroundStyle(PincerPalette.accent)
+                }
+                .disabled(isBusy)
+                .accessibilityIdentifier(A11y.settingsBackendSaveButton)
+
+                Button(action: onReset) {
+                    Text("Reset")
+                        .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                        .foregroundStyle(PincerPalette.textSecondary)
+                }
+                .disabled(isBusy)
+                .accessibilityIdentifier(A11y.settingsBackendResetButton)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .cardSurface()
     }
 }
 

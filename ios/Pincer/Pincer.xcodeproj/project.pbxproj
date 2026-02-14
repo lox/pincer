@@ -9,13 +9,16 @@
 /* Begin PBXBuildFile section */
 		00BB6F4CBB92D09472C7C7E0 /* ErrorText.swift in Sources */ = {isa = PBXBuildFile; fileRef = E79B8CDFD73AC6C0F7C663C7 /* ErrorText.swift */; };
 		0B16F2765408205AB7554F1A /* AppConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 044069EE4D0C506D769F1321 /* AppConfig.swift */; };
+		0E9B79A9C8A77EB25816CEA0 /* protocol.connect.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8EB993A5C6FCC71BA1B0BC8E /* protocol.connect.swift */; };
 		1AF7E5AA1EA446E74FF45490 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B1527160929BF525EC809E77 /* Assets.xcassets */; };
 		32527E93C243AB83D8ED63ED /* SettingsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 633F539062FB2D5937DD6F3D /* SettingsViewModel.swift */; };
 		42CEFDE4C0A0D72A16F1FE81 /* ApprovalsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58EE2731E78134BC2EF5F1C7 /* ApprovalsStore.swift */; };
 		5BE32E340B9A4FEEA93439D8 /* ChatViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 817111BB98CE5BFED6A4750F /* ChatViewModel.swift */; };
 		7EB7EC438B9862D4CE3932E1 /* PincerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 085FB97D074C43558F99C149 /* PincerApp.swift */; };
+		A2C37C3D860188BB38E3BEDF /* Connect in Frameworks */ = {isa = PBXBuildFile; productRef = 6FE2BA4F0A5FEBED804281DF /* Connect */; };
 		A946EFFA9815D941DCEDAF8C /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8C017076C30A916A55441D6 /* Models.swift */; };
 		AA7FE540D31985864B286587 /* ApprovalsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A607777578E8E2C3D86C035 /* ApprovalsViewModel.swift */; };
+		D5B487CF72898B18A3CE281D /* protocol.pb.swift in Sources */ = {isa = PBXBuildFile; fileRef = 479F750A9B489D7C47433781 /* protocol.pb.swift */; };
 		F632AA762B2A724BBBA70BDA /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC76A57DF375709D807D6E1D /* APIClient.swift */; };
 		FFD587396FB1D0F8F33EF7DE /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15B0AC0BC187E83771DCED94 /* ContentView.swift */; };
 /* End PBXBuildFile section */
@@ -24,10 +27,12 @@
 		044069EE4D0C506D769F1321 /* AppConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfig.swift; sourceTree = "<group>"; };
 		085FB97D074C43558F99C149 /* PincerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PincerApp.swift; sourceTree = "<group>"; };
 		15B0AC0BC187E83771DCED94 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		479F750A9B489D7C47433781 /* protocol.pb.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = protocol.pb.swift; sourceTree = "<group>"; };
 		4A607777578E8E2C3D86C035 /* ApprovalsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApprovalsViewModel.swift; sourceTree = "<group>"; };
 		58EE2731E78134BC2EF5F1C7 /* ApprovalsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApprovalsStore.swift; sourceTree = "<group>"; };
 		633F539062FB2D5937DD6F3D /* SettingsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsViewModel.swift; sourceTree = "<group>"; };
 		817111BB98CE5BFED6A4750F /* ChatViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatViewModel.swift; sourceTree = "<group>"; };
+		8EB993A5C6FCC71BA1B0BC8E /* protocol.connect.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = protocol.connect.swift; sourceTree = "<group>"; };
 		B1527160929BF525EC809E77 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		C8C017076C30A916A55441D6 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 		DC76A57DF375709D807D6E1D /* APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClient.swift; sourceTree = "<group>"; };
@@ -35,7 +40,51 @@
 		F2C5D45D4406B02D1F6C96FB /* Pincer.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Pincer.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFrameworksBuildPhase section */
+		86F0E6FF50F6D4CF75A209A4 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A2C37C3D860188BB38E3BEDF /* Connect in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
 /* Begin PBXGroup section */
+		1528098CE04E1D96222E286A /* pincer */ = {
+			isa = PBXGroup;
+			children = (
+				F3431DD2492119D3AD2D2812 /* protocol */,
+			);
+			path = pincer;
+			sourceTree = "<group>";
+		};
+		23794DF056CFF98161268D7D /* v1 */ = {
+			isa = PBXGroup;
+			children = (
+				8EB993A5C6FCC71BA1B0BC8E /* protocol.connect.swift */,
+				479F750A9B489D7C47433781 /* protocol.pb.swift */,
+			);
+			path = v1;
+			sourceTree = "<group>";
+		};
+		51E340CFE737E645F634E0C7 /* Generated */ = {
+			isa = PBXGroup;
+			children = (
+				58EFF956A4E439E027507449 /* proto */,
+			);
+			path = Generated;
+			sourceTree = "<group>";
+		};
+		58EFF956A4E439E027507449 /* proto */ = {
+			isa = PBXGroup;
+			children = (
+				1528098CE04E1D96222E286A /* pincer */,
+			);
+			path = proto;
+			sourceTree = "<group>";
+		};
 		B00F4ED3B6ADE66243015B94 /* Pincer */ = {
 			isa = PBXGroup;
 			children = (
@@ -66,9 +115,18 @@
 			isa = PBXGroup;
 			children = (
 				B1527160929BF525EC809E77 /* Assets.xcassets */,
+				51E340CFE737E645F634E0C7 /* Generated */,
 				B00F4ED3B6ADE66243015B94 /* Pincer */,
 				CC36E985119AA151F56AC2C6 /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		F3431DD2492119D3AD2D2812 /* protocol */ = {
+			isa = PBXGroup;
+			children = (
+				23794DF056CFF98161268D7D /* v1 */,
+			);
+			path = protocol;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -80,6 +138,7 @@
 			buildPhases = (
 				BC1C3D505CAF22A14198659E /* Sources */,
 				BD0C11F561315F418909F663 /* Resources */,
+				86F0E6FF50F6D4CF75A209A4 /* Frameworks */,
 			);
 			buildRules = (
 			);
@@ -87,6 +146,7 @@
 			);
 			name = Pincer;
 			packageProductDependencies = (
+				6FE2BA4F0A5FEBED804281DF /* Connect */,
 			);
 			productName = Pincer;
 			productReference = F2C5D45D4406B02D1F6C96FB /* Pincer.app */;
@@ -111,6 +171,9 @@
 			);
 			mainGroup = D60C2C56A8B925796D936D33;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				E5774C441A981FEAA943D03D /* XCRemoteSwiftPackageReference "connect-swift" */,
+			);
 			preferredProjectObjectVersion = 77;
 			projectDirPath = "";
 			projectRoot = "";
@@ -146,6 +209,8 @@
 				A946EFFA9815D941DCEDAF8C /* Models.swift in Sources */,
 				7EB7EC438B9862D4CE3932E1 /* PincerApp.swift in Sources */,
 				32527E93C243AB83D8ED63ED /* SettingsViewModel.swift in Sources */,
+				0E9B79A9C8A77EB25816CEA0 /* protocol.connect.swift in Sources */,
+				D5B487CF72898B18A3CE281D /* protocol.pb.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -337,6 +402,25 @@
 			defaultConfigurationName = Debug;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		E5774C441A981FEAA943D03D /* XCRemoteSwiftPackageReference "connect-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/connectrpc/connect-swift.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.2.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		6FE2BA4F0A5FEBED804281DF /* Connect */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = E5774C441A981FEAA943D03D /* XCRemoteSwiftPackageReference "connect-swift" */;
+			productName = Connect;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = D3C29EBE9C57D1BD2ABF53BC /* Project object */;
 }

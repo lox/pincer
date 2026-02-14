@@ -1,5 +1,6 @@
 [tools]
 go = "1.23.6"
+buf = "1.57.0"
 
 [env]
 PINCER_HTTP_ADDR = ':8080'

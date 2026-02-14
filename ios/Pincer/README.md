@@ -15,9 +15,9 @@ Project files:
 
 1. Trust project tasks once:
    - `mise trust`
-2. Set your backend values in `AppConfig.swift`.
-3. Run backend:
+2. Run backend:
    - `mise run run`
+3. Open app Settings and set `Backend -> Address` (for device testing, use your Mac's LAN URL).
 4. Build from terminal:
    - `mise run ios-build`
 5. Open in Xcode:
@@ -30,6 +30,8 @@ Project files:
 ## Notes
 
 - This is intentionally minimal for current Phase 1 implementation.
+- RPC clients and protobuf models are generated into `ios/Pincer/Generated` from `proto/pincer/protocol/v1/protocol.proto` (`go run github.com/bufbuild/buf/cmd/buf@v1.57.0 generate`).
 - The app uses opaque bearer tokens from pairing (`AuthService.CreatePairingCode` + `AuthService.BindPairingCode`).
 - Token is stored in `UserDefaults` under `PINCER_BEARER_TOKEN` for simulator/dev flows.
+- Backend base URL is stored in `UserDefaults` under `PINCER_BASE_URL`.
 - If build fails with missing iOS platform/runtime, install it from Xcode -> Settings -> Components, then rerun `mise run ios-build`.
