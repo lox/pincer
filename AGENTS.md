@@ -65,7 +65,7 @@ Use `mise` for all routine tasks:
 - `mise run tidy` - tidy Go modules
 - `mise run ios-generate` - generate Xcode project from `project.yml`
 - `mise run ios-build` - build iOS app for simulator (no signing)
-- `mise run ios-run` - build, install, and launch app in iOS Simulator
+- `mise run ios-run-simulator` - build, install, and launch app in iOS Simulator
 - `mise run e2e-api` - run backend API E2E conveyor checks
 - `mise run e2e-ios` - run simulator UI + backend E2E checks
 

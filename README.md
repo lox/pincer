@@ -52,8 +52,9 @@ Go Backend (single binary)
 
 - `mise run dev`
 - `mise run reset-db`
-- `mise run ios-reset-token`
-- `mise run ios-run` (manual simulator launch path)
+- `mise run ios-simulator-reset-token`
+- `mise run ios-run-simulator`
+- `mise run ios-run-device`
 - `mise run e2e-api`
 - `mise run e2e-ios`
 

@@ -41,26 +41,19 @@ run = "cd ios/Pincer && xcodegen generate"
 description = "Build iOS app for Simulator (no signing)"
 run = "xcodebuild -project ios/Pincer/Pincer.xcodeproj -scheme Pincer -destination 'generic/platform=iOS Simulator' build CODE_SIGNING_ALLOWED=NO"
 
-[tasks.ios-run]
+[tasks.ios-run-simulator]
 description = "Build, install, and launch iOS app in Simulator"
 run = "scripts/ios_run_simulator.sh"
 
-[tasks.ios-run.env]
+[tasks.ios-run-simulator.env]
 PINCER_IOS_DEVICE = "iPhone 17 Pro"
 
 [tasks.ios-run-device]
 description = "Build, install, and launch iOS app on a connected physical device"
 run = "scripts/ios_run_device.sh"
 
-[tasks.ios-run-device.env]
-PINCER_IOS_SCHEME = "Pincer"
-PINCER_IOS_BUNDLE_ID = "com.lox.pincer"
-
-[tasks.ios-reset-token]
-[tasks.ios-reset-token.env]
-PINCER_IOS_DEVICE = "booted"
-PINCER_IOS_BUNDLE_ID = "com.lox.pincer"
-run = "xcrun simctl spawn \"${PINCER_IOS_DEVICE}\" defaults delete \"${PINCER_IOS_BUNDLE_ID}\" PINCER_BEARER_TOKEN"
+[tasks.ios-simulator-reset-token]
+run = "xcrun simctl spawn booted defaults delete \"${PINCER_IOS_BUNDLE_ID}\" PINCER_BEARER_TOKEN"
 
 [tasks.e2e-api]
 description = "Run MVP API end-to-end checks against running backend"

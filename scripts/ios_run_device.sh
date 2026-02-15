@@ -8,18 +8,9 @@ BUNDLE_ID="${PINCER_IOS_BUNDLE_ID:-com.lox.pincer}"
 DEVICE_UDID="${PINCER_IOS_DEVICE_UDID:-${PINCER_IOS_DEVICE:-}}"
 CONFIGURATION="${PINCER_IOS_CONFIGURATION:-Debug}"
 
-BASE_URL="${PINCER_BASE_URL:-http://127.0.0.1:8080}"
 DEVELOPMENT_TEAM="${PINCER_IOS_DEVELOPMENT_TEAM:-${DEVELOPMENT_TEAM:-}}"
 CODE_SIGN_IDENTITY="${PINCER_IOS_CODE_SIGN_IDENTITY:-iPhone Developer}"
 PROVISIONING_PROFILE_SPECIFIER="${PINCER_IOS_PROVISIONING_PROFILE_SPECIFIER:-}"
-
-require_cmd() {
-  local cmd="$1"
-  if ! command -v "${cmd}" >/dev/null 2>&1; then
-    echo "${cmd} is required but not installed" >&2
-    exit 1
-  fi
-}
 
 normalize_device_token() {
   printf '%s' "$1" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g'
@@ -151,11 +142,6 @@ get_app_path() {
 }
 
 main() {
-  require_cmd xcodebuild
-  require_cmd xcrun
-  require_cmd curl
-  require_cmd awk
-
   if [[ -z "${DEVICE_UDID}" ]]; then
     echo "PINCER_IOS_DEVICE_UDID (or PINCER_IOS_DEVICE) must be set to your physical device name or Xcode UDID." >&2
     exit 1
@@ -166,12 +152,6 @@ main() {
   if [[ -z "${DEVELOPMENT_TEAM}" ]]; then
     echo "PINCER_IOS_DEVELOPMENT_TEAM (or DEVELOPMENT_TEAM) must be set for physical-device signing." >&2
     exit 1
-  fi
-
-  backend_code="$(curl -sS -o /dev/null -w '%{http_code}' -X POST "${BASE_URL}/pincer.protocol.v1.AuthService/CreatePairingCode" -H 'Content-Type: application/json' -d '{}' || true)"
-  if [[ "${backend_code}" == "000" ]]; then
-    echo "warning: backend not reachable at ${BASE_URL}" >&2
-    echo "warning: run 'mise run dev' before chatting/approvals" >&2
   fi
 
   resolved_udid=""
@@ -206,12 +186,13 @@ main() {
     sign_args+=(PROVISIONING_PROFILE_SPECIFIER="${PROVISIONING_PROFILE_SPECIFIER}")
   fi
 
+  echo "building for device ${DEVICE_UDID}..."
   xcodebuild -project "${PROJECT_PATH}" \
     -scheme "${SCHEME}" \
     -configuration "${CONFIGURATION}" \
     -destination "id=${DEVICE_UDID}" \
     "${sign_args[@]}" \
-    build
+    build | tail -1
 
   APP_PATH="$(get_app_path)"
   if [[ ! -d "${APP_PATH}" ]]; then
@@ -226,8 +207,6 @@ main() {
   echo "ios device run ok"
   echo "device_udid=${DEVICE_UDID}"
   echo "bundle_id=${BUNDLE_ID}"
-  echo "app_path=${APP_PATH}"
-  echo "If pairing is not complete, open Settings in-app and enter your base URL or pair flow."
 }
 
 main "$@"

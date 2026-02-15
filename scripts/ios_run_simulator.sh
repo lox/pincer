@@ -8,17 +8,6 @@ PROJECT_PATH="${ROOT_DIR}/ios/Pincer/Pincer.xcodeproj"
 SCHEME="${PINCER_IOS_SCHEME:-Pincer}"
 AUTH_TOKEN="${PINCER_AUTH_TOKEN:-}"
 BASE_URL="${PINCER_BASE_URL:-http://127.0.0.1:8080}"
-if [[ "${BASE_URL}" == '${PINCER_BASE_URL:-http://127.0.0.1:8080}' || -z "${BASE_URL}" ]]; then
-  BASE_URL="http://127.0.0.1:8080"
-fi
-
-require_cmd() {
-  local cmd="$1"
-  if ! command -v "${cmd}" >/dev/null 2>&1; then
-    echo "${cmd} is required but not installed" >&2
-    exit 1
-  fi
-}
 
 get_app_path() {
   local settings target wrapper
@@ -38,23 +27,13 @@ get_app_path() {
   printf '%s/%s\n' "${target}" "${wrapper}"
 }
 
-require_cmd xcodebuild
-require_cmd xcrun
-require_cmd open
-require_cmd curl
-
 cd "${ROOT_DIR}"
 
-backend_code="$(curl -sS -o /dev/null -w '%{http_code}' -X POST "${BASE_URL}/pincer.protocol.v1.AuthService/CreatePairingCode" -H 'Content-Type: application/json' -d '{}' || true)"
-if [[ "${backend_code}" == "000" ]]; then
-  echo "warning: backend not reachable at ${BASE_URL}" >&2
-  echo "warning: run 'mise run dev' before using chat/approvals" >&2
-fi
-
+echo "building for simulator..."
 xcodebuild -project "${PROJECT_PATH}" \
   -scheme "${SCHEME}" \
   -destination "generic/platform=iOS Simulator" \
-  build CODE_SIGNING_ALLOWED=NO >/dev/null
+  build CODE_SIGNING_ALLOWED=NO | tail -1
 
 APP_PATH="$(get_app_path)"
 if [[ ! -d "${APP_PATH}" ]]; then
@@ -72,9 +51,10 @@ if [[ -n "${AUTH_TOKEN}" ]]; then
 fi
 xcrun simctl spawn "${DEVICE}" defaults write "${BUNDLE_ID}" PINCER_BASE_URL -string "${BASE_URL}" >/dev/null
 
+xcrun simctl terminate "${DEVICE}" "${BUNDLE_ID}" >/dev/null 2>&1 || true
 xcrun simctl launch "${DEVICE}" "${BUNDLE_ID}" >/dev/null
 
 echo "ios run ok"
 echo "device=${DEVICE}"
+echo "base_url=${BASE_URL}"
 echo "bundle_id=${BUNDLE_ID}"
-echo "app_path=${APP_PATH}"
