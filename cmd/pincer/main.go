@@ -13,6 +13,7 @@ import (
 	"github.com/alecthomas/kong"
 	charmLog "github.com/charmbracelet/log"
 	"github.com/lox/pincer/internal/server"
+	"tailscale.com/tsnet"
 )
 
 type cliConfig struct {
@@ -25,6 +26,9 @@ type cliConfig struct {
 	ModelFallback     string `name:"model-fallback" help:"Fallback model ID." env:"PINCER_MODEL_FALLBACK"`
 	LogLevel          string `name:"log-level" help:"Server log level." env:"PINCER_LOG_LEVEL" default:"info" enum:"debug,info,warn,error,fatal"`
 	LogFormat         string `name:"log-format" help:"Log output format." env:"PINCER_LOG_FORMAT" default:"text" enum:"text,json"`
+	TSHostname        string `name:"ts-hostname" help:"Tailscale hostname for tsnet." env:"TS_HOSTNAME" default:"pincer"`
+	TSServiceName     string `name:"ts-service-name" help:"Tailscale service name (svc:<name>)." env:"TS_SERVICE_NAME" default:"pincer"`
+	TSStateDir        string `name:"ts-state-dir" help:"Tailscale state directory." env:"TS_STATE_DIR" default:""`
 }
 
 func main() {
@@ -60,9 +64,50 @@ func main() {
 	}
 	defer app.Close()
 
+	handler := app.Handler()
+
+	// Start tsnet listener if TS_AUTHKEY is set.
+	if os.Getenv("TS_AUTHKEY") != "" {
+		tsLogger := logger.With("component", "tsnet")
+
+		ts := &tsnet.Server{
+			Hostname: cfg.TSHostname,
+		}
+		if cfg.TSStateDir != "" {
+			ts.Dir = cfg.TSStateDir
+		}
+		defer ts.Close()
+
+		svcName := "svc:" + cfg.TSServiceName
+		ln, err := ts.ListenService(svcName, tsnet.ServiceModeHTTP{
+			HTTPS: true,
+			Port:  443,
+		})
+		if err != nil {
+			logger.Fatal("tsnet listen service", "error", err)
+		}
+		defer ln.Close()
+
+		tsLogger.Info("tailscale service listening",
+			"hostname", cfg.TSHostname,
+			"service", svcName,
+			"fqdn", ln.FQDN,
+		)
+
+		go func() {
+			tsServer := &http.Server{
+				Handler:           handler,
+				ReadHeaderTimeout: 10 * time.Second,
+			}
+			if err := tsServer.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				tsLogger.Fatal("tsnet serve", "error", err)
+			}
+		}()
+	}
+
 	httpServer := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           app.Handler(),
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
