@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 enum BackendCheckStatus: Equatable {
     case idle
@@ -30,6 +31,10 @@ final class SettingsViewModel: ObservableObject {
     @Published var isBusy = false
     @Published var isCheckingBackend = false
     @Published var backendChecks: [BackendCheckItem] = []
+    @Published var generatedPairingCode: String?
+    @Published var isGeneratingCode = false
+    @Published var manualPairingCode: String = ""
+    @Published var isBindingCode = false
 
     private let client: APIClient
 
@@ -132,6 +137,37 @@ final class SettingsViewModel: ObservableObject {
                 status: .error,
                 detail: "failed (\(pairingProbe.code))\(pairingProbe.detail.isEmpty ? "" : ": ")\(pairingProbe.detail)"
             )
+        }
+    }
+
+    func generatePairingCode() async {
+        isGeneratingCode = true
+        defer { isGeneratingCode = false }
+
+        do {
+            let code = try await client.generatePairingCode()
+            generatedPairingCode = code
+        } catch {
+            errorText = userFacingErrorMessage(error, fallback: "Failed to generate pairing code.")
+        }
+    }
+
+    func bindManualCode() async {
+        let code = manualPairingCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !code.isEmpty else {
+            errorText = "Enter a pairing code."
+            return
+        }
+
+        isBindingCode = true
+        defer { isBindingCode = false }
+
+        do {
+            try await client.manualBind(code: code, deviceName: UIDevice.current.name)
+            manualPairingCode = ""
+            await refresh()
+        } catch {
+            errorText = userFacingErrorMessage(error, fallback: "Failed to bind pairing code.")
         }
     }
 

@@ -1055,6 +1055,14 @@ private struct SettingsView: View {
                         )
                         .padding(.horizontal, 16)
 
+                        Text("Pairing")
+                            .font(.system(.title3, design: .rounded).weight(.semibold))
+                            .foregroundStyle(PincerPalette.textPrimary)
+                            .padding(.horizontal, 16)
+
+                        PairingCard(model: model)
+                            .padding(.horizontal, 16)
+
                         Text("Paired Devices")
                             .font(.system(.title3, design: .rounded).weight(.semibold))
                             .foregroundStyle(PincerPalette.textPrimary)
@@ -1278,6 +1286,81 @@ private struct BackendCheckRow: View {
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(PincerPalette.danger)
         }
+    }
+}
+
+private struct PairingCard: View {
+    @ObservedObject var model: SettingsViewModel
+    @FocusState private var isCodeFocused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Add another device")
+                .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                .foregroundStyle(PincerPalette.textPrimary)
+
+            Text("Generate a code on this device, then enter it on the new device.")
+                .font(.system(.footnote, design: .rounded))
+                .foregroundStyle(PincerPalette.textSecondary)
+
+            Button(action: { Task { await model.generatePairingCode() } }) {
+                Text(model.isGeneratingCode ? "Generating..." : "Generate Pairing Code")
+                    .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                    .foregroundStyle(PincerPalette.accent)
+            }
+            .disabled(model.isGeneratingCode || model.isBindingCode)
+
+            if let code = model.generatedPairingCode {
+                HStack(spacing: 8) {
+                    Text(code)
+                        .font(.system(.title, design: .monospaced).weight(.bold))
+                        .foregroundStyle(PincerPalette.textPrimary)
+                        .textSelection(.enabled)
+
+                    Button(action: {
+                        UIPasteboard.general.string = code
+                    }) {
+                        Image(systemName: "doc.on.doc")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(PincerPalette.accent)
+                    }
+                }
+
+                Text("Enter this code on the new device. Expires in 10 minutes.")
+                    .font(.system(.footnote, design: .rounded))
+                    .foregroundStyle(PincerPalette.textSecondary)
+            }
+
+            Divider()
+
+            Text("Pair this device")
+                .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                .foregroundStyle(PincerPalette.textPrimary)
+
+            TextField("Enter pairing code", text: $model.manualPairingCode)
+                .font(.system(.body, design: .monospaced))
+                .foregroundStyle(PincerPalette.textPrimary)
+                .keyboardType(.numberPad)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .focused($isCodeFocused)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .background(PincerPalette.page)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+            Button(action: {
+                isCodeFocused = false
+                Task { await model.bindManualCode() }
+            }) {
+                Text(model.isBindingCode ? "Pairing..." : "Pair")
+                    .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                    .foregroundStyle(PincerPalette.accent)
+            }
+            .disabled(model.isBindingCode || model.manualPairingCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .cardSurface()
     }
 }
 

@@ -258,6 +258,30 @@ actor APIClient {
         }
     }
 
+    func generatePairingCode() async throws -> String {
+        try await withAuthorizedRetry {
+            let response = await authClient.createPairingCode(
+                request: .init(),
+                headers: authHeaders()
+            )
+            let message = try responseMessage(response)
+            return message.code
+        }
+    }
+
+    func manualBind(code: String, deviceName: String = "Pincer iOS") async throws {
+        var bindRequest = Pincer_Protocol_V1_BindPairingCodeRequest()
+        bindRequest.code = code
+        bindRequest.deviceName = deviceName
+        let bindResponse = await authClient.bindPairingCode(
+            request: bindRequest,
+            headers: [:]
+        )
+        let bindMessage = try responseMessage(bindResponse)
+        token = bindMessage.token
+        UserDefaults.standard.set(bindMessage.token, forKey: AppConfig.tokenDefaultsKey)
+    }
+
     private func withAuthorizedRetry<T>(_ operation: () async throws -> T) async throws -> T {
         try await ensurePaired()
         do {
