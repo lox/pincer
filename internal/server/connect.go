@@ -14,6 +14,7 @@ import (
 	"connectrpc.com/connect"
 	protocolv1 "github.com/lox/pincer/gen/proto/pincer/protocol/v1"
 	"github.com/lox/pincer/gen/proto/pincer/protocol/v1/protocolv1connect"
+	"github.com/lox/pincer/internal/agent"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -797,27 +798,148 @@ func (a *App) executeTurn(ctx context.Context, threadID, userText, turnID string
 		return nil, errors.New("user_text is required")
 	}
 
-	plan, err := a.planTurn(ctx, threadID, userText)
-	if err != nil {
-		_, _ = a.appendThreadEvent(ctx, &protocolv1.ThreadEvent{
-			ThreadId:     threadID,
-			TurnId:       turnID,
-			Source:       protocolv1.EventSource_MODEL_UNTRUSTED,
-			ContentTrust: protocolv1.ContentTrust_UNTRUSTED_MODEL,
-			Payload: &protocolv1.ThreadEvent_TurnFailed{TurnFailed: &protocolv1.TurnFailed{
-				Code:      "FAILED_MODEL_OUTPUT",
-				Message:   err.Error(),
-				Retryable: true,
-			}},
-		})
-		return nil, fmt.Errorf("plan turn: %w", err)
+	now := time.Now().UTC()
+	nowStr := now.Format(time.RFC3339Nano)
+
+	userMessageID := newID("msg")
+	if _, err := a.db.ExecContext(ctx, `
+		INSERT INTO messages(message_id, thread_id, role, content, created_at)
+		VALUES(?, ?, 'user', ?, ?)
+	`, userMessageID, threadID, userText, nowStr); err != nil {
+		return nil, fmt.Errorf("insert user message: %w", err)
 	}
 
+	_, _ = a.appendThreadEvent(ctx, &protocolv1.ThreadEvent{
+		ThreadId:     threadID,
+		TurnId:       turnID,
+		Source:       protocolv1.EventSource_SYSTEM,
+		ContentTrust: protocolv1.ContentTrust_TRUSTED_SYSTEM,
+		Payload: &protocolv1.ThreadEvent_TurnStarted{TurnStarted: &protocolv1.TurnStarted{
+			UserMessageId: userMessageID,
+			TriggerType:   triggerType,
+		}},
+	})
+
+	// Bounded inline READ tool loop.
+	// Each iteration: plan → split READ vs non-READ → execute READs inline → re-plan.
+	// Loop terminates when plan has no READ tools, or limits are hit.
+	const maxInlineToolSteps = 10
+	for step := 0; step < maxInlineToolSteps; step++ {
+		plan, err := a.planTurn(ctx, threadID, userText)
+		if err != nil {
+			_, _ = a.appendThreadEvent(ctx, &protocolv1.ThreadEvent{
+				ThreadId:     threadID,
+				TurnId:       turnID,
+				Source:       protocolv1.EventSource_MODEL_UNTRUSTED,
+				ContentTrust: protocolv1.ContentTrust_UNTRUSTED_MODEL,
+				Payload: &protocolv1.ThreadEvent_TurnFailed{TurnFailed: &protocolv1.TurnFailed{
+					Code:      "FAILED_MODEL_OUTPUT",
+					Message:   err.Error(),
+					Retryable: true,
+				}},
+			})
+			return nil, fmt.Errorf("plan turn: %w", err)
+		}
+
+		readActions, nonReadActions := splitByRiskClass(plan.ProposedActions)
+
+		// If no READ actions, finalize the turn with whatever we have.
+		if len(readActions) == 0 {
+			return a.finalizeTurn(ctx, threadID, turnID, plan.AssistantMessage, nonReadActions, result)
+		}
+
+		// Execute READ tools inline and persist results as system messages.
+		for _, action := range readActions {
+			toolResult := a.executeInlineReadTool(ctx, action)
+			a.logger.Info("inline tool executed", "tool", action.Tool, "step", step)
+
+			// Persist tool result as system message so planner sees it on next iteration.
+			resultMsg := fmt.Sprintf("[tool_result:%s] %s", action.Tool, toolResult)
+			msgNow := time.Now().UTC().Format(time.RFC3339Nano)
+			if _, err := a.db.ExecContext(ctx, `
+				INSERT INTO messages(message_id, thread_id, role, content, created_at)
+				VALUES(?, ?, 'system', ?, ?)
+			`, newID("msg"), threadID, resultMsg, msgNow); err != nil {
+				return nil, fmt.Errorf("insert tool result message: %w", err)
+			}
+		}
+
+		// If there are also non-READ actions in this round, finalize with those.
+		if len(nonReadActions) > 0 {
+			return a.finalizeTurn(ctx, threadID, turnID, plan.AssistantMessage, nonReadActions, result)
+		}
+
+		// Otherwise loop — planner will see the tool results and can continue.
+	}
+
+	// If we hit the step limit, finalize with whatever the last plan said.
+	plan, err := a.planTurn(ctx, threadID, userText)
+	if err != nil {
+		return nil, fmt.Errorf("final plan after tool limit: %w", err)
+	}
+	_, nonReadActions := splitByRiskClass(plan.ProposedActions)
+	return a.finalizeTurn(ctx, threadID, turnID, plan.AssistantMessage, nonReadActions, result)
+}
+
+func splitByRiskClass(actions []agent.ProposedAction) (read, nonRead []agent.ProposedAction) {
+	for _, action := range actions {
+		if strings.EqualFold(action.RiskClass, "READ") {
+			read = append(read, action)
+		} else {
+			nonRead = append(nonRead, action)
+		}
+	}
+	return
+}
+
+func (a *App) executeInlineReadTool(ctx context.Context, action agent.ProposedAction) string {
+	tool := strings.ToLower(strings.TrimSpace(action.Tool))
+
+	switch {
+	case tool == "web_search":
+		if a.kagiAPIKey == "" {
+			return "web_search unavailable: KAGI_API_KEY not configured"
+		}
+		var args agent.SearchArgs
+		if err := json.Unmarshal(action.Args, &args); err != nil {
+			return fmt.Sprintf("invalid web_search args: %v", err)
+		}
+		client := agent.NewKagiClient(a.kagiAPIKey)
+		results, err := client.Search(ctx, args)
+		if err != nil {
+			return fmt.Sprintf("web_search error: %v", err)
+		}
+		output, _ := json.Marshal(results)
+		return string(output)
+
+	case tool == "web_summarize":
+		if a.kagiAPIKey == "" {
+			return "web_summarize unavailable: KAGI_API_KEY not configured"
+		}
+		var args agent.SummarizeArgs
+		if err := json.Unmarshal(action.Args, &args); err != nil {
+			return fmt.Sprintf("invalid web_summarize args: %v", err)
+		}
+		client := agent.NewKagiClient(a.kagiAPIKey)
+		result, err := client.Summarize(ctx, args)
+		if err != nil {
+			return fmt.Sprintf("web_summarize error: %v", err)
+		}
+		return result.Output
+
+	case isBashTool(action.Tool):
+		bashResult := executeBashAction(string(action.Args))
+		return bashExecutionSystemMessage("", bashResult)
+
+	default:
+		return fmt.Sprintf("unknown inline read tool: %s", action.Tool)
+	}
+}
+
+func (a *App) finalizeTurn(ctx context.Context, threadID, turnID, assistantMessage string, proposedActions []agent.ProposedAction, result *turnExecutionResult) (*turnExecutionResult, error) {
 	now := time.Now().UTC()
 	nowStr := now.Format(time.RFC3339Nano)
 	expiresAt := now.Add(defaultActionExpiry).Format(time.RFC3339Nano)
-
-	userMessageID := newID("msg")
 	assistantMessageID := ""
 
 	tx, err := a.db.BeginTx(ctx, nil)
@@ -826,25 +948,18 @@ func (a *App) executeTurn(ctx context.Context, threadID, userText, turnID string
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO messages(message_id, thread_id, role, content, created_at)
-		VALUES(?, ?, 'user', ?, ?)
-	`, userMessageID, threadID, userText, nowStr); err != nil {
-		return nil, fmt.Errorf("insert user message: %w", err)
-	}
-
-	actions := make([]*protocolv1.ProposedActionCreated, 0, len(plan.ProposedActions))
-	if len(plan.ProposedActions) == 0 {
+	actions := make([]*protocolv1.ProposedActionCreated, 0, len(proposedActions))
+	if len(proposedActions) == 0 {
 		assistantMessageID = newID("msg")
-		result.AssistantMessage = plan.AssistantMessage
+		result.AssistantMessage = assistantMessage
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO messages(message_id, thread_id, role, content, created_at)
 			VALUES(?, ?, 'assistant', ?, ?)
-		`, assistantMessageID, threadID, plan.AssistantMessage, nowStr); err != nil {
+		`, assistantMessageID, threadID, assistantMessage, nowStr); err != nil {
 			return nil, fmt.Errorf("insert assistant message: %w", err)
 		}
 	} else {
-		for _, proposed := range plan.ProposedActions {
+		for _, proposed := range proposedActions {
 			actionID := newID("act")
 			idempotencyKey := newID("idem")
 			argsJSON := string(proposed.Args)
@@ -878,17 +993,6 @@ func (a *App) executeTurn(ctx context.Context, threadID, userText, turnID string
 		return nil, fmt.Errorf("commit turn tx: %w", err)
 	}
 
-	_, _ = a.appendThreadEvent(ctx, &protocolv1.ThreadEvent{
-		ThreadId:     threadID,
-		TurnId:       turnID,
-		Source:       protocolv1.EventSource_SYSTEM,
-		ContentTrust: protocolv1.ContentTrust_TRUSTED_SYSTEM,
-		Payload: &protocolv1.ThreadEvent_TurnStarted{TurnStarted: &protocolv1.TurnStarted{
-			UserMessageId: userMessageID,
-			TriggerType:   triggerType,
-		}},
-	})
-
 	if len(actions) == 0 {
 		_, _ = a.appendThreadEvent(ctx, &protocolv1.ThreadEvent{
 			ThreadId:     threadID,
@@ -897,7 +1001,7 @@ func (a *App) executeTurn(ctx context.Context, threadID, userText, turnID string
 			ContentTrust: protocolv1.ContentTrust_UNTRUSTED_MODEL,
 			Payload: &protocolv1.ThreadEvent_AssistantTextDelta{AssistantTextDelta: &protocolv1.AssistantTextDelta{
 				SegmentId: "assistant",
-				Delta:     plan.AssistantMessage,
+				Delta:     assistantMessage,
 			}},
 		})
 		_, _ = a.appendThreadEvent(ctx, &protocolv1.ThreadEvent{
@@ -907,7 +1011,7 @@ func (a *App) executeTurn(ctx context.Context, threadID, userText, turnID string
 			ContentTrust: protocolv1.ContentTrust_TRUSTED_SYSTEM,
 			Payload: &protocolv1.ThreadEvent_AssistantMessageCommitted{AssistantMessageCommitted: &protocolv1.AssistantMessageCommitted{
 				MessageId: assistantMessageID,
-				FullText:  plan.AssistantMessage,
+				FullText:  assistantMessage,
 			}},
 		})
 	} else {

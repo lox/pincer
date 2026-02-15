@@ -67,7 +67,8 @@ Steps:
 - [ ] Add bot send tool behind explicit approval.
 - [ ] Keep user mailbox send disabled.
 - [ ] Add Calendar read tool.
-- [ ] Add web search/open read tools with SSRF and size constraints.
+- [x] Add web search tool (Kagi Search API) and web summarize tool (Kagi Universal Summarizer API).
+- [ ] Add web_fetch raw URL read tool with SSRF and size constraints.
 - [ ] Add deterministic approval-card rendering for each tool type.
 
 Exit criteria:
@@ -166,10 +167,15 @@ Exit criteria:
 - [x] Reproducible API and iOS E2E flows.
 - [x] `buf` is pinned in `mise` and used for Go + Swift code generation.
 - [x] iOS consumes `StartTurn`/`WatchThread` for live streaming thinking/output rendering.
+- [x] Inline READ tool execution loop — READ-classified tools execute during the turn without approval, results feed back into planner context.
+- [x] `web_search` tool via Kagi Search API.
+- [x] `web_summarize` tool via Kagi Universal Summarizer API.
+- [x] Safe `run_bash` commands (ls, cat, echo, etc.) execute inline as READ tools.
 - [ ] Upgrade iOS chat markdown rendering to `Textual` for full block-level markdown support.
 - [ ] Phase 2 integrations started.
-- [ ] Turn orchestration and bounded tool-loop implementation is planned.
 
 Next priority:
 
+- [ ] Test inline tool loop end-to-end with live Kagi API.
+- [ ] Add web_fetch tool for raw URL content retrieval (with SSRF protections).
 - [ ] Continue Phase 3 foundation on turn orchestration and bounded tool-loop planning.

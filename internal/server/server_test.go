@@ -134,23 +134,23 @@ func TestPostMessageWithProposalSkipsAssistantChatBubble(t *testing.T) {
 			ProposedActions: []agent.ProposedAction{
 				{
 					Tool:          "run_bash",
-					Args:          json.RawMessage(`{"command":"pwd"}`),
+					Args:          json.RawMessage(`{"command":"deploy"}`),
 					Justification: "User requested shell command.",
-					RiskClass:     "READ",
-				},
-			},
-		},
-	})
-	srv := httptest.NewServer(app.Handler())
-	defer srv.Close()
+					RiskClass:     "HIGH",
+					},
+					},
+					},
+					})
+					srv := httptest.NewServer(app.Handler())
+					defer srv.Close()
 
-	token := bootstrapAuthToken(t, srv.URL)
-	threadID := createThread(t, srv.URL, token)
-	postMessage(t, srv.URL, token, threadID, "run pwd")
+					token := bootstrapAuthToken(t, srv.URL)
+					threadID := createThread(t, srv.URL, token)
+					postMessage(t, srv.URL, token, threadID, "run deploy")
 
-	msgs := listMessages(t, srv.URL, token, threadID)
-	if len(msgs) != 1 {
-		t.Fatalf("expected only 1 message in thread, got %d", len(msgs))
+					msgs := listMessages(t, srv.URL, token, threadID)
+					if len(msgs) != 1 {
+					t.Fatalf("expected only 1 message in thread, got %d", len(msgs))
 	}
 	if msgs[0].Role != "user" {
 		t.Fatalf("expected first message role user, got %q", msgs[0].Role)
@@ -166,26 +166,26 @@ func TestApproveChatActionWritesApprovedSystemMarker(t *testing.T) {
 			ProposedActions: []agent.ProposedAction{
 				{
 					Tool:          "run_bash",
-					Args:          json.RawMessage(`{"command":"pwd"}`),
+					Args:          json.RawMessage(`{"command":"deploy"}`),
 					Justification: "User requested shell command.",
-					RiskClass:     "READ",
-				},
-			},
-		},
-	})
-	srv := httptest.NewServer(app.Handler())
-	defer srv.Close()
+					RiskClass:     "HIGH",
+					},
+					},
+					},
+					})
+					srv := httptest.NewServer(app.Handler())
+					defer srv.Close()
 
-	token := bootstrapAuthToken(t, srv.URL)
-	threadID := createThread(t, srv.URL, token)
-	postMessage(t, srv.URL, token, threadID, "run pwd")
+					token := bootstrapAuthToken(t, srv.URL)
+					threadID := createThread(t, srv.URL, token)
+					postMessage(t, srv.URL, token, threadID, "run deploy")
 
-	pending := listApprovals(t, srv.URL, token, "pending")
-	if len(pending) != 1 {
-		t.Fatalf("expected 1 pending approval, got %d", len(pending))
-	}
-	actionID := pending[0].ActionID
-	approveAction(t, srv.URL, token, actionID)
+					pending := listApprovals(t, srv.URL, token, "pending")
+					if len(pending) != 1 {
+					t.Fatalf("expected 1 pending approval, got %d", len(pending))
+					}
+					actionID := pending[0].ActionID
+					approveAction(t, srv.URL, token, actionID)
 
 	messages := listMessages(t, srv.URL, token, threadID)
 	approvedMarker := fmt.Sprintf("Action %s approved.", actionID)
@@ -336,19 +336,19 @@ func TestRejectPendingAction(t *testing.T) {
 			ProposedActions: []agent.ProposedAction{
 				{
 					Tool:          "run_bash",
-					Args:          json.RawMessage(`{"command":"pwd"}`),
+					Args:          json.RawMessage(`{"command":"deploy"}`),
 					Justification: "User requested shell command.",
-					RiskClass:     "READ",
-				},
-			},
-		},
-	})
-	srv := httptest.NewServer(app.Handler())
-	defer srv.Close()
+					RiskClass:     "HIGH",
+					},
+					},
+					},
+					})
+					srv := httptest.NewServer(app.Handler())
+					defer srv.Close()
 
-	token := bootstrapAuthToken(t, srv.URL)
-	threadID := createThread(t, srv.URL, token)
-	postMessage(t, srv.URL, token, threadID, "reject me")
+					token := bootstrapAuthToken(t, srv.URL)
+					threadID := createThread(t, srv.URL, token)
+					postMessage(t, srv.URL, token, threadID, "reject me")
 
 	pending := listApprovals(t, srv.URL, token, "pending")
 	if len(pending) != 1 {
@@ -380,19 +380,19 @@ func TestApproveRejectNonPendingReturnsConflict(t *testing.T) {
 			ProposedActions: []agent.ProposedAction{
 				{
 					Tool:          "run_bash",
-					Args:          json.RawMessage(`{"command":"pwd"}`),
+					Args:          json.RawMessage(`{"command":"deploy"}`),
 					Justification: "User requested shell command.",
-					RiskClass:     "READ",
-				},
-			},
-		},
-	})
-	srv := httptest.NewServer(app.Handler())
-	defer srv.Close()
+					RiskClass:     "HIGH",
+					},
+					},
+					},
+					})
+					srv := httptest.NewServer(app.Handler())
+					defer srv.Close()
 
-	token := bootstrapAuthToken(t, srv.URL)
-	threadID := createThread(t, srv.URL, token)
-	postMessage(t, srv.URL, token, threadID, "approve then retry")
+					token := bootstrapAuthToken(t, srv.URL)
+					threadID := createThread(t, srv.URL, token)
+					postMessage(t, srv.URL, token, threadID, "approve then retry")
 
 	pending := listApprovals(t, srv.URL, token, "pending")
 	if len(pending) != 1 {
@@ -423,19 +423,19 @@ func TestPendingActionExpiresToRejected(t *testing.T) {
 			ProposedActions: []agent.ProposedAction{
 				{
 					Tool:          "run_bash",
-					Args:          json.RawMessage(`{"command":"pwd"}`),
+					Args:          json.RawMessage(`{"command":"deploy"}`),
 					Justification: "User requested shell command.",
-					RiskClass:     "READ",
-				},
-			},
-		},
-	})
-	srv := httptest.NewServer(app.Handler())
-	defer srv.Close()
+					RiskClass:     "HIGH",
+					},
+					},
+					},
+					})
+					srv := httptest.NewServer(app.Handler())
+					defer srv.Close()
 
-	token := bootstrapAuthToken(t, srv.URL)
-	threadID := createThread(t, srv.URL, token)
-	postMessage(t, srv.URL, token, threadID, "expire me")
+					token := bootstrapAuthToken(t, srv.URL)
+					threadID := createThread(t, srv.URL, token)
+					postMessage(t, srv.URL, token, threadID, "expire me")
 
 	pending := listApprovals(t, srv.URL, token, "pending")
 	if len(pending) != 1 {

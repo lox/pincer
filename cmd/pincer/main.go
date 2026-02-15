@@ -22,6 +22,7 @@ type cliConfig struct {
 	TokenHMACKey      string `name:"token-hmac-key" help:"HMAC key for bearer token signing." env:"PINCER_TOKEN_HMAC_KEY"`
 	OpenRouterAPIKey  string `name:"openrouter-api-key" help:"OpenRouter API key." env:"OPENROUTER_API_KEY"`
 	OpenRouterBaseURL string `name:"openrouter-base-url" help:"OpenRouter API base URL." env:"OPENROUTER_BASE_URL"`
+	KagiAPIKey        string `name:"kagi-api-key" help:"Kagi API key for web search and summarization." env:"KAGI_API_KEY"`
 	ModelPrimary      string `name:"model-primary" help:"Primary model ID." env:"PINCER_MODEL_PRIMARY" default:"anthropic/claude-opus-4.6"`
 	ModelFallback     string `name:"model-fallback" help:"Fallback model ID." env:"PINCER_MODEL_FALLBACK"`
 	LogLevel          string `name:"log-level" help:"Server log level." env:"PINCER_LOG_LEVEL" default:"info" enum:"debug,info,warn,error,fatal"`
@@ -55,6 +56,7 @@ func main() {
 		TokenHMACKey:      cfg.TokenHMACKey,
 		OpenRouterAPIKey:  cfg.OpenRouterAPIKey,
 		OpenRouterBaseURL: cfg.OpenRouterBaseURL,
+		KagiAPIKey:        cfg.KagiAPIKey,
 		ModelPrimary:      cfg.ModelPrimary,
 		ModelFallback:     cfg.ModelFallback,
 		Logger:            logger.With("component", "server"),
@@ -118,6 +120,7 @@ func main() {
 		"addr", cfg.HTTPAddr,
 		"db_path", cfg.DBPath,
 		"openrouter_enabled", cfg.OpenRouterAPIKey != "",
+		"kagi_enabled", cfg.KagiAPIKey != "",
 		"model_primary", cfg.ModelPrimary,
 	)
 	if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

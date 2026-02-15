@@ -56,6 +56,7 @@ type AppConfig struct {
 	TokenHMACKey            string
 	OpenRouterAPIKey        string
 	OpenRouterBaseURL       string
+	KagiAPIKey              string
 	ModelPrimary            string
 	ModelFallback           string
 	Logger                  *charmLog.Logger
@@ -69,6 +70,7 @@ type App struct {
 	tokenHMACKey           []byte
 	logger                 *charmLog.Logger
 	planner                agent.Planner
+	kagiAPIKey             string
 	ownerID                string
 	llmConfigured          bool
 	stopCh                 chan struct{}
@@ -259,6 +261,7 @@ func New(cfg AppConfig) (*App, error) {
 		tokenHMACKey:           []byte(tokenHMACKey),
 		logger:                 logger,
 		planner:                planner,
+		kagiAPIKey:             strings.TrimSpace(cfg.KagiAPIKey),
 		ownerID:                defaultOwnerID,
 		llmConfigured:          cfg.OpenRouterAPIKey != "" || cfg.Planner != nil,
 		stopCh:                 make(chan struct{}),
@@ -809,6 +812,8 @@ func riskClassForTool(tool string) string {
 	}
 
 	switch strings.ToLower(strings.TrimSpace(tool)) {
+	case "web_search", "web_summarize":
+		return "READ"
 	case "gmail_send_draft", "gmail_send_message":
 		return "EXFILTRATION"
 	case "artifact_put", "notes_write", "gmail_create_draft_reply":

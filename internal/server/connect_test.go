@@ -22,9 +22,9 @@ func TestStartTurnStreamsLifecycleEvents(t *testing.T) {
 			ProposedActions: []agent.ProposedAction{
 				{
 					Tool:          "run_bash",
-					Args:          []byte(`{"command":"echo hello"}`),
+					Args:          []byte(`{"command":"deploy hello"}`),
 					Justification: "User requested shell command.",
-					RiskClass:     "READ",
+					RiskClass:     "HIGH",
 				},
 			},
 		},
@@ -93,9 +93,9 @@ func TestSendTurnReturnsProposedActionID(t *testing.T) {
 			ProposedActions: []agent.ProposedAction{
 				{
 					Tool:          "run_bash",
-					Args:          []byte(`{"command":"pwd"}`),
+					Args:          []byte(`{"command":"deploy"}`),
 					Justification: "User requested shell command.",
-					RiskClass:     "READ",
+					RiskClass:     "HIGH",
 				},
 			},
 		},
@@ -153,8 +153,8 @@ func TestSendTurnReturnsProposedActionID(t *testing.T) {
 	if approval.GetPreview() == nil {
 		t.Fatalf("expected preview payload in approval response")
 	}
-	if command := approval.GetPreview().GetFields()["command"].GetStringValue(); command != "pwd" {
-		t.Fatalf("expected preview.command to be %q, got %q", "pwd", command)
+	if command := approval.GetPreview().GetFields()["command"].GetStringValue(); command != "deploy" {
+		t.Fatalf("expected preview.command to be %q, got %q", "deploy", command)
 	}
 }
 
@@ -167,9 +167,9 @@ func TestWatchThreadStreamsBashOutputAndExecutionStatus(t *testing.T) {
 			ProposedActions: []agent.ProposedAction{
 				{
 					Tool:          "run_bash",
-					Args:          []byte(`{"command":"printf 'stdout-line\\n'; printf 'stderr-line\\n' 1>&2"}`),
+					Args:          []byte(`{"command":"deploy --verbose"}`),
 					Justification: "User requested shell command.",
-					RiskClass:     "READ",
+					RiskClass:     "HIGH",
 				},
 			},
 		},
