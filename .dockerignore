@@ -1,0 +1,7 @@
+.git
+.github
+ios
+pincer.db
+pincer.db-shm
+pincer.db-wal
+tmp

@@ -3,6 +3,7 @@ import Foundation
 enum AppConfig {
     static let tokenDefaultsKey = "PINCER_BEARER_TOKEN"
     static let baseURLDefaultsKey = "PINCER_BASE_URL"
+    static let baseURLEnvironmentKey = "PINCER_IOS_BASE_URL"
     static let defaultBaseURL = URL(string: "http://127.0.0.1:8080")!
 
     static var baseURL: URL {
@@ -10,6 +11,16 @@ enum AppConfig {
     }
 
     static var baseURLString: String {
+        if let raw = ProcessInfo.processInfo.environment[baseURLEnvironmentKey],
+           let parsed = parseBaseURL(raw) {
+            return parsed.absoluteString
+        }
+
+        if let raw = ProcessInfo.processInfo.environment[baseURLDefaultsKey],
+           let parsed = parseBaseURL(raw) {
+            return parsed.absoluteString
+        }
+
         if let raw = UserDefaults.standard.string(forKey: baseURLDefaultsKey),
            let parsed = parseBaseURL(raw) {
             return parsed.absoluteString

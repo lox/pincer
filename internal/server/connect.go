@@ -733,6 +733,7 @@ func (a *App) GetPolicySummary(context.Context, *connect.Request[protocolv1.GetP
 		"external_write_requires_approval": true,
 		"background_jobs_propose_only":     true,
 		"run_bash_requires_approval":       true,
+		"llm_configured":                   a.llmConfigured,
 	})
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("build policy summary: %w", err))

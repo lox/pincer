@@ -1,11 +1,35 @@
 import Foundation
 
+enum BackendCheckStatus: Equatable {
+    case idle
+    case running
+    case ok
+    case warning
+    case error
+}
+
+struct BackendCheckItem: Identifiable, Equatable {
+    let id: String
+    let title: String
+    var status: BackendCheckStatus
+    var detail: String
+
+    init(id: String, title: String, status: BackendCheckStatus = .idle, detail: String = "") {
+        self.id = id
+        self.title = title
+        self.status = status
+        self.detail = detail
+    }
+}
+
 @MainActor
 final class SettingsViewModel: ObservableObject {
     @Published var devices: [Device] = []
     @Published var backendURL: String
     @Published var errorText: String?
     @Published var isBusy = false
+    @Published var isCheckingBackend = false
+    @Published var backendChecks: [BackendCheckItem] = []
 
     private let client: APIClient
 
@@ -58,5 +82,62 @@ final class SettingsViewModel: ObservableObject {
         await client.setBaseURL(AppConfig.defaultBaseURL)
         devices = []
         await refresh()
+    }
+
+    func checkBackend() async {
+        if isCheckingBackend {
+            return
+        }
+
+        let raw = backendURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        isCheckingBackend = true
+        backendChecks = [
+            BackendCheckItem(id: "url", title: "URL format", status: .running),
+            BackendCheckItem(id: "rpc", title: "RPC reachable", status: .idle),
+            BackendCheckItem(id: "pairing", title: "Pairing available", status: .idle),
+        ]
+        defer { isCheckingBackend = false }
+
+        guard let parsedURL = AppConfig.parseBaseURL(raw) else {
+            setBackendCheck(id: "url", status: .error, detail: "Enter a valid URL (http://192.168.1.50:8080 or https://pincer.tailnet.ts.net).")
+            setBackendCheck(id: "rpc", status: .idle, detail: "")
+            setBackendCheck(id: "pairing", status: .idle, detail: "")
+            return
+        }
+
+        setBackendCheck(id: "url", status: .ok, detail: parsedURL.absoluteString)
+
+        setBackendCheck(id: "rpc", status: .running, detail: "")
+        let rpcProbe = await client.probeBackendRPC(baseURL: parsedURL)
+        if rpcProbe.code == "ok" || rpcProbe.code == "unauthenticated" {
+            let detail = rpcProbe.code == "unauthenticated" ? "reachable (auth required)" : "reachable"
+            setBackendCheck(id: "rpc", status: .ok, detail: detail)
+        } else {
+            setBackendCheck(
+                id: "rpc",
+                status: .error,
+                detail: "failed (\(rpcProbe.code))\(rpcProbe.detail.isEmpty ? "" : ": ")\(rpcProbe.detail)"
+            )
+        }
+
+        setBackendCheck(id: "pairing", status: .running, detail: "")
+        let pairingProbe = await client.probePairingEndpoint(baseURL: parsedURL)
+        if pairingProbe.code == "ok" {
+            setBackendCheck(id: "pairing", status: .ok, detail: "create pairing code: ok")
+        } else if pairingProbe.code == "unauthenticated" {
+            setBackendCheck(id: "pairing", status: .ok, detail: "server already paired — authorize from existing device to add this one")
+        } else {
+            setBackendCheck(
+                id: "pairing",
+                status: .error,
+                detail: "failed (\(pairingProbe.code))\(pairingProbe.detail.isEmpty ? "" : ": ")\(pairingProbe.detail)"
+            )
+        }
+    }
+
+    private func setBackendCheck(id: String, status: BackendCheckStatus, detail: String) {
+        guard let index = backendChecks.firstIndex(where: { $0.id == id }) else { return }
+        backendChecks[index].status = status
+        backendChecks[index].detail = detail
     }
 }

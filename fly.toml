@@ -1,0 +1,18 @@
+app = "pincer"
+primary_region = "syd"
+
+[build]
+  dockerfile = "Dockerfile.fly"
+
+[env]
+  PINCER_PORT = "8080"
+  PINCER_HTTP_ADDR = "127.0.0.1:8080"
+  PINCER_DB_PATH = "/data/pincer.db"
+  TS_STATE_DIR = "/data/tailscale"
+  TS_HOSTNAME = "pincer-host"
+  TS_SERVICE_NAME = "pincer"
+  TS_SERVE_PORT = "443"
+
+[[mounts]]
+  source = "pincer_data"
+  destination = "/data"

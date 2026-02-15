@@ -1,0 +1,41 @@
+FROM golang:1.23.6-bookworm AS builder
+
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+ARG TARGETOS
+ARG TARGETARCH
+RUN CGO_ENABLED=0 GOOS="${TARGETOS:-linux}" GOARCH="${TARGETARCH:-amd64}" go build -trimpath -ldflags="-s -w" -o /out/pincer ./cmd/pincer
+
+FROM tailscale/tailscale:stable AS tailscale
+
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY --from=builder /out/pincer /app/pincer
+COPY --from=tailscale /usr/local/bin/tailscaled /usr/local/bin/tailscaled
+COPY --from=tailscale /usr/local/bin/tailscale /usr/local/bin/tailscale
+COPY scripts/fly_entrypoint.sh /app/fly_entrypoint.sh
+
+RUN chmod +x /app/pincer /app/fly_entrypoint.sh \
+  && mkdir -p /data /var/run/tailscale
+
+ENV PINCER_PORT=8080
+ENV PINCER_HTTP_ADDR=127.0.0.1:8080
+ENV PINCER_DB_PATH=/data/pincer.db
+ENV TS_STATE_DIR=/data/tailscale
+ENV TS_SOCKET=/var/run/tailscale/tailscaled.sock
+ENV TS_HOSTNAME=pincer
+ENV TS_SERVICE_NAME=pincer
+ENV TS_SERVE_PORT=443
+
+ENTRYPOINT ["/app/fly_entrypoint.sh"]

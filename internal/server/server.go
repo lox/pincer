@@ -70,6 +70,7 @@ type App struct {
 	logger                 *charmLog.Logger
 	planner                agent.Planner
 	ownerID                string
+	llmConfigured          bool
 	stopCh                 chan struct{}
 	doneCh                 chan struct{}
 	closeOnce              sync.Once
@@ -259,6 +260,7 @@ func New(cfg AppConfig) (*App, error) {
 		logger:                 logger,
 		planner:                planner,
 		ownerID:                defaultOwnerID,
+		llmConfigured:          cfg.OpenRouterAPIKey != "" || cfg.Planner != nil,
 		stopCh:                 make(chan struct{}),
 		doneCh:                 make(chan struct{}),
 		actionExecutorInterval: interval,

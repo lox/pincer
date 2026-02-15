@@ -13,7 +13,19 @@ struct ThreadMessagesSnapshot {
     let lastSequence: UInt64
 }
 
+struct BackendProbeResult: Sendable, Equatable {
+    let code: String
+    let detail: String
+}
+
 actor APIClient {
+    // Unary calls should fail fast so UI actions (like Settings "Save") don't
+    // get stuck indefinitely when the backend is unreachable.
+    private static let unaryRequestTimeoutSeconds: TimeInterval = 15
+    private static let unaryResourceTimeoutSeconds: TimeInterval = 60
+
+    // Streaming endpoints (watch/start turn) intentionally run long-lived HTTP
+    // requests.
     private static let streamRequestTimeoutSeconds: TimeInterval = 60 * 20
     private static let streamResourceTimeoutSeconds: TimeInterval = 60 * 60 * 24
 
@@ -36,13 +48,14 @@ actor APIClient {
         self.baseURL = baseURL
         self.token = token
 
-        let transport = Self.makeTransport(baseURL: baseURL)
-        self.authClient = Pincer_Protocol_V1_AuthServiceClient(client: transport)
-        self.threadsClient = Pincer_Protocol_V1_ThreadsServiceClient(client: transport)
-        self.turnsClient = Pincer_Protocol_V1_TurnsServiceClient(client: transport)
-        self.eventsClient = Pincer_Protocol_V1_EventsServiceClient(client: transport)
-        self.approvalsClient = Pincer_Protocol_V1_ApprovalsServiceClient(client: transport)
-        self.devicesClient = Pincer_Protocol_V1_DevicesServiceClient(client: transport)
+        let unaryTransport = Self.makeUnaryTransport(baseURL: baseURL)
+        let streamTransport = Self.makeStreamTransport(baseURL: baseURL)
+        self.authClient = Pincer_Protocol_V1_AuthServiceClient(client: unaryTransport)
+        self.threadsClient = Pincer_Protocol_V1_ThreadsServiceClient(client: unaryTransport)
+        self.turnsClient = Pincer_Protocol_V1_TurnsServiceClient(client: streamTransport)
+        self.eventsClient = Pincer_Protocol_V1_EventsServiceClient(client: streamTransport)
+        self.approvalsClient = Pincer_Protocol_V1_ApprovalsServiceClient(client: unaryTransport)
+        self.devicesClient = Pincer_Protocol_V1_DevicesServiceClient(client: unaryTransport)
 
         AppConfig.setBaseURL(baseURL)
     }
@@ -53,13 +66,14 @@ actor APIClient {
         self.baseURL = baseURL
         AppConfig.setBaseURL(baseURL)
 
-        let transport = Self.makeTransport(baseURL: baseURL)
-        self.authClient = Pincer_Protocol_V1_AuthServiceClient(client: transport)
-        self.threadsClient = Pincer_Protocol_V1_ThreadsServiceClient(client: transport)
-        self.turnsClient = Pincer_Protocol_V1_TurnsServiceClient(client: transport)
-        self.eventsClient = Pincer_Protocol_V1_EventsServiceClient(client: transport)
-        self.approvalsClient = Pincer_Protocol_V1_ApprovalsServiceClient(client: transport)
-        self.devicesClient = Pincer_Protocol_V1_DevicesServiceClient(client: transport)
+        let unaryTransport = Self.makeUnaryTransport(baseURL: baseURL)
+        let streamTransport = Self.makeStreamTransport(baseURL: baseURL)
+        self.authClient = Pincer_Protocol_V1_AuthServiceClient(client: unaryTransport)
+        self.threadsClient = Pincer_Protocol_V1_ThreadsServiceClient(client: unaryTransport)
+        self.turnsClient = Pincer_Protocol_V1_TurnsServiceClient(client: streamTransport)
+        self.eventsClient = Pincer_Protocol_V1_EventsServiceClient(client: streamTransport)
+        self.approvalsClient = Pincer_Protocol_V1_ApprovalsServiceClient(client: unaryTransport)
+        self.devicesClient = Pincer_Protocol_V1_DevicesServiceClient(client: unaryTransport)
 
         clearToken()
     }
@@ -304,13 +318,35 @@ actor APIClient {
         return .invalidResponse
     }
 
-    private static func makeTransport(baseURL: URL) -> ProtocolClient {
+    private static func makeUnaryTransport(baseURL: URL) -> ProtocolClient {
+        makeTransport(
+            baseURL: baseURL,
+            timeoutIntervalForRequest: unaryRequestTimeoutSeconds,
+            timeoutIntervalForResource: unaryResourceTimeoutSeconds
+        )
+    }
+
+    private static func makeStreamTransport(baseURL: URL) -> ProtocolClient {
+        makeTransport(
+            baseURL: baseURL,
+            timeoutIntervalForRequest: streamRequestTimeoutSeconds,
+            timeoutIntervalForResource: streamResourceTimeoutSeconds
+        )
+    }
+
+    private static func makeTransport(
+        baseURL: URL,
+        timeoutIntervalForRequest: TimeInterval,
+        timeoutIntervalForResource: TimeInterval
+    ) -> ProtocolClient {
         let host = baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
 
         let sessionConfig = URLSessionConfiguration.default
-        sessionConfig.timeoutIntervalForRequest = streamRequestTimeoutSeconds
-        sessionConfig.timeoutIntervalForResource = streamResourceTimeoutSeconds
-        sessionConfig.waitsForConnectivity = true
+        sessionConfig.timeoutIntervalForRequest = timeoutIntervalForRequest
+        sessionConfig.timeoutIntervalForResource = timeoutIntervalForResource
+        // Fail fast; otherwise URLSession can wait indefinitely for a route that
+        // might never become available (for example when Tailscale isn't connected).
+        sessionConfig.waitsForConnectivity = false
         let httpClient = URLSessionHTTPClient(configuration: sessionConfig)
 
         return ProtocolClient(httpClient: httpClient, config: .init(
@@ -414,5 +450,38 @@ actor APIClient {
     private func clearToken() {
         token = ""
         UserDefaults.standard.removeObject(forKey: AppConfig.tokenDefaultsKey)
+    }
+
+    // Probes used by the Settings screen when debugging backend connectivity.
+    // These should never mutate auth state.
+    func probeBackendRPC(baseURL: URL) async -> BackendProbeResult {
+        let transport = Self.makeUnaryTransport(baseURL: baseURL)
+        let systemClient = Pincer_Protocol_V1_SystemServiceClient(client: transport)
+        let response = await systemClient.getPolicySummary(request: .init(), headers: [:])
+        return Self.probeResult(response)
+    }
+
+    func probePairingEndpoint(baseURL: URL) async -> BackendProbeResult {
+        let transport = Self.makeUnaryTransport(baseURL: baseURL)
+        let authClient = Pincer_Protocol_V1_AuthServiceClient(client: transport)
+        let response = await authClient.createPairingCode(request: .init(), headers: [:])
+        return Self.probeResult(response)
+    }
+
+    private static func probeResult<T: SwiftProtobuf.Message>(_ response: ResponseMessage<T>) -> BackendProbeResult {
+        if response.message != nil {
+            return BackendProbeResult(code: response.code.name, detail: "")
+        }
+
+        if let rpcError = response.error {
+            let detail = rpcError.message ?? rpcError.exception?.localizedDescription ?? ""
+            return BackendProbeResult(code: rpcError.code.name, detail: detail)
+        }
+
+        if response.code != .ok {
+            return BackendProbeResult(code: response.code.name, detail: "")
+        }
+
+        return BackendProbeResult(code: "unknown", detail: "")
     }
 }

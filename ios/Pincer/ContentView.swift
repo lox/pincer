@@ -1041,6 +1041,11 @@ private struct SettingsView: View {
                         BackendConfigCard(
                             backendURL: $model.backendURL,
                             isBusy: model.isBusy,
+                            isChecking: model.isCheckingBackend,
+                            checks: model.backendChecks,
+                            onCheck: {
+                                Task { await model.checkBackend() }
+                            },
                             onSave: {
                                 Task { await model.saveBackendURL() }
                             },
@@ -1131,6 +1136,9 @@ private func dismissKeyboard() {
 private struct BackendConfigCard: View {
     @Binding var backendURL: String
     let isBusy: Bool
+    let isChecking: Bool
+    let checks: [BackendCheckItem]
+    let onCheck: () -> Void
     let onSave: () -> Void
     let onReset: () -> Void
     @FocusState private var isAddressFocused: Bool
@@ -1171,8 +1179,18 @@ private struct BackendConfigCard: View {
                         .font(.system(.subheadline, design: .rounded).weight(.semibold))
                         .foregroundStyle(PincerPalette.accent)
                 }
-                .disabled(isBusy)
+                .disabled(isBusy || isChecking)
                 .accessibilityIdentifier(A11y.settingsBackendSaveButton)
+
+                Button(action: {
+                    isAddressFocused = false
+                    onCheck()
+                }) {
+                    Text(isChecking ? "Checking..." : "Check")
+                        .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                        .foregroundStyle(PincerPalette.textSecondary)
+                }
+                .disabled(isBusy || isChecking)
 
                 Button(action: {
                     isAddressFocused = false
@@ -1182,8 +1200,22 @@ private struct BackendConfigCard: View {
                         .font(.system(.subheadline, design: .rounded).weight(.semibold))
                         .foregroundStyle(PincerPalette.textSecondary)
                 }
-                .disabled(isBusy)
+                .disabled(isBusy || isChecking)
                 .accessibilityIdentifier(A11y.settingsBackendResetButton)
+            }
+
+            if !checks.isEmpty {
+                Divider()
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Checks")
+                        .font(.system(.footnote, design: .rounded).weight(.semibold))
+                        .foregroundStyle(PincerPalette.textSecondary)
+
+                    ForEach(checks) { item in
+                        BackendCheckRow(item: item)
+                    }
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1195,6 +1227,56 @@ private struct BackendConfigCard: View {
                     isAddressFocused = false
                 }
             }
+        }
+    }
+}
+
+private struct BackendCheckRow: View {
+    let item: BackendCheckItem
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            statusView
+                .frame(width: 18)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.title)
+                    .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                    .foregroundStyle(PincerPalette.textPrimary)
+
+                if !item.detail.isEmpty {
+                    Text(item.detail)
+                        .font(.system(.footnote, design: .rounded))
+                        .foregroundStyle(PincerPalette.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var statusView: some View {
+        switch item.status {
+        case .idle:
+            Image(systemName: "circle")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(PincerPalette.textTertiary)
+        case .running:
+            ProgressView()
+                .controlSize(.small)
+                .tint(PincerPalette.textSecondary)
+        case .ok:
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(PincerPalette.success)
+        case .warning:
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(PincerPalette.warning)
+        case .error:
+            Image(systemName: "xmark.octagon.fill")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(PincerPalette.danger)
         }
     }
 }

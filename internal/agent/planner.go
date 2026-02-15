@@ -56,7 +56,7 @@ func NewStaticPlanner() Planner {
 
 func (staticPlanner) Plan(_ context.Context, _ PlanRequest) (PlanResult, error) {
 	return PlanResult{
-		AssistantMessage: "No external actions were proposed.",
+		AssistantMessage: "No LLM is configured. Set OPENROUTER_API_KEY on the backend to enable chat.",
 		ProposedActions:  []ProposedAction{},
 	}, nil
 }
