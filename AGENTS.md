@@ -114,6 +114,8 @@ A change is only complete when:
 2. It is reflected in docs if behavior changed.
 3. The relevant `mise` test/build command succeeds.
 
+Before committing, always check whether `README.md`, `PLAN.md`, `docs/spec.md`, or `docs/protocol.md` need updating to reflect the change. Do not commit code changes that alter user-facing behavior or add/remove features without updating the relevant docs in the same commit.
+
 ## 11. Reproducible local E2E flow (tmux + API + iOS)
 
 This repo includes a repeatable E2E path. Use it before/after changing approval flow code.

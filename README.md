@@ -49,7 +49,9 @@ Go Backend (single binary)
 - **Device pairing & auth** — pairing codes, opaque bearer tokens (`pnr_` prefix), HMAC-signed, device revocation.
 - **Chat with tool use** — threaded conversations via ConnectRPC; the planner calls tools using native OpenAI function calling.
 - **Approval-gated execution** — all external actions (e.g. `run_bash`) require explicit user approval before execution. Results are audited and rendered inline in chat.
-- **Inline read tools** — READ-classified tools (`web_search`, `web_summarize`) execute during the turn without approval; results feed back into planner context.
+- **Inline read tools** — READ-classified tools (`web_search`, `web_summarize`, `web_fetch`) execute during the turn without approval; results feed back into planner context.
+- **Web fetch with SSRF protections** — `web_fetch` retrieves raw URL content with private/loopback IP blocking, redirect caps, response size limits, and HTML-to-markdown conversion. Prefers Cloudflare Markdown for Agents via content negotiation.
+- **Domain capability leases** — first `web_fetch` to an unknown domain requires approval (exfiltration protection); approving grants the domain for the thread, so subsequent fetches execute inline.
 - **Live streaming** — turn progress, thinking indicators, and command output stream to the iOS app in real time via `StartTurn`/`WatchThread`.
 - **iOS control app** — SwiftUI chat with full markdown rendering (via Textual), approvals tab, device/session management, and settings.
 - **Audit log** — every side-effect transition (`proposed → approved → executed`) is recorded and queryable.
