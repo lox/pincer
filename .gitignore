@@ -2,3 +2,5 @@
 pincer.db
 pincer.db-shm
 pincer.db-wal
+xcuserdata/
+*.xcuserstate
