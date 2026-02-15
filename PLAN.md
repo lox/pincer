@@ -1,7 +1,7 @@
 # Pincer Implementation Plan
 
 Status: Active
-Last updated: 2026-02-14
+Last updated: 2026-02-15
 
 This document tracks phased delivery and concrete implementation status.
 The canonical end-state design is in `docs/spec.md`.
@@ -170,8 +170,9 @@ Exit criteria:
 - [x] Inline READ tool execution loop — READ-classified tools execute during the turn without approval, results feed back into planner context.
 - [x] `web_search` tool via Kagi Search API.
 - [x] `web_summarize` tool via Kagi Universal Summarizer API.
-- [x] Safe `run_bash` commands (ls, cat, echo, etc.) execute inline as READ tools.
-- [ ] Upgrade iOS chat markdown rendering to `Textual` for full block-level markdown support.
+- [x] Native OpenAI tool calling (function calling API) replaces `response_format: json_object` in planner.
+- [x] All `run_bash` commands require explicit approval (no silent READ bypass). Matches spec §8.7.
+- [x] Upgrade iOS chat markdown rendering to `Textual` for full block-level markdown support.
 - [ ] Phase 2 integrations started.
 
 Next priority:

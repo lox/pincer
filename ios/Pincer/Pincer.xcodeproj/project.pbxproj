@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		00BB6F4CBB92D09472C7C7E0 /* ErrorText.swift in Sources */ = {isa = PBXBuildFile; fileRef = E79B8CDFD73AC6C0F7C663C7 /* ErrorText.swift */; };
+		03F3DD50F7985266986ADA1C /* Textual in Frameworks */ = {isa = PBXBuildFile; productRef = FD02697CEA7D5723A3A119BD /* Textual */; };
 		0B16F2765408205AB7554F1A /* AppConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 044069EE4D0C506D769F1321 /* AppConfig.swift */; };
 		0E9B79A9C8A77EB25816CEA0 /* protocol.connect.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8EB993A5C6FCC71BA1B0BC8E /* protocol.connect.swift */; };
 		1AF7E5AA1EA446E74FF45490 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B1527160929BF525EC809E77 /* Assets.xcassets */; };
@@ -73,6 +74,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A2C37C3D860188BB38E3BEDF /* Connect in Frameworks */,
+				03F3DD50F7985266986ADA1C /* Textual in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -210,6 +212,7 @@
 			name = Pincer;
 			packageProductDependencies = (
 				6FE2BA4F0A5FEBED804281DF /* Connect */,
+				FD02697CEA7D5723A3A119BD /* Textual */,
 			);
 			productName = Pincer;
 			productReference = F2C5D45D4406B02D1F6C96FB /* Pincer.app */;
@@ -236,6 +239,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				E5774C441A981FEAA943D03D /* XCRemoteSwiftPackageReference "connect-swift" */,
+				4D79293C7A3B87AAD9D1A337 /* XCRemoteSwiftPackageReference "textual" */,
 			);
 			preferredProjectObjectVersion = 77;
 			projectDirPath = "";
@@ -534,6 +538,14 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		4D79293C7A3B87AAD9D1A337 /* XCRemoteSwiftPackageReference "textual" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/gonzalezreal/textual.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.3.1;
+			};
+		};
 		E5774C441A981FEAA943D03D /* XCRemoteSwiftPackageReference "connect-swift" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/connectrpc/connect-swift.git";
@@ -549,6 +561,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = E5774C441A981FEAA943D03D /* XCRemoteSwiftPackageReference "connect-swift" */;
 			productName = Connect;
+		};
+		FD02697CEA7D5723A3A119BD /* Textual */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4D79293C7A3B87AAD9D1A337 /* XCRemoteSwiftPackageReference "textual" */;
+			productName = Textual;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

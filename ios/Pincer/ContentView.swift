@@ -1,4 +1,5 @@
 import SwiftUI
+import Textual
 import UIKit
 
 private enum A11y {
@@ -100,7 +101,7 @@ private struct ChatView: View {
                 VStack(spacing: 10) {
                     ScrollViewReader { reader in
                         ScrollView(showsIndicators: false) {
-                            LazyVStack(alignment: .leading, spacing: 10) {
+                            VStack(alignment: .leading, spacing: 10) {
                                 if model.messages.isEmpty {
                                     EmptyChatCard()
                                 }
@@ -444,11 +445,15 @@ private struct ChatMessageRow: View {
                         ToolExecutionStreamingCard(content: message.content)
                     } else if let parsedBashExecution {
                         BashExecutionMessageCard(parsed: parsedBashExecution)
+                    } else if isUser {
+                        Text(message.content)
+                            .font(.system(.body, design: .rounded))
+                            .foregroundStyle(Color.white)
                     } else {
                         MarkdownMessageText(
                             message.content,
                             font: .system(.body, design: .rounded),
-                            foregroundStyle: isUser ? Color.white : PincerPalette.textPrimary
+                            foregroundStyle: PincerPalette.textPrimary
                         )
                     }
 
@@ -638,31 +643,19 @@ private struct ToolExecutionStreamingCard: View {
 private struct MarkdownMessageText: View {
     let text: String
     let font: Font
-    let foregroundStyle: Color
+    let foregroundColor: Color
 
     init(_ text: String, font: Font, foregroundStyle: Color) {
         self.text = text
         self.font = font
-        self.foregroundStyle = foregroundStyle
+        self.foregroundColor = foregroundStyle
     }
 
     var body: some View {
-        Group {
-            if let attributed = try? AttributedString(
-                markdown: text,
-                // SwiftUI Text only renders inline markdown semantics. Preserve
-                // original block formatting so headings/lists/quotes stay readable.
-                options: AttributedString.MarkdownParsingOptions(
-                    interpretedSyntax: .inlineOnlyPreservingWhitespace
-                )
-            ) {
-                Text(attributed)
-            } else {
-                Text(text)
-            }
-        }
-        .font(font)
-        .foregroundStyle(foregroundStyle)
+        StructuredText(markdown: text)
+            .font(font)
+            .foregroundStyle(foregroundColor)
+            .textual.textSelection(.enabled)
     }
 }
 
