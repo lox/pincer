@@ -102,19 +102,25 @@ For stream/event debugging, run with:
 
 ## Run with Tailscale
 
-Use Tailscale for transport only; Pincer still requires normal device pairing and bearer-token auth.
+Pincer embeds a `tsnet` listener — no external `tailscaled` process or `tailscale serve` needed. When `TS_AUTHKEY` is set, the backend registers itself as a Tailscale service (`svc:pincer`) and serves HTTPS on port 443 directly on the tailnet, alongside the normal HTTP listener.
 
-1. Run Pincer bound to loopback with a non-default token HMAC key:
-   - `PINCER_HTTP_ADDR=127.0.0.1:8080 PINCER_TOKEN_HMAC_KEY='<strong-random-key>' mise run run`
-2. On the same host, publish it as a Tailscale service:
-   - `tailscale serve --service=svc:pincer --https=443 127.0.0.1:8080`
-   - `tailscale serve status --json`
-3. In the iOS app, set `Settings -> Backend -> Address` to your tailnet HTTPS URL.
-4. Pair the app as usual; tailnet reachability does not bypass pairing/token auth.
+Tailscale is transport only; Pincer still requires normal device pairing and bearer-token auth.
 
-## Deploy to Fly.io with Tailscale sidecar
+1. Run Pincer with tsnet enabled:
+   - `TS_AUTHKEY='tskey-...' PINCER_TOKEN_HMAC_KEY='<strong-random-key>' mise run run`
+2. In the iOS app, set `Settings -> Backend -> Address` to your tailnet HTTPS URL (e.g. `https://pincer.<tailnet>.ts.net`).
+3. Pair the app as usual; tailnet reachability does not bypass pairing/token auth.
 
-This repo includes a Fly deployment path that runs Pincer and a colocated `tailscaled` process, then publishes Pincer as `svc:pincer` via `tailscale serve`.
+Tailscale-related env/flags:
+
+- `TS_AUTHKEY` — Tailscale auth key; tsnet is only started when this is set.
+- `TS_HOSTNAME` — tailnet hostname (default: `pincer`).
+- `TS_SERVICE_NAME` — service name registered as `svc:<name>` (default: `pincer`).
+- `TS_STATE_DIR` — directory for persistent Tailscale identity state.
+
+## Deploy to Fly.io with embedded tsnet
+
+The Fly deployment embeds `tsnet` in the single Pincer binary — no Tailscale sidecar or extra processes.
 
 1. Create the app (or edit `fly.toml` if `pincer` is unavailable):
    - `flyctl apps create pincer`
@@ -125,10 +131,8 @@ This repo includes a Fly deployment path that runs Pincer and a colocated `tails
    - Optional model access: `flyctl secrets set OPENROUTER_API_KEY='...' -a pincer`
 4. Deploy:
    - `flyctl deploy --remote-only -a pincer`
-5. Verify service registration and connectivity:
-   - `flyctl ssh console -a pincer -C "tailscale --socket=/var/run/tailscale/tailscaled.sock status"`
-   - `flyctl ssh console -a pincer -C "tailscale --socket=/var/run/tailscale/tailscaled.sock serve status"`
-   - Confirm `svc:pincer` appears in the serve output.
+5. Verify the machine is running and check logs for the `tailscale service listening` message:
+   - `flyctl logs --no-tail -a pincer`
 
 ## Documentation
 
