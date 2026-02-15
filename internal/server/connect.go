@@ -927,10 +927,6 @@ func (a *App) executeInlineReadTool(ctx context.Context, action agent.ProposedAc
 		}
 		return result.Output
 
-	case isBashTool(action.Tool):
-		bashResult := executeBashAction(string(action.Args))
-		return bashExecutionSystemMessage("", bashResult)
-
 	default:
 		return fmt.Sprintf("unknown inline read tool: %s", action.Tool)
 	}

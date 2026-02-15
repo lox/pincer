@@ -179,66 +179,128 @@ func (p *OpenAIPlanner) Plan(ctx context.Context, req PlanRequest) (PlanResult, 
 
 type openAIMessage struct {
 	Role    string `json:"role"`
-	Content string `json:"content"`
+	Content string `json:"content,omitempty"`
+}
+
+type openAIToolFunction struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Parameters  json.RawMessage `json:"parameters"`
+}
+
+type openAITool struct {
+	Type     string             `json:"type"`
+	Function openAIToolFunction `json:"function"`
 }
 
 type openAIChatCompletionRequest struct {
-	Model          string                 `json:"model"`
-	Messages       []openAIMessage        `json:"messages"`
-	ResponseFormat map[string]string      `json:"response_format,omitempty"`
-	Temperature    float64                `json:"temperature"`
-	Extra          map[string]interface{} `json:"extra_body,omitempty"`
+	Model       string          `json:"model"`
+	Messages    []openAIMessage `json:"messages"`
+	Tools       []openAITool    `json:"tools,omitempty"`
+	Temperature float64         `json:"temperature"`
+}
+
+type openAIToolCall struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
+}
+
+type openAIResponseMessage struct {
+	Content   *string          `json:"content"`
+	ToolCalls []openAIToolCall  `json:"tool_calls,omitempty"`
 }
 
 type openAIChatCompletionResponse struct {
 	Choices []struct {
-		Message struct {
-			Content string `json:"content"`
-		} `json:"message"`
+		Message openAIResponseMessage `json:"message"`
 	} `json:"choices"`
+}
+
+var knownTools = map[string]bool{
+	"web_search":    true,
+	"web_summarize": true,
+	"run_bash":      true,
+}
+
+var plannerTools = []openAITool{
+	{
+		Type: "function",
+		Function: openAIToolFunction{
+			Name:        "web_search",
+			Description: "Search the web for information. ALWAYS use this instead of run_bash with curl/wget for web searches.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"query": {"type": "string", "description": "Search terms"},
+					"max_results": {"type": "integer", "description": "Maximum number of results to return", "default": 5}
+				},
+				"required": ["query"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: openAIToolFunction{
+			Name:        "web_summarize",
+			Description: "Read and summarize content at any URL. Works with web pages, PDFs, YouTube videos, audio files, Word/PowerPoint documents, and more. ALWAYS use this instead of run_bash with curl/wget to read web content.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"url": {"type": "string", "description": "The URL to read and summarize"}
+				},
+				"required": ["url"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: openAIToolFunction{
+			Name:        "run_bash",
+			Description: "Execute a shell command on the host. All shell commands require user approval before execution. Do NOT use for web access — use web_search or web_summarize instead.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"command": {"type": "string", "description": "The shell command to execute"},
+					"cwd": {"type": "string", "description": "Working directory for the command"},
+					"timeout_ms": {"type": "integer", "description": "Timeout in milliseconds", "default": 10000}
+				},
+				"required": ["command"]
+			}`),
+		},
+	},
 }
 
 func (p *OpenAIPlanner) planWithModel(ctx context.Context, model string, req PlanRequest, repair bool) (PlanResult, error) {
 	messages := []openAIMessage{
 		{
 			Role: "system",
-			Content: "You are the planning harness for Pincer. Return only a single JSON object with keys assistant_message and proposed_actions. " +
-				"proposed_actions must be an array of objects with tool, args (JSON object), justification, and optional risk_class. " +
-				"Never return markdown or code fences.\n\n" +
-				"AVAILABLE TOOLS (use ONLY these tool names in proposed_actions):\n\n" +
-				"1. web_search — search the web for information.\n" +
-				"   Args: {\"query\": \"search terms\", \"max_results\": 5}\n" +
-				"   Risk: READ (executes instantly, no approval needed)\n" +
-				"   ALWAYS use this instead of run_bash with curl/wget for web searches.\n\n" +
-				"2. web_summarize — read and summarize content at any URL. Works with web pages, PDFs, YouTube videos, audio files, Word/PowerPoint documents, and more.\n" +
-				"   Args: {\"url\": \"https://...\"}\n" +
-				"   Risk: READ (executes instantly, no approval needed)\n" +
-				"   ALWAYS use this instead of run_bash with curl/wget to read web content.\n\n" +
-				"3. run_bash — execute a shell command on the host.\n" +
-				"   Args: {\"command\": \"...\", \"cwd\": \"...\", \"timeout_ms\": 10000}\n" +
-				"   Risk: READ for safe commands (ls, cat, echo, head, tail, wc, pwd, whoami, date, uname, which), HIGH for everything else (requires approval).\n" +
-				"   Do NOT use run_bash for web access — use web_search or web_summarize instead.\n\n" +
+			Content: "You are the planning harness for Pincer.\n\n" +
 				"TOOL EXECUTION MODEL:\n" +
+				"- When using a tool, call it via tool calling. Do not write JSON or describe tool calls in text.\n" +
 				"- READ tools execute inline. Their results are appended to the conversation and you are called again to continue.\n" +
 				"- You can chain multiple tool calls across rounds to gather information before giving a final answer.\n" +
 				"- HIGH/WRITE/EXFILTRATION tools require user approval before execution.\n" +
-				"- When no tools are needed, return empty proposed_actions and put your answer in assistant_message.\n\n" +
+				"- When no tools are needed, respond with your answer directly.\n\n" +
 				"FORMATTING:\n" +
-				"- assistant_message supports markdown. Use it for bold, lists, and links.\n" +
+				"- Your responses support markdown. Use it for bold, lists, and links.\n" +
 				"- Always render URLs as markdown links: [title](https://...). Never paste bare URLs.",
 		},
 	}
 	if p.soulPrompt != "" {
 		messages = append(messages, openAIMessage{
 			Role: "system",
-			Content: "Apply the following SOUL guidance for style and phrasing while still obeying the required JSON response schema and safety constraints:\n" +
+			Content: "Apply the following SOUL guidance for style and phrasing while still obeying safety constraints:\n" +
 				p.soulPrompt,
 		})
 	}
 	if repair {
 		messages = append(messages, openAIMessage{
 			Role:    "system",
-			Content: "Your previous response was invalid. Return valid JSON only and follow the exact schema.",
+			Content: "Your previous response was invalid. Please use the provided tools correctly or respond with a text message.",
 		})
 	}
 	messages = append(messages, openAIMessage{
@@ -247,10 +309,10 @@ func (p *OpenAIPlanner) planWithModel(ctx context.Context, model string, req Pla
 	})
 
 	payload := openAIChatCompletionRequest{
-		Model:          model,
-		Messages:       messages,
-		ResponseFormat: map[string]string{"type": "json_object"},
-		Temperature:    0.2,
+		Model:       model,
+		Messages:    messages,
+		Tools:       plannerTools,
+		Temperature: 0.2,
 	}
 
 	body, err := json.Marshal(payload)
@@ -290,11 +352,12 @@ func (p *OpenAIPlanner) planWithModel(ctx context.Context, model string, req Pla
 		return PlanResult{}, ErrInvalidModelOutput
 	}
 
-	result, err := parsePlanResult(parsed.Choices[0].Message.Content)
-	if err != nil {
-		return PlanResult{}, err
+	msg := parsed.Choices[0].Message
+	content := ""
+	if msg.Content != nil {
+		content = *msg.Content
 	}
-	return result, nil
+	return parseToolCallResponse(content, msg.ToolCalls)
 }
 
 func buildPlannerPrompt(req PlanRequest) string {
@@ -319,70 +382,41 @@ func buildPlannerPrompt(req PlanRequest) string {
 	return b.String()
 }
 
-func parsePlanResult(content string) (PlanResult, error) {
-	clean := strings.TrimSpace(content)
-	if clean == "" {
-		return PlanResult{}, ErrInvalidModelOutput
+func parseToolCallResponse(content string, toolCalls []openAIToolCall) (PlanResult, error) {
+	actions := make([]ProposedAction, 0, len(toolCalls))
+	for _, tc := range toolCalls {
+		tool := strings.TrimSpace(tc.Function.Name)
+		if tool == "" {
+			continue
+		}
+		if !knownTools[tool] {
+			return PlanResult{}, fmt.Errorf("%w: unknown tool %q", ErrInvalidModelOutput, tool)
+		}
+
+		args := json.RawMessage(tc.Function.Arguments)
+		if !isJSONObject(args) {
+			return PlanResult{}, fmt.Errorf("%w: invalid arguments for tool %q", ErrInvalidModelOutput, tool)
+		}
+
+		actions = append(actions, ProposedAction{
+			Tool:          tool,
+			Args:          args,
+			Justification: "Proposed by planning model.",
+		})
 	}
 
-	var result PlanResult
-	if err := json.Unmarshal([]byte(clean), &result); err != nil {
-		jsonObject, extractErr := extractLikelyJSONObject(clean)
-		if extractErr != nil {
-			return PlanResult{}, ErrInvalidModelOutput
-		}
-		if err := json.Unmarshal([]byte(jsonObject), &result); err != nil {
-			return PlanResult{}, ErrInvalidModelOutput
-		}
+	assistant := strings.TrimSpace(content)
+	if assistant == "" && len(actions) > 0 {
+		assistant = "Working on it…"
 	}
-
-	return normalizePlanResult(result)
-}
-
-func normalizePlanResult(result PlanResult) (PlanResult, error) {
-	assistant := strings.TrimSpace(result.AssistantMessage)
 	if assistant == "" {
 		return PlanResult{}, ErrInvalidModelOutput
 	}
 
-	normalized := make([]ProposedAction, 0, len(result.ProposedActions))
-	for _, action := range result.ProposedActions {
-		tool := strings.TrimSpace(action.Tool)
-		if tool == "" {
-			return PlanResult{}, ErrInvalidModelOutput
-		}
-
-		args := action.Args
-		if !isJSONObject(args) {
-			args = json.RawMessage(`{}`)
-		}
-
-		justification := strings.TrimSpace(action.Justification)
-		if justification == "" {
-			justification = "Proposed by planning model."
-		}
-
-		normalized = append(normalized, ProposedAction{
-			Tool:          tool,
-			Args:          args,
-			Justification: justification,
-			RiskClass:     strings.ToUpper(strings.TrimSpace(action.RiskClass)),
-		})
-	}
-
 	return PlanResult{
 		AssistantMessage: assistant,
-		ProposedActions:  normalized,
+		ProposedActions:  actions,
 	}, nil
-}
-
-func extractLikelyJSONObject(content string) (string, error) {
-	start := strings.Index(content, "{")
-	end := strings.LastIndex(content, "}")
-	if start < 0 || end <= start {
-		return "", ErrInvalidModelOutput
-	}
-	return strings.TrimSpace(content[start : end+1]), nil
 }
 
 func isJSONObject(raw json.RawMessage) bool {

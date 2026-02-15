@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -52,21 +53,19 @@ func TestOpenAIPlannerUsesRepairThenFallbackModel(t *testing.T) {
 		callIndex := len(calls)
 		mu.Unlock()
 
-		content := ""
 		switch callIndex {
-		case 1:
-			content = "not json"
-		case 2:
-			content = "still not json"
+		case 1, 2:
+			// Return empty choices to trigger ErrInvalidModelOutput
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"choices": []any{},
+			})
 		default:
-			content = `{"assistant_message":"fallback worked","proposed_actions":[]}`
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"choices": []map[string]any{
+					{"message": map[string]any{"content": "fallback worked"}},
+				},
+			})
 		}
-
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"choices": []map[string]any{
-				{"message": map[string]string{"content": content}},
-			},
-		})
 	}))
 	defer srv.Close()
 
@@ -100,16 +99,276 @@ func TestOpenAIPlannerUsesRepairThenFallbackModel(t *testing.T) {
 	}
 }
 
-func TestParsePlanResultExtractsJSONFromWrappedContent(t *testing.T) {
+func TestParseToolCallResponse(t *testing.T) {
 	t.Parallel()
 
-	content := "Here you go:\n```json\n{\"assistant_message\":\"ok\",\"proposed_actions\":[]}\n```"
-	result, err := parsePlanResult(content)
+	t.Run("content only", func(t *testing.T) {
+		result, err := parseToolCallResponse("Here is your answer.", nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.AssistantMessage != "Here is your answer." {
+			t.Fatalf("unexpected assistant message: %q", result.AssistantMessage)
+		}
+		if len(result.ProposedActions) != 0 {
+			t.Fatalf("expected 0 actions, got %d", len(result.ProposedActions))
+		}
+	})
+
+	t.Run("tool calls only", func(t *testing.T) {
+		toolCalls := []openAIToolCall{
+			{ID: "call_1", Type: "function", Function: struct {
+				Name      string `json:"name"`
+				Arguments string `json:"arguments"`
+			}{Name: "web_search", Arguments: `{"query":"test"}`}},
+		}
+		result, err := parseToolCallResponse("", toolCalls)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.AssistantMessage != "Working on it…" {
+			t.Fatalf("unexpected assistant message: %q", result.AssistantMessage)
+		}
+		if len(result.ProposedActions) != 1 {
+			t.Fatalf("expected 1 action, got %d", len(result.ProposedActions))
+		}
+		if result.ProposedActions[0].Tool != "web_search" {
+			t.Fatalf("unexpected tool: %q", result.ProposedActions[0].Tool)
+		}
+	})
+
+	t.Run("content and tool calls", func(t *testing.T) {
+		toolCalls := []openAIToolCall{
+			{ID: "call_1", Type: "function", Function: struct {
+				Name      string `json:"name"`
+				Arguments string `json:"arguments"`
+			}{Name: "run_bash", Arguments: `{"command":"ls"}`}},
+		}
+		result, err := parseToolCallResponse("Let me check that.", toolCalls)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.AssistantMessage != "Let me check that." {
+			t.Fatalf("unexpected assistant message: %q", result.AssistantMessage)
+		}
+		if len(result.ProposedActions) != 1 {
+			t.Fatalf("expected 1 action, got %d", len(result.ProposedActions))
+		}
+	})
+
+	t.Run("empty content no tool calls", func(t *testing.T) {
+		_, err := parseToolCallResponse("", nil)
+		if err != ErrInvalidModelOutput {
+			t.Fatalf("expected ErrInvalidModelOutput, got: %v", err)
+		}
+	})
+
+	t.Run("invalid args returns error", func(t *testing.T) {
+		toolCalls := []openAIToolCall{
+			{ID: "call_1", Type: "function", Function: struct {
+				Name      string `json:"name"`
+				Arguments string `json:"arguments"`
+			}{Name: "web_search", Arguments: "not json"}},
+		}
+		_, err := parseToolCallResponse("ok", toolCalls)
+		if !errors.Is(err, ErrInvalidModelOutput) {
+			t.Fatalf("expected ErrInvalidModelOutput, got: %v", err)
+		}
+	})
+
+	t.Run("unknown tool returns error", func(t *testing.T) {
+		toolCalls := []openAIToolCall{
+			{ID: "call_1", Type: "function", Function: struct {
+				Name      string `json:"name"`
+				Arguments string `json:"arguments"`
+			}{Name: "send_email", Arguments: `{"to":"x"}`}},
+		}
+		_, err := parseToolCallResponse("ok", toolCalls)
+		if !errors.Is(err, ErrInvalidModelOutput) {
+			t.Fatalf("expected ErrInvalidModelOutput, got: %v", err)
+		}
+	})
+}
+
+func TestOpenAIPlannerHandlesNullContentWithToolCalls(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Simulate OpenAI response with content: null and tool_calls present.
+		_, _ = w.Write([]byte(`{
+			"choices": [{
+				"message": {
+					"content": null,
+					"tool_calls": [{
+						"id": "call_abc",
+						"type": "function",
+						"function": {
+							"name": "web_search",
+							"arguments": "{\"query\":\"golang testing\"}"
+						}
+					}]
+				}
+			}]
+		}`))
+	}))
+	defer srv.Close()
+
+	planner, err := NewOpenAIPlanner(OpenAIPlannerConfig{
+		APIKey:       "test-key",
+		BaseURL:      srv.URL,
+		PrimaryModel: "test-model",
+		HTTPClient:   srv.Client(),
+	})
 	if err != nil {
-		t.Fatalf("parse plan result: %v", err)
+		t.Fatalf("new planner: %v", err)
 	}
-	if result.AssistantMessage != "ok" {
+
+	result, err := planner.Plan(context.Background(), PlanRequest{
+		ThreadID:    "thr_test",
+		UserMessage: "search for golang testing",
+	})
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	if result.AssistantMessage != "Working on it…" {
 		t.Fatalf("unexpected assistant message: %q", result.AssistantMessage)
+	}
+	if len(result.ProposedActions) != 1 {
+		t.Fatalf("expected 1 action, got %d", len(result.ProposedActions))
+	}
+	if result.ProposedActions[0].Tool != "web_search" {
+		t.Fatalf("unexpected tool: %q", result.ProposedActions[0].Tool)
+	}
+}
+
+func TestOpenAIPlannerToolCallsWithInvalidArgsTriggersRepair(t *testing.T) {
+	t.Parallel()
+
+	var (
+		mu    sync.Mutex
+		calls int
+	)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		calls++
+		callIndex := calls
+		mu.Unlock()
+
+		if callIndex == 1 {
+			// First call: return tool call with invalid args
+			_, _ = w.Write([]byte(`{
+				"choices": [{
+					"message": {
+						"content": null,
+						"tool_calls": [{
+							"id": "call_1",
+							"type": "function",
+							"function": {
+								"name": "web_search",
+								"arguments": "not valid json"
+							}
+						}]
+					}
+				}]
+			}`))
+		} else {
+			// Repair call: return valid text response
+			_, _ = w.Write([]byte(`{
+				"choices": [{
+					"message": {
+						"content": "Here is your answer."
+					}
+				}]
+			}`))
+		}
+	}))
+	defer srv.Close()
+
+	planner, err := NewOpenAIPlanner(OpenAIPlannerConfig{
+		APIKey:       "test-key",
+		BaseURL:      srv.URL,
+		PrimaryModel: "test-model",
+		HTTPClient:   srv.Client(),
+	})
+	if err != nil {
+		t.Fatalf("new planner: %v", err)
+	}
+
+	result, err := planner.Plan(context.Background(), PlanRequest{
+		ThreadID:    "thr_test",
+		UserMessage: "hello",
+	})
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	if result.AssistantMessage != "Here is your answer." {
+		t.Fatalf("unexpected assistant message: %q", result.AssistantMessage)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if calls != 2 {
+		t.Fatalf("expected 2 calls (original + repair), got %d", calls)
+	}
+}
+
+func TestOpenAIPlannerSendsToolsInRequest(t *testing.T) {
+	t.Parallel()
+
+	var (
+		mu       sync.Mutex
+		sawTools bool
+	)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req openAIChatCompletionRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		mu.Lock()
+		if len(req.Tools) == 3 {
+			names := map[string]bool{}
+			for _, t := range req.Tools {
+				names[t.Function.Name] = true
+			}
+			if names["web_search"] && names["web_summarize"] && names["run_bash"] {
+				sawTools = true
+			}
+		}
+		mu.Unlock()
+
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]any{"content": "ok"}},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	planner, err := NewOpenAIPlanner(OpenAIPlannerConfig{
+		APIKey:       "test-key",
+		BaseURL:      srv.URL,
+		PrimaryModel: "test-model",
+		HTTPClient:   srv.Client(),
+	})
+	if err != nil {
+		t.Fatalf("new planner: %v", err)
+	}
+
+	if _, err := planner.Plan(context.Background(), PlanRequest{
+		ThreadID:    "thr_test",
+		UserMessage: "hello",
+	}); err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !sawTools {
+		t.Fatalf("expected request to include all 3 tool definitions")
 	}
 }
 
@@ -141,7 +400,7 @@ func TestOpenAIPlannerIncludesSOULPromptWhenConfigured(t *testing.T) {
 
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"choices": []map[string]any{
-				{"message": map[string]string{"content": `{"assistant_message":"ok","proposed_actions":[]}`}},
+				{"message": map[string]any{"content": "ok"}},
 			},
 		})
 	}))
@@ -206,7 +465,7 @@ func TestOpenAIPlannerLoadsSOULPromptFromFile(t *testing.T) {
 
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"choices": []map[string]any{
-				{"message": map[string]string{"content": `{"assistant_message":"ok","proposed_actions":[]}`}},
+				{"message": map[string]any{"content": "ok"}},
 			},
 		})
 	}))

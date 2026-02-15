@@ -852,33 +852,8 @@ func isBashTool(tool string) bool {
 	}
 }
 
-func riskClassForBashArgs(args json.RawMessage) string {
-	var parsed bashActionArgs
-	if err := json.Unmarshal(args, &parsed); err != nil {
-		return "HIGH"
-	}
-
-	command := strings.TrimSpace(parsed.Command)
-	if command == "" {
-		return "HIGH"
-	}
-
-	// Treat shell metachar usage as high risk.
-	if strings.ContainsAny(command, "|&;><`$(){}[]\n\r") {
-		return "HIGH"
-	}
-
-	parts := strings.Fields(command)
-	if len(parts) == 0 {
-		return "HIGH"
-	}
-
-	switch parts[0] {
-	case "pwd", "ls", "cat", "echo", "whoami", "id", "date", "uname", "which", "head", "tail", "wc":
-		return "READ"
-	default:
-		return "HIGH"
-	}
+func riskClassForBashArgs(_ json.RawMessage) string {
+	return "HIGH"
 }
 
 func normalizeBashActionArgs(args json.RawMessage) json.RawMessage {
