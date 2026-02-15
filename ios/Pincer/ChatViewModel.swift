@@ -232,7 +232,9 @@ final class ChatViewModel: ObservableObject {
                 if Task.isCancelled {
                     return
                 }
-                errorText = userFacingErrorMessage(error, fallback: "Lost live thread stream. Reconnecting...")
+                if shouldShowLiveStreamError(error) {
+                    errorText = userFacingErrorMessage(error, fallback: "Lost live thread stream. Reconnecting...")
+                }
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
             }
         }

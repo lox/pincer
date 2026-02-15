@@ -14,6 +14,9 @@ struct ThreadMessagesSnapshot {
 }
 
 actor APIClient {
+    private static let streamRequestTimeoutSeconds: TimeInterval = 60 * 20
+    private static let streamResourceTimeoutSeconds: TimeInterval = 60 * 60 * 24
+
     private var baseURL: URL
     private var token: String
     private var authClient: Pincer_Protocol_V1_AuthServiceClient
@@ -318,7 +321,14 @@ actor APIClient {
 
     private static func makeTransport(baseURL: URL) -> ProtocolClient {
         let host = baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        return ProtocolClient(config: .init(
+
+        let sessionConfig = URLSessionConfiguration.default
+        sessionConfig.timeoutIntervalForRequest = streamRequestTimeoutSeconds
+        sessionConfig.timeoutIntervalForResource = streamResourceTimeoutSeconds
+        sessionConfig.waitsForConnectivity = true
+        let httpClient = URLSessionHTTPClient(configuration: sessionConfig)
+
+        return ProtocolClient(httpClient: httpClient, config: .init(
             host: host,
             networkProtocol: .connect,
             codec: JSONCodec()
