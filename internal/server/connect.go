@@ -186,17 +186,6 @@ func (a *App) BindPairingCode(ctx context.Context, req *connect.Request[protocol
 	}
 
 	if _, err := tx.ExecContext(ctx, `
-		UPDATE devices
-		SET revoked_at = ?
-		WHERE revoked_at = ''
-	`, nowStr); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("revoke devices: %w", err))
-	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM auth_tokens`); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("invalidate tokens: %w", err))
-	}
-
-	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO devices(device_id, user_id, name, public_key, revoked_at, created_at)
 		VALUES(?, ?, ?, ?, '', ?)
 	`, deviceID, a.ownerID, deviceName, msg.GetPublicKey(), nowStr); err != nil {

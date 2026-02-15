@@ -86,12 +86,9 @@ This allows first-device bootstrap while preventing unauthenticated re-pair afte
 
 1. Existing authenticated device calls `CreatePairingCode`.
 2. New device calls `BindPairingCode`.
-3. On successful bind, server:
-   - revokes all previously active devices,
-   - deletes all existing auth tokens,
-   - creates one new active device + token.
+3. On successful bind, server creates a new device + token alongside existing ones.
 
-Result: pairing to a new device is intentionally single-active-session by default in current implementation.
+Result: multiple devices can be paired concurrently. Use `DevicesService.RevokeDevice` to remove individual devices.
 
 ## 4.3 Token validation on protected RPCs
 
