@@ -210,10 +210,10 @@ func (p *OpenAIPlanner) planWithModel(ctx context.Context, model string, req Pla
 				"   Args: {\"query\": \"search terms\", \"max_results\": 5}\n" +
 				"   Risk: READ (executes instantly, no approval needed)\n" +
 				"   ALWAYS use this instead of run_bash with curl/wget for web searches.\n\n" +
-				"2. web_summarize — read and summarize a web page by URL.\n" +
+				"2. web_summarize — read and summarize content at any URL. Works with web pages, PDFs, YouTube videos, audio files, Word/PowerPoint documents, and more.\n" +
 				"   Args: {\"url\": \"https://...\"}\n" +
 				"   Risk: READ (executes instantly, no approval needed)\n" +
-				"   ALWAYS use this instead of run_bash with curl/wget to read web pages.\n\n" +
+				"   ALWAYS use this instead of run_bash with curl/wget to read web content.\n\n" +
 				"3. run_bash — execute a shell command on the host.\n" +
 				"   Args: {\"command\": \"...\", \"cwd\": \"...\", \"timeout_ms\": 10000}\n" +
 				"   Risk: READ for safe commands (ls, cat, echo, head, tail, wc, pwd, whoami, date, uname, which), HIGH for everything else (requires approval).\n" +
