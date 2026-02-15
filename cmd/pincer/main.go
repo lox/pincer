@@ -72,6 +72,8 @@ func main() {
 
 		ts := &tsnet.Server{
 			Hostname: cfg.TSHostname,
+			UserLogf: func(format string, args ...any) { tsLogger.Infof(format, args...) },
+			Logf:     func(format string, args ...any) { tsLogger.Debugf(format, args...) },
 		}
 		if cfg.TSStateDir != "" {
 			ts.Dir = cfg.TSStateDir

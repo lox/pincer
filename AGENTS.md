@@ -71,6 +71,8 @@ Use `mise` for all routine tasks:
 
 If `mise` is blocked, run `mise trust` in repo root.
 
+When using `fly logs`, always pass `--no-tail` to avoid streaming forever.
+
 ## 7. Engineering workflow
 
 1. Start from a failing test for backend behavior changes.
