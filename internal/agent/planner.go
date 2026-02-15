@@ -205,7 +205,7 @@ func (p *OpenAIPlanner) planWithModel(ctx context.Context, model string, req Pla
 			Content: "You are the planning harness for Pincer. Return only a single JSON object with keys assistant_message and proposed_actions. " +
 				"proposed_actions must be an array of objects with tool, args (JSON object), justification, and optional risk_class. " +
 				"Only return non-empty proposed_actions when the user explicitly asked for an external action or workflow. " +
-				"For shell command requests, propose tool run_bash with args containing command and optional cwd. " +
+				"For shell command requests, propose tool run_bash with args containing command and optional cwd and timeout_ms. " +
 				"Never return markdown or code fences.",
 		},
 	}

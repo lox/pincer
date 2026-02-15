@@ -8,12 +8,18 @@ enum APIError: Error {
     case unauthorized
 }
 
+struct ThreadMessagesSnapshot {
+    let messages: [Message]
+    let lastSequence: UInt64
+}
+
 actor APIClient {
     private var baseURL: URL
     private var token: String
     private var authClient: Pincer_Protocol_V1_AuthServiceClient
     private var threadsClient: Pincer_Protocol_V1_ThreadsServiceClient
     private var turnsClient: Pincer_Protocol_V1_TurnsServiceClient
+    private var eventsClient: Pincer_Protocol_V1_EventsServiceClient
     private var approvalsClient: Pincer_Protocol_V1_ApprovalsServiceClient
     private var devicesClient: Pincer_Protocol_V1_DevicesServiceClient
 
@@ -31,6 +37,7 @@ actor APIClient {
         self.authClient = Pincer_Protocol_V1_AuthServiceClient(client: transport)
         self.threadsClient = Pincer_Protocol_V1_ThreadsServiceClient(client: transport)
         self.turnsClient = Pincer_Protocol_V1_TurnsServiceClient(client: transport)
+        self.eventsClient = Pincer_Protocol_V1_EventsServiceClient(client: transport)
         self.approvalsClient = Pincer_Protocol_V1_ApprovalsServiceClient(client: transport)
         self.devicesClient = Pincer_Protocol_V1_DevicesServiceClient(client: transport)
 
@@ -47,6 +54,7 @@ actor APIClient {
         self.authClient = Pincer_Protocol_V1_AuthServiceClient(client: transport)
         self.threadsClient = Pincer_Protocol_V1_ThreadsServiceClient(client: transport)
         self.turnsClient = Pincer_Protocol_V1_TurnsServiceClient(client: transport)
+        self.eventsClient = Pincer_Protocol_V1_EventsServiceClient(client: transport)
         self.approvalsClient = Pincer_Protocol_V1_ApprovalsServiceClient(client: transport)
         self.devicesClient = Pincer_Protocol_V1_DevicesServiceClient(client: transport)
 
@@ -104,6 +112,11 @@ actor APIClient {
     }
 
     func fetchMessages(threadID: String) async throws -> [Message] {
+        let snapshot = try await fetchMessagesSnapshot(threadID: threadID)
+        return snapshot.messages
+    }
+
+    func fetchMessagesSnapshot(threadID: String) async throws -> ThreadMessagesSnapshot {
         try await withAuthorizedRetry {
             var request = Pincer_Protocol_V1_ListThreadMessagesRequest()
             request.threadID = threadID
@@ -113,7 +126,7 @@ actor APIClient {
                 headers: authHeaders()
             )
             let message = try responseMessage(response)
-            return message.items.map { item in
+            let items = message.items.map { item in
                 Message(
                     messageID: item.messageID,
                     threadID: threadID,
@@ -122,6 +135,51 @@ actor APIClient {
                     createdAt: timestampString(item.createdAt, hasValue: item.hasCreatedAt)
                 )
             }
+            return ThreadMessagesSnapshot(messages: items, lastSequence: message.lastSequence)
+        }
+    }
+
+    func startTurnStream(
+        threadID: String,
+        content: String,
+        clientMessageID: String,
+        resumeFromSequence: UInt64,
+        onEvent: @escaping (Pincer_Protocol_V1_ThreadEvent) async -> Void
+    ) async throws {
+        try await withAuthorizedRetry {
+            var request = Pincer_Protocol_V1_StartTurnRequest()
+            request.threadID = threadID
+            request.userText = content
+            request.clientMessageID = clientMessageID
+            request.triggerType = .chatMessage
+            request.reasoningVisibility = .reasoningSummary
+            request.resumeFromSequence = resumeFromSequence
+
+            let stream = turnsClient.startTurn(headers: authHeaders())
+            try await consumeThreadEventStream(
+                stream: stream,
+                request: request,
+                onEvent: onEvent
+            )
+        }
+    }
+
+    func watchThreadStream(
+        threadID: String,
+        fromSequence: UInt64,
+        onEvent: @escaping (Pincer_Protocol_V1_ThreadEvent) async -> Void
+    ) async throws {
+        try await withAuthorizedRetry {
+            var request = Pincer_Protocol_V1_WatchThreadRequest()
+            request.threadID = threadID
+            request.fromSequence = fromSequence
+
+            let stream = eventsClient.watchThread(headers: authHeaders())
+            try await consumeThreadEventStream(
+                stream: stream,
+                request: request,
+                onEvent: onEvent
+            )
         }
     }
 
@@ -136,13 +194,18 @@ actor APIClient {
             )
             let message = try responseMessage(response)
             return message.items.map { item in
-                Approval(
+                let deterministicSummary = item.deterministicSummary.trimmingCharacters(in: .whitespacesAndNewlines)
+                let preview = item.hasPreview ? item.preview : nil
+                return Approval(
                     actionID: item.actionID,
                     source: item.source,
                     sourceID: item.sourceID,
                     tool: item.tool,
                     status: actionStatusName(item.status),
                     riskClass: riskClassName(item.riskClass),
+                    deterministicSummary: deterministicSummary,
+                    commandPreview: approvalCommandPreview(tool: item.tool, preview: preview),
+                    commandTimeoutMS: approvalCommandTimeoutMS(tool: item.tool, preview: preview),
                     createdAt: timestampString(item.createdAt, hasValue: item.hasCreatedAt),
                     expiresAt: timestampString(item.expiresAt, hasValue: item.hasExpiresAt)
                 )
@@ -201,6 +264,56 @@ actor APIClient {
             try await ensurePaired(force: true)
             return try await operation()
         }
+    }
+
+    private func consumeThreadEventStream<Request: SwiftProtobuf.Message>(
+        stream: any Connect.ServerOnlyAsyncStreamInterface<Request, Pincer_Protocol_V1_ThreadEvent>,
+        request: Request,
+        onEvent: @escaping (Pincer_Protocol_V1_ThreadEvent) async -> Void
+    ) async throws {
+        do {
+            try stream.send(request)
+        } catch {
+            throw streamAPIError(code: nil, error: error)
+        }
+
+        var sawCompletion = false
+        for await result in stream.results() {
+            switch result {
+            case .headers:
+                continue
+            case .message(let event):
+                await onEvent(event)
+            case .complete(let code, let error, _):
+                sawCompletion = true
+                if code == .ok {
+                    return
+                }
+                throw streamAPIError(code: code, error: error)
+            }
+        }
+
+        if !sawCompletion {
+            throw APIError.invalidResponse
+        }
+    }
+
+    private func streamAPIError(code: Connect.Code?, error: Error?) -> APIError {
+        if code == .unauthenticated {
+            clearToken()
+            return .unauthorized
+        }
+        if let connectError = error as? Connect.ConnectError {
+            if connectError.code == .unauthenticated {
+                clearToken()
+                return .unauthorized
+            }
+            return .rpc(connectError.code.name)
+        }
+        if let code {
+            return .rpc(code.name)
+        }
+        return .invalidResponse
     }
 
     private static func makeTransport(baseURL: URL) -> ProtocolClient {

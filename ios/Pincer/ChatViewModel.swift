@@ -16,6 +16,7 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var inlineApprovals: [Approval] = []
     @Published private(set) var approvedInlineIndicators: [ApprovedInlineIndicator] = []
     @Published private(set) var approvingActionIDs: Set<String> = []
+    @Published private(set) var isAwaitingAssistantProgress = false
     @Published var input: String = ""
     @Published var errorText: String?
     @Published var isBusy = false
@@ -23,6 +24,10 @@ final class ChatViewModel: ObservableObject {
     private let client: APIClient
     private let approvalsStore: ApprovalsStore
     private var cancellables: Set<AnyCancellable> = []
+    private var watchThreadTask: Task<Void, Never>?
+    private var watchingThreadID: String?
+    private var threadEventState = ThreadEventReducerState()
+
     private static let createdAtFormatter = ISO8601DateFormatter()
 
     init(client: APIClient, approvalsStore: ApprovalsStore) {
@@ -31,15 +36,25 @@ final class ChatViewModel: ObservableObject {
         bindStore()
     }
 
+    deinit {
+        watchThreadTask?.cancel()
+    }
+
     func bootstrapIfNeeded() async {
-        guard threadID == nil else { return }
+        if let threadID {
+            startWatchThreadIfNeeded(for: threadID)
+            return
+        }
+
         isBusy = true
         defer { isBusy = false }
+
         do {
             let id = try await client.createThread()
             threadID = id
             try await refresh()
             syncInlineApprovals()
+            startWatchThreadIfNeeded(for: id)
         } catch {
             errorText = userFacingErrorMessage(error, fallback: "Failed to initialize chat.")
         }
@@ -47,10 +62,18 @@ final class ChatViewModel: ObservableObject {
 
     func refresh() async throws {
         guard let threadID else { return }
-        messages = try await client.fetchMessages(threadID: threadID)
+
+        let snapshot = try await client.fetchMessagesSnapshot(threadID: threadID)
+        threadEventState = ThreadEventReducerState(
+            messages: snapshot.messages,
+            lastSequence: snapshot.lastSequence
+        )
+        messages = snapshot.messages
+
         await approvalsStore.refreshPendingWithoutBusyState()
         syncInlineApprovals()
         cleanupApprovedInlineIndicators()
+        startWatchThreadIfNeeded(for: threadID)
     }
 
     func send() async {
@@ -66,15 +89,27 @@ final class ChatViewModel: ObservableObject {
             createdAt: Self.createdAtFormatter.string(from: Date())
         )
 
-        messages.append(optimisticMessage)
+        appendLocalMessage(optimisticMessage)
         input = ""
         isBusy = true
-        defer { isBusy = false }
+        isAwaitingAssistantProgress = true
+        defer {
+            isBusy = false
+            isAwaitingAssistantProgress = false
+        }
+
         do {
-            try await client.sendMessage(threadID: threadID, content: content)
-            try await refresh()
+            try await client.startTurnStream(
+                threadID: threadID,
+                content: content,
+                clientMessageID: optimisticID,
+                resumeFromSequence: threadEventState.lastSequence
+            ) { [weak self] event in
+                guard let self else { return }
+                await self.applyThreadEvent(event)
+            }
         } catch {
-            messages.removeAll { $0.messageID == optimisticID }
+            removeMessage(messageID: optimisticID)
             input = content
             errorText = userFacingErrorMessage(error, fallback: "Failed to send message.")
         }
@@ -98,25 +133,43 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
-    func refreshAfterApproval() async {
+    func approveAllInline() async {
         guard threadID != nil else { return }
 
-        // Approve flips to APPROVED first; execution is picked up asynchronously by the
-        // backend worker. Retry a few times so chat shows the status update without
-        // requiring manual tab switching or pull-to-refresh.
-        for attempt in 0..<5 {
-            do {
-                try await refresh()
-            } catch {
-                if attempt == 0 {
-                    errorText = userFacingErrorMessage(error, fallback: "Failed to refresh chat.")
-                }
-            }
+        // Snapshot action IDs so we can iterate deterministically while local state mutates.
+        let actionIDs = inlineApprovals.map(\.actionID)
+        guard !actionIDs.isEmpty else { return }
 
-            if attempt < 4 {
-                try? await Task.sleep(nanoseconds: 350_000_000)
+        var encounteredFailure = false
+        for actionID in actionIDs {
+            guard !approvingActionIDs.contains(actionID) else { continue }
+            let approvedItem = inlineApprovals.first { $0.actionID == actionID }
+
+            let approved = await approvalsStore.approve(actionID)
+            if approved {
+                inlineApprovals.removeAll { $0.actionID == actionID }
+                if let approvedItem {
+                    upsertApprovedIndicator(from: approvedItem)
+                }
+            } else {
+                encounteredFailure = true
+                errorText = approvalsStore.errorText
             }
         }
+
+        // Always refresh to pick up any external state transitions during batch approval.
+        await refreshAfterApproval()
+
+        if encounteredFailure, errorText == nil {
+            errorText = "One or more approvals failed."
+        }
+    }
+
+    func refreshAfterApproval() async {
+        guard threadID != nil else { return }
+        await approvalsStore.refreshPendingWithoutBusyState()
+        syncInlineApprovals()
+        cleanupApprovedInlineIndicators()
     }
 
     private func bindStore() {
@@ -134,6 +187,106 @@ final class ChatViewModel: ObservableObject {
                 self?.approvingActionIDs = actionIDs
             }
             .store(in: &cancellables)
+    }
+
+    private func appendLocalMessage(_ message: Message) {
+        messages.append(message)
+        threadEventState.messages.append(message)
+    }
+
+    private func removeMessage(messageID: String) {
+        messages.removeAll { $0.messageID == messageID }
+        threadEventState.messages.removeAll { $0.messageID == messageID }
+    }
+
+    private func startWatchThreadIfNeeded(for threadID: String) {
+        if watchingThreadID == threadID, let watchThreadTask, !watchThreadTask.isCancelled {
+            return
+        }
+
+        watchThreadTask?.cancel()
+        watchingThreadID = threadID
+        watchThreadTask = Task { [weak self] in
+            guard let self else { return }
+            await self.watchThreadLoop(threadID: threadID)
+        }
+    }
+
+    private func watchThreadLoop(threadID: String) async {
+        while !Task.isCancelled {
+            let fromSequence = threadEventState.lastSequence
+            do {
+                try await client.watchThreadStream(
+                    threadID: threadID,
+                    fromSequence: fromSequence
+                ) { [weak self] event in
+                    guard let self else { return }
+                    await self.applyThreadEvent(event)
+                }
+
+                if Task.isCancelled {
+                    return
+                }
+                try? await Task.sleep(nanoseconds: 300_000_000)
+            } catch {
+                if Task.isCancelled {
+                    return
+                }
+                errorText = userFacingErrorMessage(error, fallback: "Lost live thread stream. Reconnecting...")
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+        }
+    }
+
+    private func applyThreadEvent(_ event: Pincer_Protocol_V1_ThreadEvent) async {
+        guard let threadID else { return }
+
+        let effect = ThreadEventReducer.apply(
+            event,
+            state: &threadEventState,
+            fallbackThreadID: threadID
+        )
+
+        messages = threadEventState.messages
+
+        if effect.shouldRefreshApprovals {
+            await approvalsStore.refreshPendingWithoutBusyState()
+            syncInlineApprovals()
+            cleanupApprovedInlineIndicators()
+        }
+
+        if effect.shouldResyncMessages {
+            do {
+                try await refreshMessagesOnly()
+            } catch {
+                errorText = userFacingErrorMessage(error, fallback: "Failed to resync chat messages.")
+            }
+        }
+
+        if effect.receivedProgressSignal {
+            isAwaitingAssistantProgress = false
+        }
+
+        if effect.reachedTurnTerminal {
+            isBusy = false
+            isAwaitingAssistantProgress = false
+        }
+
+        if let failure = effect.turnFailureMessage,
+           !failure.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            errorText = failure
+        }
+    }
+
+    private func refreshMessagesOnly() async throws {
+        guard let threadID else { return }
+
+        let snapshot = try await client.fetchMessagesSnapshot(threadID: threadID)
+        threadEventState = ThreadEventReducerState(
+            messages: snapshot.messages,
+            lastSequence: snapshot.lastSequence
+        )
+        messages = snapshot.messages
     }
 
     private func syncInlineApprovals() {

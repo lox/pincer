@@ -611,6 +611,69 @@ func TestExecuteApprovedRunBashActionWritesCommandOutputToChat(t *testing.T) {
 	}
 }
 
+func TestExecuteBashActionStreamingHonorsTimeoutMs(t *testing.T) {
+	t.Parallel()
+
+	short := executeBashAction(`{"command":"sleep 0.15; echo done","timeout_ms":50}`)
+	if !short.TimedOut {
+		t.Fatalf("expected short timeout to time out")
+	}
+	if short.ExitCode != -1 {
+		t.Fatalf("expected timed-out command to use exit code -1, got %d", short.ExitCode)
+	}
+	if !strings.Contains(short.Output, "command timed out after 50ms") {
+		t.Fatalf("expected timeout output line, got %q", short.Output)
+	}
+
+	longer := executeBashAction(`{"command":"sleep 0.15; echo done","timeout_ms":500}`)
+	if longer.TimedOut {
+		t.Fatalf("expected longer timeout to complete without timing out")
+	}
+	if longer.ExitCode != 0 {
+		t.Fatalf("expected successful exit code 0, got %d", longer.ExitCode)
+	}
+	if !strings.Contains(longer.Output, "done") {
+		t.Fatalf("expected output to include done, got %q", longer.Output)
+	}
+}
+
+func TestBoundedBashExecTimeout(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		timeoutMS int64
+		want      time.Duration
+	}{
+		{
+			name:      "uses default when unset",
+			timeoutMS: 0,
+			want:      defaultBashExecTimeout,
+		},
+		{
+			name:      "keeps requested timeout when within bounds",
+			timeoutMS: 2_500,
+			want:      2500 * time.Millisecond,
+		},
+		{
+			name:      "caps timeout to max bound",
+			timeoutMS: int64((maxBashExecTimeout / time.Millisecond) + 1_000),
+			want:      maxBashExecTimeout,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := boundedBashExecTimeout(tc.timeoutMS)
+			if got != tc.want {
+				t.Fatalf("boundedBashExecTimeout(%d) = %s, want %s", tc.timeoutMS, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestPlanTurnClassifiesRunBashRiskFromCommand(t *testing.T) {
 	t.Parallel()
 
@@ -637,6 +700,41 @@ func TestPlanTurnClassifiesRunBashRiskFromCommand(t *testing.T) {
 	}
 	if plan.ProposedActions[0].RiskClass != "HIGH" {
 		t.Fatalf("expected trusted bash risk classification HIGH, got %q", plan.ProposedActions[0].RiskClass)
+	}
+}
+
+func TestPlanTurnNormalizesRunBashTimeoutToMaxBound(t *testing.T) {
+	t.Parallel()
+
+	app := newTestAppWithPlanner(t, stubPlanner{
+		result: agent.PlanResult{
+			AssistantMessage: "Ready.",
+			ProposedActions: []agent.ProposedAction{
+				{
+					Tool:          "run_bash",
+					Args:          json.RawMessage(`{"command":"sleep 1","timeout_ms":999999999}`),
+					Justification: "Requested command execution.",
+					RiskClass:     "LOW",
+				},
+			},
+		},
+	})
+
+	plan, err := app.planTurn(context.Background(), "thr_timeout", "run command")
+	if err != nil {
+		t.Fatalf("plan turn: %v", err)
+	}
+	if len(plan.ProposedActions) != 1 {
+		t.Fatalf("expected 1 proposed action, got %d", len(plan.ProposedActions))
+	}
+
+	var args bashActionArgs
+	if err := json.Unmarshal(plan.ProposedActions[0].Args, &args); err != nil {
+		t.Fatalf("unmarshal normalized args: %v", err)
+	}
+	wantTimeoutMS := int64(maxBashExecTimeout / time.Millisecond)
+	if args.TimeoutMS != wantTimeoutMS {
+		t.Fatalf("expected timeout_ms=%d, got %d", wantTimeoutMS, args.TimeoutMS)
 	}
 }
 

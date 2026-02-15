@@ -17,6 +17,9 @@ struct Approval: Codable, Identifiable {
     let tool: String
     let status: String
     let riskClass: String
+    let deterministicSummary: String
+    let commandPreview: String
+    let commandTimeoutMS: Int64?
     let createdAt: String
     let expiresAt: String
 

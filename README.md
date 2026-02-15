@@ -78,6 +78,10 @@ Backend runtime config is now CLI+env via `kong`:
 - `PINCER_LOG_LEVEL` (`debug|info|warn|error|fatal`)
 - `PINCER_LOG_FORMAT` (`text|json`)
 
+For stream/event debugging, run with:
+
+- `PINCER_LOG_LEVEL=debug PINCER_LOG_FORMAT=text mise run run`
+
 ## Run with Tailscale
 
 Use Tailscale for transport only; Pincer still requires normal device pairing and bearer-token auth.

@@ -143,8 +143,18 @@ func TestSendTurnReturnsProposedActionID(t *testing.T) {
 	if len(pendingResp.Msg.GetItems()) != 1 {
 		t.Fatalf("expected 1 pending approval, got %d", len(pendingResp.Msg.GetItems()))
 	}
-	if pendingResp.Msg.GetItems()[0].GetActionId() != sendResp.Msg.GetActionId() {
-		t.Fatalf("expected send turn action_id %s to match pending action %s", sendResp.Msg.GetActionId(), pendingResp.Msg.GetItems()[0].GetActionId())
+	approval := pendingResp.Msg.GetItems()[0]
+	if approval.GetActionId() != sendResp.Msg.GetActionId() {
+		t.Fatalf("expected send turn action_id %s to match pending action %s", sendResp.Msg.GetActionId(), approval.GetActionId())
+	}
+	if approval.GetDeterministicSummary() == "" {
+		t.Fatalf("expected deterministic summary in approval response")
+	}
+	if approval.GetPreview() == nil {
+		t.Fatalf("expected preview payload in approval response")
+	}
+	if command := approval.GetPreview().GetFields()["command"].GetStringValue(); command != "pwd" {
+		t.Fatalf("expected preview.command to be %q, got %q", "pwd", command)
 	}
 }
 

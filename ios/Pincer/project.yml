@@ -37,3 +37,17 @@ targets:
         MARKETING_VERSION: 0.1.0
         INFOPLIST_KEY_CFBundleDisplayName: Pincer
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
+  PincerTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: ../PincerTests
+        includes:
+          - "**/*.swift"
+    dependencies:
+      - target: Pincer
+    settings:
+      base:
+        IPHONEOS_DEPLOYMENT_TARGET: "26.0"
+        GENERATE_INFOPLIST_FILE: YES

@@ -478,6 +478,14 @@ func (a *App) StartTurn(ctx context.Context, req *connect.Request[protocolv1.Sta
 	}
 
 	turnID := newID("turn")
+	a.logger.Debug(
+		"start turn stream opened",
+		"thread_id", threadID,
+		"turn_id", turnID,
+		"trigger_type", req.Msg.GetTriggerType().String(),
+		"user_text_bytes", len(req.Msg.GetUserText()),
+		"client_message_id", strings.TrimSpace(req.Msg.GetClientMessageId()),
+	)
 	sub := a.subscribeThread(threadID)
 	defer a.unsubscribeThread(threadID, sub)
 
@@ -493,14 +501,17 @@ func (a *App) StartTurn(ctx context.Context, req *connect.Request[protocolv1.Sta
 	for {
 		select {
 		case <-ctx.Done():
+			a.logger.Debug("start turn stream canceled", "thread_id", threadID, "turn_id", turnID)
 			return connect.NewError(connect.CodeCanceled, ctx.Err())
 		case runErr := <-errCh:
 			errCh = nil
 			if runErr != nil {
+				a.logger.Warn("start turn execution failed", "thread_id", threadID, "turn_id", turnID, "error", runErr)
 				return connect.NewError(connect.CodeInternal, runErr)
 			}
 			execDone = true
 			if turnDone {
+				a.logger.Debug("start turn stream completed", "thread_id", threadID, "turn_id", turnID)
 				return nil
 			}
 		case incoming := <-sub:
@@ -511,22 +522,34 @@ func (a *App) StartTurn(ctx context.Context, req *connect.Request[protocolv1.Sta
 			if event.GetTurnId() != turnID {
 				continue
 			}
+			a.logger.Debug(
+				"start turn stream event",
+				"thread_id", threadID,
+				"turn_id", turnID,
+				"event_id", event.GetEventId(),
+				"sequence", event.GetSequence(),
+				"payload", threadEventPayloadName(event),
+			)
 			if err := stream.Send(event); err != nil {
+				a.logger.Warn("start turn stream send failed", "thread_id", threadID, "turn_id", turnID, "error", err)
 				return err
 			}
 			if event.GetTurnCompleted() != nil || event.GetTurnFailed() != nil {
 				turnDone = true
 				if execDone {
+					a.logger.Debug("start turn stream reached terminal event", "thread_id", threadID, "turn_id", turnID, "payload", threadEventPayloadName(event))
 					return nil
 				}
 				if errCh != nil {
 					runErr := <-errCh
 					if runErr != nil {
+						a.logger.Warn("start turn execution failed after terminal event", "thread_id", threadID, "turn_id", turnID, "error", runErr)
 						return connect.NewError(connect.CodeInternal, runErr)
 					}
 					errCh = nil
 					execDone = true
 				}
+				a.logger.Debug("start turn stream reached terminal event", "thread_id", threadID, "turn_id", turnID, "payload", threadEventPayloadName(event))
 				return nil
 			}
 		}
@@ -541,13 +564,20 @@ func (a *App) WatchThread(ctx context.Context, req *connect.Request[protocolv1.W
 	if !a.threadExists(threadID) {
 		return connect.NewError(connect.CodeNotFound, errors.New("thread not found"))
 	}
+	a.logger.Debug(
+		"watch thread stream opened",
+		"thread_id", threadID,
+		"from_sequence", req.Msg.GetFromSequence(),
+	)
 
 	history, err := a.listThreadEvents(ctx, threadID, req.Msg.GetFromSequence(), 2000)
 	if err != nil {
 		return connect.NewError(connect.CodeInternal, err)
 	}
+	a.logger.Debug("watch thread replay events", "thread_id", threadID, "count", len(history))
 	for _, event := range history {
 		if err := stream.Send(event); err != nil {
+			a.logger.Warn("watch thread replay send failed", "thread_id", threadID, "error", err)
 			return err
 		}
 	}
@@ -558,12 +588,22 @@ func (a *App) WatchThread(ctx context.Context, req *connect.Request[protocolv1.W
 	for {
 		select {
 		case <-ctx.Done():
+			a.logger.Debug("watch thread stream canceled", "thread_id", threadID)
 			return connect.NewError(connect.CodeCanceled, ctx.Err())
 		case incoming := <-sub:
 			if incoming == nil || incoming.event == nil {
 				continue
 			}
+			event := incoming.event
+			a.logger.Debug(
+				"watch thread stream event",
+				"thread_id", threadID,
+				"event_id", event.GetEventId(),
+				"sequence", event.GetSequence(),
+				"payload", threadEventPayloadName(event),
+			)
 			if err := stream.Send(incoming.event); err != nil {
+				a.logger.Warn("watch thread stream send failed", "thread_id", threadID, "error", err)
 				return err
 			}
 		}
@@ -577,7 +617,7 @@ func (a *App) ListApprovals(ctx context.Context, req *connect.Request[protocolv1
 	}
 
 	rows, err := a.db.QueryContext(ctx, `
-		SELECT action_id, source, source_id, tool, status, risk_class, justification, created_at, expires_at, rejection_reason
+		SELECT action_id, source, source_id, tool, status, risk_class, justification, args_json, created_at, expires_at, rejection_reason
 		FROM proposed_actions
 		WHERE status = ?
 		ORDER BY created_at ASC
@@ -596,10 +636,11 @@ func (a *App) ListApprovals(ctx context.Context, req *connect.Request[protocolv1
 		var statusRaw string
 		var riskClass string
 		var justification string
+		var argsJSON string
 		var createdAtRaw string
 		var expiresAtRaw string
 		var rejectionReason string
-		if err := rows.Scan(&actionID, &source, &sourceID, &tool, &statusRaw, &riskClass, &justification, &createdAtRaw, &expiresAtRaw, &rejectionReason); err != nil {
+		if err := rows.Scan(&actionID, &source, &sourceID, &tool, &statusRaw, &riskClass, &justification, &argsJSON, &createdAtRaw, &expiresAtRaw, &rejectionReason); err != nil {
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("scan approval: %w", err))
 		}
 		items = append(items, &protocolv1.Approval{
@@ -611,6 +652,7 @@ func (a *App) ListApprovals(ctx context.Context, req *connect.Request[protocolv1
 			RiskClass:            dbRiskToRiskClass(riskClass),
 			Identity:             protocolv1.Identity_IDENTITY_NONE,
 			DeterministicSummary: justification,
+			Preview:              jsonStringToStruct(argsJSON),
 			CreatedAt:            timestampOrNil(createdAtRaw),
 			ExpiresAt:            timestampOrNil(expiresAtRaw),
 			RejectionReason:      rejectionReason,

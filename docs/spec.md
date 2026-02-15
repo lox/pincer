@@ -156,6 +156,12 @@ Baseline tool families:
 - Controlled shell execution (`run_bash`) with bounded timeout/output capture
 - Internal memory/artifact tools
 
+`run_bash` argument contract:
+
+- `command` (required string)
+- `cwd` (optional string)
+- `timeout_ms` (optional integer, server-bounded; defaults to 10s, max 15m)
+
 ## 8. Policy engine
 
 Policy is deterministic and code-enforced.

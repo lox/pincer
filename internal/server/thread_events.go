@@ -56,6 +56,15 @@ func (a *App) appendThreadEvent(ctx context.Context, event *protocolv1.ThreadEve
 		return nil, fmt.Errorf("insert thread event: %w", err)
 	}
 
+	a.logger.Debug(
+		"thread event appended",
+		"thread_id", copyEvent.GetThreadId(),
+		"turn_id", copyEvent.GetTurnId(),
+		"event_id", copyEvent.GetEventId(),
+		"sequence", copyEvent.GetSequence(),
+		"payload", threadEventPayloadName(copyEvent),
+	)
+
 	a.publishThreadEvent(copyEvent)
 	return copyEvent, nil
 }
@@ -136,6 +145,7 @@ func (a *App) subscribeThread(threadID string) chan *threadEvent {
 		a.eventSubs[threadID] = subs
 	}
 	subs[ch] = struct{}{}
+	a.logger.Debug("thread subscription opened", "thread_id", threadID, "subscriber_count", len(subs))
 	return ch
 }
 
@@ -152,6 +162,7 @@ func (a *App) unsubscribeThread(threadID string, ch chan *threadEvent) {
 	}
 	delete(subs, ch)
 	close(ch)
+	a.logger.Debug("thread subscription closed", "thread_id", threadID, "subscriber_count", len(subs))
 	if len(subs) == 0 {
 		delete(a.eventSubs, threadID)
 	}
@@ -173,12 +184,26 @@ func (a *App) publishThreadEvent(event *protocolv1.ThreadEvent) {
 		channels = append(channels, ch)
 	}
 	a.eventSubsMu.RUnlock()
+	a.logger.Debug(
+		"publishing thread event",
+		"thread_id", event.GetThreadId(),
+		"event_id", event.GetEventId(),
+		"sequence", event.GetSequence(),
+		"payload", threadEventPayloadName(event),
+		"subscriber_count", len(channels),
+	)
 
 	publishedEvent := &threadEvent{event: event}
 	for _, ch := range channels {
 		select {
 		case ch <- publishedEvent:
 		default:
+			a.logger.Debug(
+				"thread subscriber channel full; delivering asynchronously",
+				"thread_id", event.GetThreadId(),
+				"event_id", event.GetEventId(),
+				"sequence", event.GetSequence(),
+			)
 			// Preserve delivery ordering for slow subscribers without blocking publishers.
 			go func(target chan *threadEvent, incoming *threadEvent) {
 				defer func() {
@@ -187,5 +212,70 @@ func (a *App) publishThreadEvent(event *protocolv1.ThreadEvent) {
 				target <- incoming
 			}(ch, publishedEvent)
 		}
+	}
+}
+
+func threadEventPayloadName(event *protocolv1.ThreadEvent) string {
+	if event == nil || event.GetPayload() == nil {
+		return "none"
+	}
+
+	switch event.GetPayload().(type) {
+	case *protocolv1.ThreadEvent_TurnStarted:
+		return "turn_started"
+	case *protocolv1.ThreadEvent_TurnBudgetApplied:
+		return "turn_budget_applied"
+	case *protocolv1.ThreadEvent_ModelOutputRepairAttempted:
+		return "model_output_repair_attempted"
+	case *protocolv1.ThreadEvent_TurnCompleted:
+		return "turn_completed"
+	case *protocolv1.ThreadEvent_TurnFailed:
+		return "turn_failed"
+	case *protocolv1.ThreadEvent_AssistantThinkingDelta:
+		return "assistant_thinking_delta"
+	case *protocolv1.ThreadEvent_AssistantTextDelta:
+		return "assistant_text_delta"
+	case *protocolv1.ThreadEvent_AssistantMessageCommitted:
+		return "assistant_message_committed"
+	case *protocolv1.ThreadEvent_ToolCallPlanned:
+		return "tool_call_planned"
+	case *protocolv1.ThreadEvent_ToolExecutionStarted:
+		return "tool_execution_started"
+	case *protocolv1.ThreadEvent_ToolExecutionOutputDelta:
+		return "tool_execution_output_delta"
+	case *protocolv1.ThreadEvent_ToolExecutionFinished:
+		return "tool_execution_finished"
+	case *protocolv1.ThreadEvent_PolicyDecisionMade:
+		return "policy_decision_made"
+	case *protocolv1.ThreadEvent_ProposedActionCreated:
+		return "proposed_action_created"
+	case *protocolv1.ThreadEvent_ProposedActionStatusChanged:
+		return "proposed_action_status_changed"
+	case *protocolv1.ThreadEvent_IdempotencyConflict:
+		return "idempotency_conflict"
+	case *protocolv1.ThreadEvent_JobStatusChanged:
+		return "job_status_changed"
+	case *protocolv1.ThreadEvent_ScheduleTriggered:
+		return "schedule_triggered"
+	case *protocolv1.ThreadEvent_DelegatedCallbackReceived:
+		return "delegated_callback_received"
+	case *protocolv1.ThreadEvent_AuditEventRecorded:
+		return "audit_event_recorded"
+	case *protocolv1.ThreadEvent_NotificationQueued:
+		return "notification_queued"
+	case *protocolv1.ThreadEvent_ArtifactCreated:
+		return "artifact_created"
+	case *protocolv1.ThreadEvent_MemoryCheckpointSaved:
+		return "memory_checkpoint_saved"
+	case *protocolv1.ThreadEvent_SkillProposalCreated:
+		return "skill_proposal_created"
+	case *protocolv1.ThreadEvent_SelfImprovementProposalCreated:
+		return "self_improvement_proposal_created"
+	case *protocolv1.ThreadEvent_Heartbeat:
+		return "heartbeat"
+	case *protocolv1.ThreadEvent_StreamGap:
+		return "stream_gap"
+	default:
+		return "unknown"
 	}
 }

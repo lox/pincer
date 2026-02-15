@@ -44,6 +44,7 @@ const (
 	defaultPairingCodeTTL             = 10 * time.Minute
 	lastUsedUpdateInterval            = time.Hour
 	defaultBashExecTimeout            = 10 * time.Second
+	maxBashExecTimeout                = 15 * time.Minute
 	maxBashOutputBytes                = 8 * 1024
 	maxBashSystemMessageChars         = 4 * 1024
 )
@@ -141,13 +142,15 @@ type approval struct {
 }
 
 type bashActionArgs struct {
-	Command string `json:"command"`
-	CWD     string `json:"cwd,omitempty"`
+	Command   string `json:"command"`
+	CWD       string `json:"cwd,omitempty"`
+	TimeoutMS int64  `json:"timeout_ms,omitempty"`
 }
 
 type bashExecutionResult struct {
 	Command   string
 	CWD       string
+	Timeout   time.Duration
 	Duration  time.Duration
 	ExitCode  int
 	Output    string
@@ -733,6 +736,7 @@ func (a *App) planTurn(ctx context.Context, threadID, userMessage string) (agent
 
 		riskClass := strings.ToUpper(strings.TrimSpace(action.RiskClass))
 		if isBashTool(tool) {
+			args = normalizeBashActionArgs(args)
 			riskClass = riskClassForBashArgs(args)
 		} else if riskClass == "" {
 			riskClass = riskClassForTool(tool)
@@ -870,6 +874,28 @@ func riskClassForBashArgs(args json.RawMessage) string {
 	}
 }
 
+func normalizeBashActionArgs(args json.RawMessage) json.RawMessage {
+	var parsed bashActionArgs
+	if err := json.Unmarshal(args, &parsed); err != nil {
+		return args
+	}
+
+	normalized := bashActionArgs{
+		Command: strings.TrimSpace(parsed.Command),
+		CWD:     strings.TrimSpace(parsed.CWD),
+	}
+	if parsed.TimeoutMS > 0 {
+		timeout := boundedBashExecTimeout(parsed.TimeoutMS)
+		normalized.TimeoutMS = int64(timeout / time.Millisecond)
+	}
+
+	encoded, err := json.Marshal(normalized)
+	if err != nil {
+		return args
+	}
+	return encoded
+}
+
 func executeBashAction(argsJSON string) bashExecutionResult {
 	return executeBashActionStreaming(argsJSON, nil)
 }
@@ -885,13 +911,14 @@ func executeBashActionStreaming(argsJSON string, onChunk func(stream protocolv1.
 
 	result.Command = strings.TrimSpace(args.Command)
 	result.CWD = strings.TrimSpace(args.CWD)
+	result.Timeout = boundedBashExecTimeout(args.TimeoutMS)
 
 	if result.Command == "" {
 		result.Output = "missing required field: command"
 		return result
 	}
 
-	output, duration, exitCode, timedOut, truncated := runBashCommandStreaming(result.Command, result.CWD, onChunk)
+	output, duration, exitCode, timedOut, truncated := runBashCommandStreamingWithTimeout(result.Command, result.CWD, result.Timeout, onChunk)
 	result.Output = output
 	result.Duration = duration
 	result.ExitCode = exitCode
@@ -901,12 +928,24 @@ func executeBashActionStreaming(argsJSON string, onChunk func(stream protocolv1.
 }
 
 func runBashCommand(command, cwd string) (output string, duration time.Duration, exitCode int, timedOut bool, truncated bool) {
-	return runBashCommandStreaming(command, cwd, nil)
+	return runBashCommandStreamingWithTimeout(command, cwd, defaultBashExecTimeout, nil)
 }
 
 func runBashCommandStreaming(command, cwd string, onChunk func(stream protocolv1.OutputStream, chunk []byte, offset uint64)) (output string, duration time.Duration, exitCode int, timedOut bool, truncated bool) {
+	return runBashCommandStreamingWithTimeout(command, cwd, defaultBashExecTimeout, onChunk)
+}
+
+func runBashCommandStreamingWithTimeout(command, cwd string, timeout time.Duration, onChunk func(stream protocolv1.OutputStream, chunk []byte, offset uint64)) (output string, duration time.Duration, exitCode int, timedOut bool, truncated bool) {
 	start := time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), defaultBashExecTimeout)
+	effectiveTimeout := timeout
+	if effectiveTimeout <= 0 {
+		effectiveTimeout = defaultBashExecTimeout
+	}
+	if effectiveTimeout > maxBashExecTimeout {
+		effectiveTimeout = maxBashExecTimeout
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), effectiveTimeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "bash", "-lc", command)
@@ -991,7 +1030,7 @@ func runBashCommandStreaming(command, cwd string, onChunk func(stream protocolv1
 	case errors.Is(ctx.Err(), context.DeadlineExceeded):
 		timedOut = true
 		exitCode = -1
-		output = appendOutputLine(output, fmt.Sprintf("command timed out after %s", defaultBashExecTimeout))
+		output = appendOutputLine(output, fmt.Sprintf("command timed out after %s", effectiveTimeout))
 	default:
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
@@ -1034,6 +1073,7 @@ func bashExecutionSystemMessage(actionID string, result bashExecutionResult) str
 	lines := []string{
 		fmt.Sprintf("Action %s executed.", actionID),
 		fmt.Sprintf("Command: %s", result.Command),
+		fmt.Sprintf("Timeout: %dms", result.Timeout.Milliseconds()),
 		fmt.Sprintf("Exit code: %d", result.ExitCode),
 		fmt.Sprintf("Duration: %dms", result.Duration.Milliseconds()),
 	}
@@ -1060,6 +1100,7 @@ func bashExecutionAuditPayload(tool string, result bashExecutionResult) string {
 		"tool":             tool,
 		"command":          result.Command,
 		"cwd":              result.CWD,
+		"timeout_ms":       result.Timeout.Milliseconds(),
 		"duration_ms":      result.Duration.Milliseconds(),
 		"exit_code":        result.ExitCode,
 		"timed_out":        result.TimedOut,
@@ -1071,6 +1112,19 @@ func bashExecutionAuditPayload(tool string, result bashExecutionResult) string {
 		return `{}`
 	}
 	return string(payloadBytes)
+}
+
+func boundedBashExecTimeout(timeoutMS int64) time.Duration {
+	if timeoutMS <= 0 {
+		return defaultBashExecTimeout
+	}
+
+	maxTimeoutMS := int64(maxBashExecTimeout / time.Millisecond)
+	if timeoutMS > maxTimeoutMS {
+		return maxBashExecTimeout
+	}
+
+	return time.Duration(timeoutMS) * time.Millisecond
 }
 
 type boundedOutputBuffer struct {

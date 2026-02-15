@@ -831,7 +831,9 @@ message ListNotificationsResponse {
 1. Web fetch tools must enforce SSRF protections (no local/private targets).
 2. Web fetch must cap redirects and byte budgets.
 3. `run_bash` is explicit-approval only and bounded by timeout/output limits.
-4. Streamed command output is observational only and does not imply side-effect approval.
+4. `run_bash` args are `command` (required), optional `cwd`, and optional `timeout_ms`.
+5. `timeout_ms` is server-bounded (default `10_000`, max `900_000`).
+6. Streamed command output is observational only and does not imply side-effect approval.
 
 ### 8.6 Identity and Risk Contracts
 
