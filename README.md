@@ -1,13 +1,9 @@
-<p align="left">
-  <img src="assets/pincer.png" alt="Pincer logo" width="180" />
-</p>
+<h1>
+  <img src="assets/claw-640px-transparent.png" alt="" width="80" style="vertical-align: middle;" />
+  Pincer
+</h1>
 
-# Pincer
-
-Pincer is a security-first autonomous assistant with a Go backend and an iOS control app.
-It is designed for high autonomy with strict control over side effects.
-
-Inspired by [OpenClaw](https://github.com/openclaw/openclaw) and [Nanobot](https://github.com/HKUDS/nanobot).
+A security-first autonomous assistant with a Go backend and an iOS control app. High autonomy, strict control over side effects. Inspired by [OpenClaw](https://github.com/openclaw/openclaw) and [Nanobot](https://github.com/HKUDS/nanobot).
 
 ## Core idea
 
@@ -47,6 +43,25 @@ Go Backend (single binary)
    |- SQLite (state + audit)
    |- Provider Client (OpenRouter/OpenAI-compatible)
 ```
+
+## What's working
+
+- **Device pairing & auth** — pairing codes, opaque bearer tokens (`pnr_` prefix), HMAC-signed, device revocation.
+- **Chat with tool use** — threaded conversations via ConnectRPC; the planner calls tools using native OpenAI function calling.
+- **Approval-gated execution** — all external actions (e.g. `run_bash`) require explicit user approval before execution. Results are audited and rendered inline in chat.
+- **Inline read tools** — READ-classified tools (`web_search`, `web_summarize`) execute during the turn without approval; results feed back into planner context.
+- **Live streaming** — turn progress, thinking indicators, and command output stream to the iOS app in real time via `StartTurn`/`WatchThread`.
+- **iOS control app** — SwiftUI chat with full markdown rendering (via Textual), approvals tab, device/session management, and settings.
+- **Audit log** — every side-effect transition (`proposed → approved → executed`) is recorded and queryable.
+- **SOUL-guided planner** — system prompt loaded from `SOUL.md` to shape assistant personality and safety posture.
+- **Tailscale support** — optional `tsnet` listener for tailnet-only access; transport only, does not bypass auth.
+- **E2E test coverage** — eval tests with real LLM, XCUITest for iOS UI, and reproducible API E2E scripts.
+
+See `PLAN.md` for the full roadmap. Phase 1 (secure core conveyor) is complete; Phase 2 (real integrations) is in progress.
+
+<p align="center">
+  <img src="assets/ios-mockup.png" alt="iOS app mockup — Chat, Approvals, Schedule, Jobs" width="800" />
+</p>
 
 ## Local end-to-end
 
