@@ -68,7 +68,9 @@ Steps:
 - [ ] Keep user mailbox send disabled.
 - [ ] Add Calendar read tool.
 - [x] Add web search tool (Kagi Search API) and web summarize tool (Kagi Universal Summarizer API).
-- [ ] Add web_fetch raw URL read tool with SSRF and size constraints.
+- [x] Add web_fetch raw URL read tool with SSRF and size constraints.
+- [ ] Add `image_describe` multimodal tool for image analysis via vision-capable model.
+- [ ] Add safe image rendering in iOS chat with provenance tracking and proxy (Camo-style) to prevent exfiltration.
 - [ ] Add deterministic approval-card rendering for each tool type.
 
 Exit criteria:
@@ -175,10 +177,11 @@ Exit criteria:
 - [x] Native OpenAI tool calling (function calling API) replaces `response_format: json_object` in planner.
 - [x] All `run_bash` commands require explicit approval (no silent READ bypass). Matches spec §8.7.
 - [x] Upgrade iOS chat markdown rendering to `Textual` for full block-level markdown support.
+- [x] `web_fetch` raw URL read tool with SSRF protections (private/loopback IP blocking, redirect cap, response size cap).
 - [ ] Phase 2 integrations started.
 
 Next priority:
 
 - [ ] Test inline tool loop end-to-end with live Kagi API.
-- [ ] Add web_fetch tool for raw URL content retrieval (with SSRF protections).
+- [x] Add web_fetch tool for raw URL content retrieval (with SSRF protections).
 - [ ] Continue Phase 3 foundation on turn orchestration and bounded tool-loop planning.

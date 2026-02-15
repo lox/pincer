@@ -738,6 +738,102 @@ func TestPlanTurnNormalizesRunBashTimeoutToMaxBound(t *testing.T) {
 	}
 }
 
+func TestWebFetchExecutesInlineAsReadTool(t *testing.T) {
+	t.Parallel()
+
+	// Start a local HTTP server to serve content for web_fetch.
+	contentServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"status":"ok","data":"test-payload"}`)
+	}))
+	defer contentServer.Close()
+
+	callCount := 0
+	planner := &callCountPlanner{
+		plans: []agent.PlanResult{
+			{
+				AssistantMessage: "Fetching the URL for you.",
+				ProposedActions: []agent.ProposedAction{
+					{
+						Tool:          "web_fetch",
+						Args:          json.RawMessage(fmt.Sprintf(`{"url":%q}`, contentServer.URL)),
+						Justification: "Fetch URL content.",
+						RiskClass:     "READ",
+					},
+				},
+			},
+			{
+				AssistantMessage: "The API returned test-payload.",
+				ProposedActions:  nil,
+			},
+		},
+		callCount: &callCount,
+	}
+
+	// Use a fetcher that bypasses SSRF checks for tests against local httptest servers.
+	app := newTestAppWithPlannerAndFetcher(t, planner, agent.NewWebFetcherWithTransport(http.DefaultTransport))
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
+
+	token := bootstrapAuthToken(t, srv.URL)
+	threadID := createThread(t, srv.URL, token)
+	postMessage(t, srv.URL, token, threadID, "fetch the api")
+
+	// web_fetch is READ so it should execute inline — no approval needed.
+	pending := listApprovals(t, srv.URL, token, "pending")
+	if len(pending) != 0 {
+		t.Fatalf("expected 0 pending approvals for READ tool, got %d", len(pending))
+	}
+
+	msgs := listMessages(t, srv.URL, token, threadID)
+
+	// Expect: user message, tool_result system message, assistant message.
+	var foundToolResult, foundAssistant bool
+	for _, msg := range msgs {
+		if msg.Role == "system" && strings.Contains(msg.Content, "[tool_result:web_fetch]") {
+			foundToolResult = true
+			if !strings.Contains(msg.Content, "test-payload") {
+				t.Fatalf("expected tool result to contain fetched content, got: %q", msg.Content)
+			}
+			if !strings.Contains(msg.Content, "UNTRUSTED_WEB_CONTENT") {
+				t.Fatalf("expected tool result to include untrusted content marker, got: %q", msg.Content)
+			}
+			if !strings.Contains(msg.Content, "--- BEGIN BODY ---") {
+				t.Fatalf("expected tool result to include body delimiters, got: %q", msg.Content)
+			}
+		}
+		if msg.Role == "assistant" && strings.Contains(msg.Content, "test-payload") {
+			foundAssistant = true
+		}
+	}
+	if !foundToolResult {
+		t.Fatalf("expected a system message with [tool_result:web_fetch], got messages: %v", msgs)
+	}
+	if !foundAssistant {
+		t.Fatalf("expected assistant message referencing fetched content")
+	}
+
+	// Planner should have been called twice (first for web_fetch, second for final answer).
+	if callCount != 2 {
+		t.Fatalf("expected planner to be called 2 times, got %d", callCount)
+	}
+}
+
+// callCountPlanner returns successive plan results, cycling through the list.
+type callCountPlanner struct {
+	plans     []agent.PlanResult
+	callCount *int
+}
+
+func (p *callCountPlanner) Plan(_ context.Context, _ agent.PlanRequest) (agent.PlanResult, error) {
+	idx := *p.callCount
+	*p.callCount++
+	if idx >= len(p.plans) {
+		idx = len(p.plans) - 1
+	}
+	return p.plans[idx], nil
+}
+
 type testThreadResponse struct {
 	ThreadID string `json:"thread_id"`
 }
@@ -799,6 +895,22 @@ func newTestAppWithPlanner(t *testing.T, planner agent.Planner) *App {
 	app, err := New(AppConfig{
 		DBPath:  filepath.Join(t.TempDir(), "pincer-test.db"),
 		Planner: planner,
+	})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = app.Close()
+	})
+	return app
+}
+
+func newTestAppWithPlannerAndFetcher(t *testing.T, planner agent.Planner, fetcher *agent.WebFetcher) *App {
+	t.Helper()
+	app, err := New(AppConfig{
+		DBPath:     filepath.Join(t.TempDir(), "pincer-test.db"),
+		Planner:    planner,
+		WebFetcher: fetcher,
 	})
 	if err != nil {
 		t.Fatalf("new app: %v", err)

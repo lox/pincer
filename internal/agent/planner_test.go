@@ -329,12 +329,12 @@ func TestOpenAIPlannerSendsToolsInRequest(t *testing.T) {
 		}
 
 		mu.Lock()
-		if len(req.Tools) == 3 {
+		if len(req.Tools) == 4 {
 			names := map[string]bool{}
 			for _, t := range req.Tools {
 				names[t.Function.Name] = true
 			}
-			if names["web_search"] && names["web_summarize"] && names["run_bash"] {
+			if names["web_search"] && names["web_summarize"] && names["web_fetch"] && names["run_bash"] {
 				sawTools = true
 			}
 		}
@@ -368,7 +368,7 @@ func TestOpenAIPlannerSendsToolsInRequest(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	if !sawTools {
-		t.Fatalf("expected request to include all 3 tool definitions")
+		t.Fatalf("expected request to include all 4 tool definitions")
 	}
 }
 

@@ -223,6 +223,7 @@ type openAIChatCompletionResponse struct {
 var knownTools = map[string]bool{
 	"web_search":    true,
 	"web_summarize": true,
+	"web_fetch":     true,
 	"run_bash":      true,
 }
 
@@ -251,6 +252,20 @@ var plannerTools = []openAITool{
 				"type": "object",
 				"properties": {
 					"url": {"type": "string", "description": "The URL to read and summarize"}
+				},
+				"required": ["url"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: openAIToolFunction{
+			Name:        "web_fetch",
+			Description: "Fetch the raw content of a URL. Returns the HTTP status code, content type, and body text. Use this to read specific pages, API responses, or documents. Subject to size limits and SSRF protections. Prefer web_summarize for long pages where a summary is sufficient.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"url": {"type": "string", "description": "The URL to fetch"}
 				},
 				"required": ["url"]
 			}`),

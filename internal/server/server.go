@@ -61,6 +61,7 @@ type AppConfig struct {
 	ModelFallback           string
 	Logger                  *charmLog.Logger
 	Planner                 agent.Planner
+	WebFetcher              *agent.WebFetcher
 	ActionExecutorInterval  time.Duration
 	DisableBackgroundWorker bool
 }
@@ -71,6 +72,7 @@ type App struct {
 	logger                 *charmLog.Logger
 	planner                agent.Planner
 	kagiAPIKey             string
+	webFetcher             *agent.WebFetcher
 	ownerID                string
 	llmConfigured          bool
 	stopCh                 chan struct{}
@@ -256,12 +258,18 @@ func New(cfg AppConfig) (*App, error) {
 		interval = defaultActionExecutorPollInterval
 	}
 
+	webFetcher := cfg.WebFetcher
+	if webFetcher == nil {
+		webFetcher = agent.NewWebFetcher()
+	}
+
 	app := &App{
 		db:                     db,
 		tokenHMACKey:           []byte(tokenHMACKey),
 		logger:                 logger,
 		planner:                planner,
 		kagiAPIKey:             strings.TrimSpace(cfg.KagiAPIKey),
+		webFetcher:             webFetcher,
 		ownerID:                defaultOwnerID,
 		llmConfigured:          cfg.OpenRouterAPIKey != "" || cfg.Planner != nil,
 		stopCh:                 make(chan struct{}),
@@ -812,7 +820,7 @@ func riskClassForTool(tool string) string {
 	}
 
 	switch strings.ToLower(strings.TrimSpace(tool)) {
-	case "web_search", "web_summarize":
+	case "web_search", "web_summarize", "web_fetch":
 		return "READ"
 	case "gmail_send_draft", "gmail_send_message":
 		return "EXFILTRATION"

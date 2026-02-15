@@ -4,6 +4,7 @@ go 1.25.5
 
 require (
 	connectrpc.com/connect v1.18.1
+	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.0
 	github.com/alecthomas/kong v1.14.0
 	github.com/charmbracelet/log v0.4.2
 	google.golang.org/protobuf v1.36.11
@@ -13,6 +14,7 @@ require (
 
 require (
 	filippo.io/edwards25519 v1.1.0 // indirect
+	github.com/JohannesKaufmann/dom v0.2.0 // indirect
 	github.com/akutz/memconn v0.1.0 // indirect
 	github.com/alexbrainman/sspi v0.0.0-20231016080023-1a75b4708caa // indirect
 	github.com/aws/aws-sdk-go-v2 v1.41.0 // indirect
@@ -51,7 +53,7 @@ require (
 	github.com/huin/goupnp v1.3.0 // indirect
 	github.com/jsimonetti/rtnetlink v1.4.0 // indirect
 	github.com/klauspost/compress v1.18.2 // indirect
-	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
+	github.com/lucasb-eyer/go-colorful v1.3.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-runewidth v0.0.16 // indirect
 	github.com/mdlayher/netlink v1.7.3-0.20250113171957-fbb4dce95f42 // indirect
