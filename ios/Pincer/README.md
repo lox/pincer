@@ -20,9 +20,15 @@ Project files:
 3. Open app Settings and set `Backend -> Address` (for device testing, use your Mac's LAN URL).
 4. Build from terminal:
    - `mise run ios-build`
-5. Open in Xcode:
+5. Or run on a physical device:
+   - Set `PINCER_IOS_DEVICE_UDID` and your signing team:
+     - `export PINCER_IOS_DEVICE_UDID=<your-device-udid>`
+     - `export PINCER_IOS_DEVELOPMENT_TEAM=A49UDW9T42`
+   - Run:
+     - `mise run ios-run-device`
+6. Open in Xcode:
    - `open ios/Pincer/Pincer.xcodeproj`
-6. Launch app and test the flow:
+7. Launch app and test the flow:
    - Send message in Chat.
    - Open Approvals.
    - Approve pending action.

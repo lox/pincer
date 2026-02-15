@@ -46,6 +46,14 @@ run = "xcodebuild -project ios/Pincer/Pincer.xcodeproj -scheme Pincer -destinati
 description = "Build, install, and launch iOS app in Simulator"
 run = "scripts/ios_run_simulator.sh"
 
+[tasks.ios-run-device]
+description = "Build, install, and launch iOS app on a connected physical device"
+run = "scripts/ios_run_device.sh"
+
+[tasks.ios-run-device.env]
+PINCER_IOS_SCHEME = "Pincer"
+PINCER_IOS_BUNDLE_ID = "com.lox.pincer"
+
 [tasks.ios-reset-token]
 [tasks.ios-reset-token.env]
 PINCER_IOS_DEVICE = "booted"
