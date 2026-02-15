@@ -55,8 +55,9 @@ Go Backend (single binary)
 - `mise run ios-simulator-reset-token`
 - `mise run ios-run-simulator`
 - `mise run ios-run-device`
+- `mise run eval`
 - `mise run e2e-api`
-- `mise run e2e-ios`
+- `mise run e2e-xcuitest`
 
 Useful overrides:
 
@@ -70,7 +71,8 @@ Database/session defaults:
 
 - `mise run dev` uses `./pincer.db` by default and `PINCER_TOKEN_HMAC_KEY='pincer-dev-token-hmac-key-change-me'`.
 - `mise run reset-db` clears `./pincer.db` and associated SQLite journal files.
-- `mise run e2e-api` and `mise run e2e-ios` use `/tmp/pincer-e2e.db` in tmux session `pincer-backend-e2e` on `http://127.0.0.1:18080` (reset each run by default).
+- `mise run eval` runs eval tests in-process (requires `OPENROUTER_API_KEY`). `mise run e2e-api` is an alias.
+- `mise run e2e-xcuitest` starts a fresh backend and runs native XCUITest E2E.
 
 Backend runtime config is now CLI+env via `kong`:
 

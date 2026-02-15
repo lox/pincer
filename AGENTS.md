@@ -49,7 +49,9 @@ Keep this slice working while iterating.
 
 - `cmd/pincer` - server entrypoint
 - `internal/server` - HTTP handlers, persistence, approval flow
+- `internal/server/eval_test.go` - eval tests (real LLM, `//go:build eval`)
 - `ios/Pincer` - SwiftUI app + generated Xcode project
+- `ios/PincerUITests` - XCUITest E2E for iOS UI
 - `docs/spec.md` - backend and security spec
 - `docs/protocol.md` - ConnectRPC/protobuf protocol and streaming contract
 - `docs/ios-ui-plan.md` - iOS UI/UX plan
@@ -66,8 +68,9 @@ Use `mise` for all routine tasks:
 - `mise run ios-generate` - generate Xcode project from `project.yml`
 - `mise run ios-build` - build iOS app for simulator (no signing)
 - `mise run ios-run-simulator` - build, install, and launch app in iOS Simulator
-- `mise run e2e-api` - run backend API E2E conveyor checks
-- `mise run e2e-ios` - run simulator UI + backend E2E checks
+- `mise run eval` - run eval tests with real LLM (requires `OPENROUTER_API_KEY`)
+- `mise run e2e-api` - alias for `mise run eval`
+- `mise run e2e-xcuitest` - run XCUITest E2E against a fresh backend
 
 If `mise` is blocked, run `mise trust` in repo root.
 
@@ -123,58 +126,47 @@ This repo includes a repeatable E2E path. Use it before/after changing approval 
 - `jq`
 - Xcode + iOS Simulator (for iOS checks)
 
-### 11.2 Start/stop backend in tmux
+### 11.2 E2E backend lifecycle
 
-Use the provided tasks:
+The `e2e_xcuitest.sh` script starts its own isolated backend:
 
-- `mise run backend-up`
-- `mise run backend-down`
-- `mise run e2e-ios`
+- creates tmux session `pincer-backend-e2e`
+- starts backend via `go run ./cmd/pincer` on `:18080`
+- uses a temp directory for the DB (cleaned up on exit)
+- waits for `POST /pincer.protocol.v1.AuthService/CreatePairingCode` to return `200` (or `401`)
 
-Behavior of `backend-up`:
-
-- creates tmux session `pincer-backend` (or `PINCER_TMUX_SESSION`)
-- starts backend via `go run ./cmd/pincer`
-- waits for `POST /pincer.protocol.v1.AuthService/CreatePairingCode` to return `200` (or `401` when auth is required)
-- defaults to persistent DB `./pincer.db`
-
-E2E scripts use isolated defaults:
-
-- tmux session `pincer-backend-e2e`
-- DB path `/tmp/pincer-e2e.db`
-- HTTP address `:18080` (base URL `http://127.0.0.1:18080`)
-- DB reset enabled each run
+Values are hardcoded in each script to avoid inheriting mise's dev-mode env.
 
 Useful tmux inspection commands:
 
 - `tmux ls`
-- `tmux capture-pane -pt pincer-backend:0 | tail -n 80`
-- `tmux attach -t pincer-backend`
+- `tmux capture-pane -pt pincer-backend-e2e:0 | tail -n 80`
 
-### 11.3 Automated API E2E
+### 11.3 Eval tests (real LLM)
 
 Run:
 
-- `mise run e2e-api`
+- `mise run eval`
 
-This validates:
+This is a Go test (`internal/server/eval_test.go`) with build tag `eval`. It spins up an in-process `httptest.NewServer` with the real OpenAI planner — no tmux backend needed.
 
-1. `AuthService.CreatePairingCode` + `AuthService.BindPairingCode`
-2. `ThreadsService.CreateThread`
-3. `TurnsService.SendTurn`
-4. `ApprovalsService.ListApprovals` (`PENDING`)
-5. `ApprovalsService.ApproveAction`
-6. `ApprovalsService.ListApprovals` (`EXECUTED`)
-7. `SystemService.ListAudit` includes:
-   - `action_proposed`
-   - `action_approved`
-   - `action_executed`
+Requires `OPENROUTER_API_KEY`. Skips automatically if not set.
 
-Expected success output includes:
+Validates the full conveyor:
 
-- `e2e ok`
-- `thread_id=...`
-- `action_id=...`
+1. Bootstrap auth via pairing
+2. Create thread
+3. Send turn (real LLM response)
+4. Assert a tool proposal was returned
+5. Approve action
+6. Wait for execution
+7. Verify `action_proposed`, `action_approved`, `action_executed` audit events
+
+Run directly with Go:
+
+- `go test ./internal/server -tags=eval -run TestEval -count=1 -timeout 120s -v`
+
+`mise run e2e-api` is an alias that invokes the same test.
 
 ### 11.4 iOS verification flow (manual or agent-driven)
 
@@ -201,21 +193,23 @@ Manual check path in app:
    - `curl -sS -X POST 'http://127.0.0.1:8080/pincer.protocol.v1.ApprovalsService/ListApprovals' -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' -d '{"status":"EXECUTED"}' | jq`
    - `curl -sS -X POST 'http://127.0.0.1:8080/pincer.protocol.v1.SystemService/ListAudit' -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' -d '{}' | jq`
 
-Agent-driven option:
+### 11.5 XCUITest (native Xcode UI testing)
 
-- use the `agent-device` skill and run via `npx -y agent-device ...`
-- if simulator UI interaction is flaky, treat `mise run e2e-api` as the required automated gate and run iOS checks manually
-- primary scripted command is `mise run e2e-ios` (it boots backend, installs app, drives UI actions, and verifies backend state)
+Run:
 
-### 11.5 Environment overrides
+- `mise run e2e-xcuitest`
+
+This runs the `PincerUITests` target via `xcodebuild test`. The script starts its own backend, configures the simulator app's UserDefaults to point at it, and cleans up on exit. No manual backend setup required.
+
+Test flow: launch app → send chat message → switch to Approvals tab → approve first pending action → verify it disappears.
+
+XCUITests use the accessibility identifiers defined in `ios/Pincer/ContentView.swift` (`A11y` enum).
+
+### 11.6 Environment overrides
 
 The scripts honor:
 
-- `PINCER_TMUX_SESSION`
-- `PINCER_HTTP_ADDR`
-- `PINCER_BASE_URL`
-- `PINCER_DB_PATH`
-- `PINCER_TOKEN_HMAC_KEY`
 - `PINCER_AUTH_TOKEN`
-- `PINCER_E2E_START_BACKEND` (`1` default in `e2e_api.sh`, set `0` to use existing backend)
-- `PINCER_E2E_RESET_DB` (`1` default, set `0` to keep DB)
+- `OPENROUTER_API_KEY` (required for eval tests)
+- `PINCER_MODEL_PRIMARY` (default `anthropic/claude-opus-4.6`)
+- `PINCER_MODEL_FALLBACK`

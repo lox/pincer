@@ -55,18 +55,16 @@ run = "scripts/ios_run_device.sh"
 [tasks.ios-simulator-reset-token]
 run = "xcrun simctl spawn booted defaults delete \"${PINCER_IOS_BUNDLE_ID}\" PINCER_BEARER_TOKEN"
 
-[tasks.e2e-api]
-description = "Run MVP API end-to-end checks against running backend"
-[tasks.e2e-api.env]
-PINCER_BASE_URL = "http://127.0.0.1:18080"
-PINCER_HTTP_ADDR = ":18080"
-PINCER_DB_PATH = "/tmp/pincer-e2e.db"
-run = "scripts/e2e_api.sh"
+[tasks.eval]
+description = "Run eval tests (requires OPENROUTER_API_KEY)"
+run = "go test ./internal/server -tags=eval -run TestEval -count=1 -timeout 120s -v"
+[tasks.eval.env]
+_.file = ".env"
 
-[tasks.e2e-ios]
-description = "Run MVP iOS + backend end-to-end checks in simulator"
-[tasks.e2e-ios.env]
-PINCER_BASE_URL = "http://127.0.0.1:18080"
-PINCER_HTTP_ADDR = ":18080"
-PINCER_DB_PATH = "/tmp/pincer-e2e.db"
-run = "scripts/e2e_ios.sh"
+[tasks.e2e-api]
+description = "Alias for eval — run API end-to-end checks (requires OPENROUTER_API_KEY)"
+run = "go test ./internal/server -tags=eval -run TestEval -count=1 -timeout 120s -v"
+
+[tasks.e2e-xcuitest]
+description = "Run XCUITest E2E against a fresh backend"
+run = "scripts/e2e_xcuitest.sh"

@@ -56,3 +56,17 @@ targets:
       base:
         IPHONEOS_DEPLOYMENT_TARGET: "26.0"
         GENERATE_INFOPLIST_FILE: YES
+  PincerUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: ../PincerUITests
+        includes:
+          - "**/*.swift"
+    dependencies:
+      - target: Pincer
+    settings:
+      base:
+        IPHONEOS_DEPLOYMENT_TARGET: "26.0"
+        GENERATE_INFOPLIST_FILE: YES

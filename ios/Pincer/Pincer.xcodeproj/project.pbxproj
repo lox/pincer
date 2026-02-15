@@ -20,6 +20,7 @@
 		6C27C13BD63BAE6FD4D42169 /* ToolExecutionFormatting.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1863A4DCEFA30A59C57498A1 /* ToolExecutionFormatting.swift */; };
 		76A53B085D00679AD86B84AA /* ApprovalDetailFormattingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EDF5D76334E9002BB5DDDA04 /* ApprovalDetailFormattingTests.swift */; };
 		7EB7EC438B9862D4CE3932E1 /* PincerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 085FB97D074C43558F99C149 /* PincerApp.swift */; };
+		808665AD8359851B626F0BA5 /* PincerUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF493BDB69A270238281D4CC /* PincerUITests.swift */; };
 		8EC2FB5064B179146561EC84 /* ErrorTextTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA80E693D47FA40C0B3EE8C6 /* ErrorTextTests.swift */; };
 		A2C37C3D860188BB38E3BEDF /* Connect in Frameworks */ = {isa = PBXBuildFile; productRef = 6FE2BA4F0A5FEBED804281DF /* Connect */; };
 		A623331C6CBE1AB2B10A15EB /* ThreadEventReducer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B58EE3713A2F77906E8E483F /* ThreadEventReducer.swift */; };
@@ -33,6 +34,13 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		76067DA943EE6CE8FAB7D006 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = D3C29EBE9C57D1BD2ABF53BC /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = D888FE0BBF4C3FEB2384B7C3;
+			remoteInfo = Pincer;
+		};
 		DC9412E0DBFEA7D989B30670 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = D3C29EBE9C57D1BD2ABF53BC /* Project object */;
@@ -43,6 +51,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		01D6F4C816E0834B787A0178 /* PincerUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = PincerUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		044069EE4D0C506D769F1321 /* AppConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfig.swift; sourceTree = "<group>"; };
 		085FB97D074C43558F99C149 /* PincerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PincerApp.swift; sourceTree = "<group>"; };
 		11702ACE4071EBF9EC8A969F /* ApprovalDetailFormatting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApprovalDetailFormatting.swift; sourceTree = "<group>"; };
@@ -65,6 +74,7 @@
 		DC76A57DF375709D807D6E1D /* APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClient.swift; sourceTree = "<group>"; };
 		E79B8CDFD73AC6C0F7C663C7 /* ErrorText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ErrorText.swift; sourceTree = "<group>"; };
 		EDF5D76334E9002BB5DDDA04 /* ApprovalDetailFormattingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApprovalDetailFormattingTests.swift; sourceTree = "<group>"; };
+		EF493BDB69A270238281D4CC /* PincerUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PincerUITests.swift; sourceTree = "<group>"; };
 		F2C5D45D4406B02D1F6C96FB /* Pincer.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Pincer.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -153,6 +163,7 @@
 			children = (
 				F2C5D45D4406B02D1F6C96FB /* Pincer.app */,
 				866A1BC33E273D3C8E5626CA /* PincerTests.xctest */,
+				01D6F4C816E0834B787A0178 /* PincerUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -164,6 +175,7 @@
 				51E340CFE737E645F634E0C7 /* Generated */,
 				B00F4ED3B6ADE66243015B94 /* Pincer */,
 				A094CE94BDD23A7677E9420D /* PincerTests */,
+				FAAB02E3ECE66D3BEFED5CBC /* PincerUITests */,
 				CC36E985119AA151F56AC2C6 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -176,9 +188,36 @@
 			path = protocol;
 			sourceTree = "<group>";
 		};
+		FAAB02E3ECE66D3BEFED5CBC /* PincerUITests */ = {
+			isa = PBXGroup;
+			children = (
+				EF493BDB69A270238281D4CC /* PincerUITests.swift */,
+			);
+			name = PincerUITests;
+			path = ../PincerUITests;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		2CCA14991BEEF51BCCDBD96E /* PincerUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E7B79A5F88061727997E34EF /* Build configuration list for PBXNativeTarget "PincerUITests" */;
+			buildPhases = (
+				FCB741894C96F7BDB2FCEE88 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				5F0BA5AA1304F02D46DEB76C /* PBXTargetDependency */,
+			);
+			name = PincerUITests;
+			packageProductDependencies = (
+			);
+			productName = PincerUITests;
+			productReference = 01D6F4C816E0834B787A0178 /* PincerUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 		47B95F2504CB5931389E3FB5 /* PincerTests */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = BCE423F9585C39554C99C6DB /* Build configuration list for PBXNativeTarget "PincerTests" */;
@@ -226,6 +265,11 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					2CCA14991BEEF51BCCDBD96E = {
+						TestTargetID = D888FE0BBF4C3FEB2384B7C3;
+					};
+				};
 			};
 			buildConfigurationList = A30B06684AC509B348A156EA /* Build configuration list for PBXProject "Pincer" */;
 			compatibilityVersion = "Xcode 14.0";
@@ -247,6 +291,7 @@
 			targets = (
 				D888FE0BBF4C3FEB2384B7C3 /* Pincer */,
 				47B95F2504CB5931389E3FB5 /* PincerTests */,
+				2CCA14991BEEF51BCCDBD96E /* PincerUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -297,9 +342,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		FCB741894C96F7BDB2FCEE88 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				808665AD8359851B626F0BA5 /* PincerUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		5F0BA5AA1304F02D46DEB76C /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = D888FE0BBF4C3FEB2384B7C3 /* Pincer */;
+			targetProxy = 76067DA943EE6CE8FAB7D006 /* PBXContainerItemProxy */;
+		};
 		91C3E9CEFE2964D99AFF070D /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = D888FE0BBF4C3FEB2384B7C3 /* Pincer */;
@@ -308,6 +366,23 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		18EC12C35EF9051E37553B8B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = Pincer;
+			};
+			name = Release;
+		};
 		19C13AF8E8F8C0AEB246C1CB /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -459,6 +534,23 @@
 			};
 			name = Debug;
 		};
+		7FE7065A3531059A69044D38 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = Pincer;
+			};
+			name = Debug;
+		};
 		92ED19EFE74F45F5E638BFAA /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -531,6 +623,15 @@
 			buildConfigurations = (
 				70D213FADB2AD86015E8E089 /* Debug */,
 				4AAD7D83279B39CDFC82622A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		E7B79A5F88061727997E34EF /* Build configuration list for PBXNativeTarget "PincerUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7FE7065A3531059A69044D38 /* Debug */,
+				18EC12C35EF9051E37553B8B /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

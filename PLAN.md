@@ -165,6 +165,8 @@ Exit criteria:
 - [x] Device session list + revoke controls.
 - [x] iOS migrated to generated Connect Swift unary clients for current app surfaces.
 - [x] Reproducible API and iOS E2E flows.
+- [x] Eval tests (`//go:build eval`) with real LLM via in-process `httptest.NewServer` — replaces standalone E2E binary.
+- [x] XCUITest target (`PincerUITests`) for native iOS UI E2E testing.
 - [x] `buf` is pinned in `mise` and used for Go + Swift code generation.
 - [x] iOS consumes `StartTurn`/`WatchThread` for live streaming thinking/output rendering.
 - [x] Inline READ tool execution loop — READ-classified tools execute during the turn without approval, results feed back into planner context.
