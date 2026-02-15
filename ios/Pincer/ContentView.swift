@@ -138,6 +138,7 @@ private struct ChatView: View {
                             .padding(.top, 10)
                             .padding(.bottom, 6)
                         }
+                        .scrollDismissesKeyboard(.interactively)
                         .onChange(of: model.messages.count) { _, _ in
                             scrollToBottom(reader)
                         }
@@ -243,6 +244,7 @@ private struct ApprovalsView: View {
                     }
                     .padding(.bottom, 16)
                 }
+                .scrollDismissesKeyboard(.interactively)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .navigationTitle("Approvals")
@@ -773,6 +775,7 @@ private struct ChatComposer: View {
     @Binding var text: String
     let isBusy: Bool
     let onSend: () -> Void
+    @FocusState private var isInputFocused: Bool
 
     private var canSend: Bool {
         !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isBusy
@@ -783,6 +786,7 @@ private struct ChatComposer: View {
             TextField("Message...", text: $text)
                 .font(.system(.body, design: .rounded))
                 .foregroundStyle(PincerPalette.textPrimary)
+                .focused($isInputFocused)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
                 .background(PincerPalette.card)
@@ -817,6 +821,14 @@ private struct ChatComposer: View {
         .padding(6)
         .background(PincerPalette.page)
         .clipShape(Capsule())
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Done") {
+                    isInputFocused = false
+                }
+            }
+        }
     }
 }
 
@@ -1013,6 +1025,10 @@ private struct SettingsView: View {
         NavigationStack {
             ZStack {
                 PincerPageBackground()
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        dismissKeyboard()
+                    }
 
                 ScrollView(showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 12) {
@@ -1059,6 +1075,7 @@ private struct SettingsView: View {
                     }
                     .padding(.bottom, 16)
                 }
+                .scrollDismissesKeyboard(.interactively)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .navigationTitle("Settings")
@@ -1102,11 +1119,21 @@ private struct SettingsView: View {
     }
 }
 
+private func dismissKeyboard() {
+    UIApplication.shared.sendAction(
+        #selector(UIResponder.resignFirstResponder),
+        to: nil,
+        from: nil,
+        for: nil
+    )
+}
+
 private struct BackendConfigCard: View {
     @Binding var backendURL: String
     let isBusy: Bool
     let onSave: () -> Void
     let onReset: () -> Void
+    @FocusState private var isAddressFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -1120,6 +1147,11 @@ private struct BackendConfigCard: View {
                 .textInputAutocapitalization(.never)
                 .keyboardType(.URL)
                 .autocorrectionDisabled()
+                .submitLabel(.done)
+                .focused($isAddressFocused)
+                .onSubmit {
+                    isAddressFocused = false
+                }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
                 .background(PincerPalette.page)
@@ -1131,7 +1163,10 @@ private struct BackendConfigCard: View {
                 .foregroundStyle(PincerPalette.textSecondary)
 
             HStack(spacing: 10) {
-                Button(action: onSave) {
+                Button(action: {
+                    isAddressFocused = false
+                    onSave()
+                }) {
                     Text(isBusy ? "Saving..." : "Save")
                         .font(.system(.subheadline, design: .rounded).weight(.semibold))
                         .foregroundStyle(PincerPalette.accent)
@@ -1139,7 +1174,10 @@ private struct BackendConfigCard: View {
                 .disabled(isBusy)
                 .accessibilityIdentifier(A11y.settingsBackendSaveButton)
 
-                Button(action: onReset) {
+                Button(action: {
+                    isAddressFocused = false
+                    onReset()
+                }) {
                     Text("Reset")
                         .font(.system(.subheadline, design: .rounded).weight(.semibold))
                         .foregroundStyle(PincerPalette.textSecondary)
@@ -1150,6 +1188,14 @@ private struct BackendConfigCard: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .cardSurface()
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Done") {
+                    isAddressFocused = false
+                }
+            }
+        }
     }
 }
 
