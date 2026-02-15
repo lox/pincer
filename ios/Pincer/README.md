@@ -25,7 +25,7 @@ Project files:
      - `xcrun xctrace list devices`
    - Set these env vars (or add to `.envrc`):
      - `export PINCER_IOS_DEVICE_UDID=<your-device-udid>`
-     - `export PINCER_IOS_DEVELOPMENT_TEAM=A49UDW9T42`
+     - `export PINCER_IOS_DEVELOPMENT_TEAM=<your-team-id>`
    - Run:
      - `mise run ios-run-device`
 6. Open in Xcode:

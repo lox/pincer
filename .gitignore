@@ -1,4 +1,5 @@
 .DS_Store
+.env
 pincer.db
 pincer.db-shm
 pincer.db-wal
