@@ -33,7 +33,7 @@ var (
 // never connect to.  Any resolved IP that falls in one of these is rejected.
 var blockedPrefixes = []netip.Prefix{
 	// IPv4 reserved/private/special-use
-	netip.MustParsePrefix("0.0.0.0/8"),         // "this network" (RFC 791)
+	netip.MustParsePrefix("0.0.0.0/8"),          // "this network" (RFC 791)
 	netip.MustParsePrefix("10.0.0.0/8"),         // private (RFC 1918)
 	netip.MustParsePrefix("100.64.0.0/10"),      // CGNAT / shared address space (RFC 6598)
 	netip.MustParsePrefix("127.0.0.0/8"),        // loopback (RFC 1122)
@@ -235,6 +235,17 @@ func validateFetchURL(u *url.URL) error {
 		return ErrFetchUserinfo
 	}
 	return nil
+}
+
+// ExtractDomain returns the hostname (without port) from a URL string.
+// Returns empty string if the URL is invalid.
+func ExtractDomain(rawURL string) string {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return ""
+	}
+	host := parsed.Hostname()
+	return strings.ToLower(host)
 }
 
 // ssrfSafeDialContext wraps the default dialer to block connections to

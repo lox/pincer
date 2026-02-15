@@ -137,20 +137,20 @@ func TestPostMessageWithProposalSkipsAssistantChatBubble(t *testing.T) {
 					Args:          json.RawMessage(`{"command":"deploy"}`),
 					Justification: "User requested shell command.",
 					RiskClass:     "HIGH",
-					},
-					},
-					},
-					})
-					srv := httptest.NewServer(app.Handler())
-					defer srv.Close()
+				},
+			},
+		},
+	})
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
 
-					token := bootstrapAuthToken(t, srv.URL)
-					threadID := createThread(t, srv.URL, token)
-					postMessage(t, srv.URL, token, threadID, "run deploy")
+	token := bootstrapAuthToken(t, srv.URL)
+	threadID := createThread(t, srv.URL, token)
+	postMessage(t, srv.URL, token, threadID, "run deploy")
 
-					msgs := listMessages(t, srv.URL, token, threadID)
-					if len(msgs) != 1 {
-					t.Fatalf("expected only 1 message in thread, got %d", len(msgs))
+	msgs := listMessages(t, srv.URL, token, threadID)
+	if len(msgs) != 1 {
+		t.Fatalf("expected only 1 message in thread, got %d", len(msgs))
 	}
 	if msgs[0].Role != "user" {
 		t.Fatalf("expected first message role user, got %q", msgs[0].Role)
@@ -169,23 +169,23 @@ func TestApproveChatActionWritesApprovedSystemMarker(t *testing.T) {
 					Args:          json.RawMessage(`{"command":"deploy"}`),
 					Justification: "User requested shell command.",
 					RiskClass:     "HIGH",
-					},
-					},
-					},
-					})
-					srv := httptest.NewServer(app.Handler())
-					defer srv.Close()
+				},
+			},
+		},
+	})
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
 
-					token := bootstrapAuthToken(t, srv.URL)
-					threadID := createThread(t, srv.URL, token)
-					postMessage(t, srv.URL, token, threadID, "run deploy")
+	token := bootstrapAuthToken(t, srv.URL)
+	threadID := createThread(t, srv.URL, token)
+	postMessage(t, srv.URL, token, threadID, "run deploy")
 
-					pending := listApprovals(t, srv.URL, token, "pending")
-					if len(pending) != 1 {
-					t.Fatalf("expected 1 pending approval, got %d", len(pending))
-					}
-					actionID := pending[0].ActionID
-					approveAction(t, srv.URL, token, actionID)
+	pending := listApprovals(t, srv.URL, token, "pending")
+	if len(pending) != 1 {
+		t.Fatalf("expected 1 pending approval, got %d", len(pending))
+	}
+	actionID := pending[0].ActionID
+	approveAction(t, srv.URL, token, actionID)
 
 	messages := listMessages(t, srv.URL, token, threadID)
 	approvedMarker := fmt.Sprintf("Action %s approved.", actionID)
@@ -339,16 +339,16 @@ func TestRejectPendingAction(t *testing.T) {
 					Args:          json.RawMessage(`{"command":"deploy"}`),
 					Justification: "User requested shell command.",
 					RiskClass:     "HIGH",
-					},
-					},
-					},
-					})
-					srv := httptest.NewServer(app.Handler())
-					defer srv.Close()
+				},
+			},
+		},
+	})
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
 
-					token := bootstrapAuthToken(t, srv.URL)
-					threadID := createThread(t, srv.URL, token)
-					postMessage(t, srv.URL, token, threadID, "reject me")
+	token := bootstrapAuthToken(t, srv.URL)
+	threadID := createThread(t, srv.URL, token)
+	postMessage(t, srv.URL, token, threadID, "reject me")
 
 	pending := listApprovals(t, srv.URL, token, "pending")
 	if len(pending) != 1 {
@@ -383,16 +383,16 @@ func TestApproveRejectNonPendingReturnsConflict(t *testing.T) {
 					Args:          json.RawMessage(`{"command":"deploy"}`),
 					Justification: "User requested shell command.",
 					RiskClass:     "HIGH",
-					},
-					},
-					},
-					})
-					srv := httptest.NewServer(app.Handler())
-					defer srv.Close()
+				},
+			},
+		},
+	})
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
 
-					token := bootstrapAuthToken(t, srv.URL)
-					threadID := createThread(t, srv.URL, token)
-					postMessage(t, srv.URL, token, threadID, "approve then retry")
+	token := bootstrapAuthToken(t, srv.URL)
+	threadID := createThread(t, srv.URL, token)
+	postMessage(t, srv.URL, token, threadID, "approve then retry")
 
 	pending := listApprovals(t, srv.URL, token, "pending")
 	if len(pending) != 1 {
@@ -426,16 +426,16 @@ func TestPendingActionExpiresToRejected(t *testing.T) {
 					Args:          json.RawMessage(`{"command":"deploy"}`),
 					Justification: "User requested shell command.",
 					RiskClass:     "HIGH",
-					},
-					},
-					},
-					})
-					srv := httptest.NewServer(app.Handler())
-					defer srv.Close()
+				},
+			},
+		},
+	})
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
 
-					token := bootstrapAuthToken(t, srv.URL)
-					threadID := createThread(t, srv.URL, token)
-					postMessage(t, srv.URL, token, threadID, "expire me")
+	token := bootstrapAuthToken(t, srv.URL)
+	threadID := createThread(t, srv.URL, token)
+	postMessage(t, srv.URL, token, threadID, "expire me")
 
 	pending := listApprovals(t, srv.URL, token, "pending")
 	if len(pending) != 1 {
@@ -777,9 +777,16 @@ func TestWebFetchExecutesInlineAsReadTool(t *testing.T) {
 
 	token := bootstrapAuthToken(t, srv.URL)
 	threadID := createThread(t, srv.URL, token)
+
+	// Pre-grant the domain so web_fetch executes inline as READ.
+	domain := agent.ExtractDomain(contentServer.URL)
+	if err := app.grantDomain(domain, threadID); err != nil {
+		t.Fatalf("failed to grant domain: %v", err)
+	}
+
 	postMessage(t, srv.URL, token, threadID, "fetch the api")
 
-	// web_fetch is READ so it should execute inline — no approval needed.
+	// web_fetch to granted domain is READ — no approval needed.
 	pending := listApprovals(t, srv.URL, token, "pending")
 	if len(pending) != 0 {
 		t.Fatalf("expected 0 pending approvals for READ tool, got %d", len(pending))
@@ -817,6 +824,84 @@ func TestWebFetchExecutesInlineAsReadTool(t *testing.T) {
 	if callCount != 2 {
 		t.Fatalf("expected planner to be called 2 times, got %d", callCount)
 	}
+}
+
+func TestWebFetchUngrantedDomainRequiresApprovalAndGrantsDomain(t *testing.T) {
+	t.Parallel()
+
+	contentServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprint(w, "fetched-content-from-approval")
+	}))
+	defer contentServer.Close()
+
+	planner := &staticPlannerFunc{fn: func(_ context.Context, _ agent.PlanRequest) (agent.PlanResult, error) {
+		return agent.PlanResult{
+			AssistantMessage: "I need to fetch that page for you.",
+			ProposedActions: []agent.ProposedAction{
+				{
+					Tool:          "web_fetch",
+					Args:          json.RawMessage(fmt.Sprintf(`{"url":%q}`, contentServer.URL+"/page")),
+					Justification: "Fetch URL content.",
+					RiskClass:     "READ",
+				},
+			},
+		}, nil
+	}}
+
+	app := newTestAppWithPlannerAndFetcher(t, planner, agent.NewWebFetcherWithTransport(http.DefaultTransport))
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
+
+	token := bootstrapAuthToken(t, srv.URL)
+	threadID := createThread(t, srv.URL, token)
+
+	// Domain is NOT pre-granted — web_fetch should become a proposed action.
+	postMessage(t, srv.URL, token, threadID, "fetch the page")
+
+	pending := listApprovals(t, srv.URL, token, "pending")
+	if len(pending) != 1 {
+		t.Fatalf("expected 1 pending approval for ungranted domain, got %d", len(pending))
+	}
+	if pending[0].Tool != "web_fetch" {
+		t.Fatalf("expected pending approval for web_fetch, got %q", pending[0].Tool)
+	}
+
+	// Approve the action — this should grant the domain and execute the fetch.
+	approveAction(t, srv.URL, token, pending[0].ActionID)
+
+	// Wait for executor to pick it up.
+	executed := waitForApprovalStatus(t, srv.URL, token, "executed", pending[0].ActionID, 5*time.Second)
+	if len(executed) != 1 {
+		t.Fatalf("expected 1 executed approval, got %d", len(executed))
+	}
+
+	// Domain should now be granted.
+	domain := agent.ExtractDomain(contentServer.URL)
+	if !app.isDomainGranted(domain, threadID) {
+		t.Fatalf("expected domain %q to be granted after approval", domain)
+	}
+
+	// Execution should have persisted the fetch result as a system message.
+	msgs := listMessages(t, srv.URL, token, threadID)
+	var foundFetchResult bool
+	for _, msg := range msgs {
+		if msg.Role == "system" && strings.Contains(msg.Content, "fetched-content-from-approval") {
+			foundFetchResult = true
+		}
+	}
+	if !foundFetchResult {
+		t.Fatalf("expected system message with fetch result after approval")
+	}
+}
+
+// staticPlannerFunc wraps a function as a Planner.
+type staticPlannerFunc struct {
+	fn func(context.Context, agent.PlanRequest) (agent.PlanResult, error)
+}
+
+func (p *staticPlannerFunc) Plan(ctx context.Context, req agent.PlanRequest) (agent.PlanResult, error) {
+	return p.fn(ctx, req)
 }
 
 // callCountPlanner returns successive plan results, cycling through the list.

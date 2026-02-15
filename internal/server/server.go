@@ -639,7 +639,51 @@ func (a *App) executeApprovedAction(actionID string) error {
 
 	executionSystemMsg := fmt.Sprintf("Action %s executed.", item.ActionID)
 	actionExecutedAuditPayload := item.ArgsJSON
-	if isBashTool(item.Tool) {
+	if isWebFetchTool(item.Tool) {
+		var args agent.FetchArgs
+		if err := json.Unmarshal([]byte(item.ArgsJSON), &args); err == nil {
+			domain := agent.ExtractDomain(args.URL)
+			if domain != "" && item.SourceID != "" {
+				if err := a.grantDomain(domain, item.SourceID); err != nil {
+					a.logger.Warn("failed to grant domain", "domain", domain, "thread_id", item.SourceID, "error", err)
+				} else {
+					a.logger.Info("domain granted", "domain", domain, "thread_id", item.SourceID)
+				}
+			}
+
+			executionID := newID("exec")
+			if item.Source == "chat" {
+				a.emitToolExecutionStarted(streamCtx, item.SourceID, "", executionID, item.ActionID, item.Tool, args.URL)
+			}
+
+			result, fetchErr := a.webFetcher.Fetch(streamCtx, args)
+			if fetchErr != nil {
+				executionSystemMsg = fmt.Sprintf("[web_fetch] error: %v", fetchErr)
+			} else {
+				var b strings.Builder
+				fmt.Fprintf(&b, "[web_fetch] url: %s\n", result.URL)
+				if result.FinalURL != "" {
+					fmt.Fprintf(&b, "final_url: %s\n", result.FinalURL)
+				}
+				fmt.Fprintf(&b, "status: %d\ncontent_type: %s\ntruncated: %v\n", result.StatusCode, result.ContentType, result.Truncated)
+				b.WriteString(result.Body)
+				executionSystemMsg = b.String()
+
+				if item.Source == "chat" {
+					a.emitToolExecutionOutputDelta(streamCtx, item.SourceID, "", executionID, protocolv1.OutputStream_STDOUT, []byte(executionSystemMsg), 0)
+				}
+			}
+
+			if item.Source == "chat" {
+				a.emitToolExecutionFinished(streamCtx, item.SourceID, "", executionID, bashExecutionResult{
+					Command: args.URL,
+					Output:  executionSystemMsg,
+				})
+			}
+
+			actionExecutedAuditPayload = fmt.Sprintf(`{"url":%q,"domain":%q,"domain_granted":true}`, args.URL, domain)
+		}
+	} else if isBashTool(item.Tool) {
 		executionID := newID("exec")
 		displayCommand := strings.TrimSpace(item.ArgsJSON)
 		var parsedArgs bashActionArgs
@@ -708,6 +752,21 @@ func (a *App) threadExists(threadID string) bool {
 	var one int
 	err := a.db.QueryRow(`SELECT 1 FROM threads WHERE thread_id = ?`, threadID).Scan(&one)
 	return err == nil
+}
+
+func (a *App) isDomainGranted(domain, threadID string) bool {
+	var one int
+	err := a.db.QueryRow(`SELECT 1 FROM domain_grants WHERE domain = ? AND thread_id = ?`, domain, threadID).Scan(&one)
+	return err == nil
+}
+
+func (a *App) grantDomain(domain, threadID string) error {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := a.db.Exec(`
+		INSERT OR IGNORE INTO domain_grants(domain, thread_id, created_at)
+		VALUES(?, ?, ?)
+	`, domain, threadID, now)
+	return err
 }
 
 func (a *App) planTurn(ctx context.Context, threadID, userMessage string) (agent.PlanResult, error) {
@@ -849,6 +908,10 @@ func prettyActionName(tool string) string {
 		words[idx] = strings.ToUpper(word[:1]) + word[1:]
 	}
 	return strings.Join(words, " ")
+}
+
+func isWebFetchTool(tool string) bool {
+	return strings.EqualFold(strings.TrimSpace(tool), "web_fetch")
 }
 
 func isBashTool(tool string) bool {
@@ -1513,6 +1576,12 @@ func migrate(db *sql.DB) error {
 			occurred_at TEXT NOT NULL,
 			event_blob BLOB NOT NULL,
 			UNIQUE(thread_id, sequence)
+		);`,
+		`CREATE TABLE IF NOT EXISTS domain_grants(
+			domain TEXT NOT NULL,
+			thread_id TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			PRIMARY KEY(domain, thread_id)
 		);`,
 	}
 	for _, stmt := range stmts {

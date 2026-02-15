@@ -211,7 +211,7 @@ type openAIToolCall struct {
 
 type openAIResponseMessage struct {
 	Content   *string          `json:"content"`
-	ToolCalls []openAIToolCall  `json:"tool_calls,omitempty"`
+	ToolCalls []openAIToolCall `json:"tool_calls,omitempty"`
 }
 
 type openAIChatCompletionResponse struct {
@@ -302,7 +302,8 @@ func (p *OpenAIPlanner) planWithModel(ctx context.Context, model string, req Pla
 				"- When no tools are needed, respond with your answer directly.\n\n" +
 				"FORMATTING:\n" +
 				"- Your responses support markdown. Use it for bold, lists, and links.\n" +
-				"- Always render URLs as markdown links: [title](https://...). Never paste bare URLs.",
+				"- Always render URLs as markdown links: [title](https://...). Never paste bare URLs.\n" +
+				"- When summarizing fetched web content, preserve important source links from the original page. Include them inline next to the relevant claims so users can click through to the source.",
 		},
 	}
 	if p.soulPrompt != "" {

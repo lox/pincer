@@ -841,7 +841,7 @@ func (a *App) executeTurn(ctx context.Context, threadID, userText, turnID string
 			return nil, fmt.Errorf("plan turn: %w", err)
 		}
 
-		readActions, nonReadActions := splitByRiskClass(plan.ProposedActions)
+		readActions, nonReadActions := a.splitByRiskClass(threadID, plan.ProposedActions)
 
 		// If no READ actions, finalize the turn with whatever we have.
 		if len(readActions) == 0 {
@@ -877,17 +877,30 @@ func (a *App) executeTurn(ctx context.Context, threadID, userText, turnID string
 	if err != nil {
 		return nil, fmt.Errorf("final plan after tool limit: %w", err)
 	}
-	_, nonReadActions := splitByRiskClass(plan.ProposedActions)
+	_, nonReadActions := a.splitByRiskClass(threadID, plan.ProposedActions)
 	return a.finalizeTurn(ctx, threadID, turnID, plan.AssistantMessage, nonReadActions, result)
 }
 
-func splitByRiskClass(actions []agent.ProposedAction) (read, nonRead []agent.ProposedAction) {
+func (a *App) splitByRiskClass(threadID string, actions []agent.ProposedAction) (read, nonRead []agent.ProposedAction) {
 	for _, action := range actions {
-		if strings.EqualFold(action.RiskClass, "READ") {
-			read = append(read, action)
-		} else {
+		if !strings.EqualFold(action.RiskClass, "READ") {
 			nonRead = append(nonRead, action)
+			continue
 		}
+		// web_fetch to ungrated domains requires approval.
+		if strings.EqualFold(action.Tool, "web_fetch") {
+			var args agent.FetchArgs
+			if err := json.Unmarshal(action.Args, &args); err == nil {
+				domain := agent.ExtractDomain(args.URL)
+				if domain != "" && !a.isDomainGranted(domain, threadID) {
+					action.RiskClass = "EXFILTRATION"
+					action.Justification = fmt.Sprintf("Fetch %s — approving grants access to %s for this thread.", args.URL, domain)
+					nonRead = append(nonRead, action)
+					continue
+				}
+			}
+		}
+		read = append(read, action)
 	}
 	return
 }

@@ -71,6 +71,7 @@ Steps:
 - [x] Add web_fetch raw URL read tool with SSRF and size constraints.
 - [ ] Add `image_describe` multimodal tool for image analysis via vision-capable model.
 - [ ] Add safe image rendering in iOS chat with provenance tracking and proxy (Camo-style) to prevent exfiltration.
+- [ ] Add structured inline citations for web content summaries (source markers in text + sources array in planner output, rendered as tappable chips in iOS with domain/title/link).
 - [ ] Add deterministic approval-card rendering for each tool type.
 
 Exit criteria:
