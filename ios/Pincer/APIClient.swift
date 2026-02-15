@@ -99,21 +99,6 @@ actor APIClient {
         }
     }
 
-    func sendMessage(threadID: String, content: String) async throws {
-        try await withAuthorizedRetry {
-            var request = Pincer_Protocol_V1_SendTurnRequest()
-            request.threadID = threadID
-            request.userText = content
-            request.triggerType = .chatMessage
-
-            let response = await turnsClient.sendTurn(
-                request: request,
-                headers: authHeaders()
-            )
-            _ = try responseMessage(response) as Pincer_Protocol_V1_SendTurnResponse
-        }
-    }
-
     func fetchMessages(threadID: String) async throws -> [Message] {
         let snapshot = try await fetchMessagesSnapshot(threadID: threadID)
         return snapshot.messages

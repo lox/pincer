@@ -165,11 +165,11 @@ Exit criteria:
 - [x] iOS migrated to generated Connect Swift unary clients for current app surfaces.
 - [x] Reproducible API and iOS E2E flows.
 - [x] `buf` is pinned in `mise` and used for Go + Swift code generation.
-- [ ] iOS consumes `StartTurn`/`WatchThread` for live streaming thinking/output rendering.
+- [x] iOS consumes `StartTurn`/`WatchThread` for live streaming thinking/output rendering.
 - [ ] Upgrade iOS chat markdown rendering to `Textual` for full block-level markdown support.
 - [ ] Phase 2 integrations started.
 - [ ] Turn orchestration and bounded tool-loop implementation is planned.
 
 Next priority:
 
-- [ ] Complete stream-first iOS chat wiring (`StartTurn` + `WatchThread`) for live thinking/work/output UX, then continue Phase 3 turn-kernel work.
+- [ ] Continue Phase 3 foundation on turn orchestration and bounded tool-loop planning.
