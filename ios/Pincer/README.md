@@ -21,7 +21,9 @@ Project files:
 4. Build from terminal:
    - `mise run ios-build`
 5. Or run on a physical device:
-   - Set `PINCER_IOS_DEVICE_UDID` and your signing team:
+   - List connected devices and copy the Xcode `ID` (not `coredevice` ID):
+     - `xcrun xctrace list devices`
+   - Set these env vars (or add to `.envrc`):
      - `export PINCER_IOS_DEVICE_UDID=<your-device-udid>`
      - `export PINCER_IOS_DEVELOPMENT_TEAM=A49UDW9T42`
    - Run:

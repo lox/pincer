@@ -21,6 +21,116 @@ require_cmd() {
   fi
 }
 
+normalize_device_token() {
+  printf '%s' "$1" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g'
+}
+
+show_ios_destinations() {
+  xcodebuild -project "${PROJECT_PATH}" -scheme "${SCHEME}" -showdestinations 2>/dev/null \
+    | awk '/platform:iOS,/{print}'
+}
+
+parse_dest_id() {
+  local line="$1"
+  printf '%s\n' "${line}" | sed -E 's/.*id:([^,]+).*/\1/'
+}
+
+parse_dest_name() {
+  local line="$1"
+  printf '%s\n' "${line}" | sed -E 's/.*name:(.*) \}$/\1/'
+}
+
+is_uuid_like() {
+  local value="$1"
+  local stripped
+  local hex_only
+
+  if [[ -z "${value}" ]]; then
+    return 1
+  fi
+
+  stripped="$(printf '%s' "${value}" | tr '[:upper:]' '[:lower:]' | tr -d '-')"
+  hex_only="$(printf '%s' "${stripped}" | tr -cd '0-9a-f')"
+
+  if [[ "${stripped}" != "${hex_only}" ]]; then
+    return 1
+  fi
+
+  if [[ "${#stripped}" -lt 8 || "${#stripped}" -gt 40 ]]; then
+    return 1
+  fi
+
+  return 0
+}
+
+resolve_device_udid() {
+  local requested="$1"
+  requested="$(normalize_device_token "${requested}")"
+  if [[ -z "${requested}" ]]; then
+    return 1
+  fi
+
+  local line name id
+  local exact_match=""
+  local partial_matches=()
+  local requested_lower
+  requested_lower="$(printf '%s' "${requested}" | tr '[:upper:]' '[:lower:]')"
+  local name_lower
+
+  while IFS= read -r line; do
+    [[ -z "${line}" ]] && continue
+
+    id="$(parse_dest_id "${line}")"
+    if ! is_uuid_like "${id}"; then
+      continue
+    fi
+
+    name="$(parse_dest_name "${line}")"
+    name="$(normalize_device_token "${name}")"
+
+    if [[ "${requested}" == "${id}" ]]; then
+      printf '%s\n' "${id}"
+      return 0
+    fi
+
+    name_lower="$(printf '%s' "${name}" | tr '[:upper:]' '[:lower:]')"
+    if [[ "${requested_lower}" == "${name_lower}" ]]; then
+      exact_match="${id}"
+    elif [[ "${name_lower}" == *"${requested_lower}"* ]]; then
+      partial_matches+=("${id}")
+    fi
+  done < <(show_ios_destinations)
+
+  if [[ -n "${exact_match}" ]]; then
+    printf '%s\n' "${exact_match}"
+    return 0
+  fi
+
+  if (( ${#partial_matches[@]} == 1 )); then
+    printf '%s\n' "${partial_matches[0]}"
+    return 0
+  fi
+
+  if (( ${#partial_matches[@]} > 1 )); then
+    echo "multiple devices match '${requested}'. Specify exact device name or UDID:" >&2
+    while IFS= read -r line; do
+      id="$(parse_dest_id "${line}")"
+      name="$(normalize_device_token "$(parse_dest_name "${line}")")"
+      echo "  - ${name} (${id})" >&2
+    done < <(show_ios_destinations)
+    return 1
+  fi
+
+  echo "unable to resolve device '${requested}' from connected iOS devices." >&2
+  echo "available devices:" >&2
+  while IFS= read -r line; do
+    id="$(parse_dest_id "${line}")"
+    name="$(normalize_device_token "$(parse_dest_name "${line}")")"
+    echo "  - ${name} (${id})" >&2
+  done < <(show_ios_destinations)
+  return 1
+}
+
 get_app_path() {
   local settings target wrapper
   settings="$(xcodebuild \
@@ -44,11 +154,14 @@ main() {
   require_cmd xcodebuild
   require_cmd xcrun
   require_cmd curl
+  require_cmd awk
 
   if [[ -z "${DEVICE_UDID}" ]]; then
-    echo "PINCER_IOS_DEVICE_UDID (or PINCER_IOS_DEVICE) must be set to your physical device UDID." >&2
+    echo "PINCER_IOS_DEVICE_UDID (or PINCER_IOS_DEVICE) must be set to your physical device name or Xcode UDID." >&2
     exit 1
   fi
+
+  DEVICE_UDID="$(normalize_device_token "${DEVICE_UDID}")"
 
   if [[ -z "${DEVELOPMENT_TEAM}" ]]; then
     echo "PINCER_IOS_DEVELOPMENT_TEAM (or DEVELOPMENT_TEAM) must be set for physical-device signing." >&2
@@ -59,6 +172,27 @@ main() {
   if [[ "${backend_code}" == "000" ]]; then
     echo "warning: backend not reachable at ${BASE_URL}" >&2
     echo "warning: run 'mise run dev' before chatting/approvals" >&2
+  fi
+
+  resolved_udid=""
+  if ! resolved_udid="$(resolve_device_udid "${DEVICE_UDID}")"; then
+    if [[ -n "${PINCER_IOS_DEVICE:-}" ]]; then
+      device_hint="$(normalize_device_token "${PINCER_IOS_DEVICE}")"
+      if [[ -n "${device_hint}" && "${device_hint}" != "${DEVICE_UDID}" ]]; then
+        resolved_udid="$(resolve_device_udid "${device_hint}" || true)"
+      fi
+    fi
+  fi
+
+  if [[ -z "${resolved_udid}" ]]; then
+    exit 1
+  fi
+
+  DEVICE_UDID="${resolved_udid}"
+
+  if ! is_uuid_like "${DEVICE_UDID}"; then
+    echo "resolved device id is invalid: ${DEVICE_UDID}" >&2
+    exit 1
   fi
 
   local sign_args=(

@@ -6,7 +6,6 @@ buf = "1.57.0"
 PINCER_HTTP_ADDR = ':8080'
 PINCER_DB_PATH = './pincer.db'
 PINCER_TOKEN_HMAC_KEY = 'pincer-dev-token-hmac-key-change-me'
-PINCER_IOS_DEVICE = 'iPhone 17 Pro'
 PINCER_IOS_BUNDLE_ID = 'com.lox.pincer'
 PINCER_BASE_URL = 'http://127.0.0.1:8080'
 
@@ -45,6 +44,9 @@ run = "xcodebuild -project ios/Pincer/Pincer.xcodeproj -scheme Pincer -destinati
 [tasks.ios-run]
 description = "Build, install, and launch iOS app in Simulator"
 run = "scripts/ios_run_simulator.sh"
+
+[tasks.ios-run.env]
+PINCER_IOS_DEVICE = "iPhone 17 Pro"
 
 [tasks.ios-run-device]
 description = "Build, install, and launch iOS app on a connected physical device"

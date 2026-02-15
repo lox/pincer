@@ -94,6 +94,24 @@ Use Tailscale for transport only; Pincer still requires normal device pairing an
 3. In the iOS app, set `Settings -> Backend -> Address` to your tailnet HTTPS URL.
 4. Pair the app as usual; tailnet reachability does not bypass pairing/token auth.
 
+## Deploy to Fly.io with Tailscale sidecar
+
+This repo includes a Fly deployment path that runs Pincer and a colocated `tailscaled` process, then publishes Pincer as `svc:pincer` via `tailscale serve`.
+
+1. Create the app (or edit `fly.toml` if `pincer` is unavailable):
+   - `flyctl apps create pincer`
+2. Create a persistent volume for SQLite and Tailscale state:
+   - `flyctl volumes create pincer_data --region syd --size 3 -a pincer`
+3. Set required secrets:
+   - `flyctl secrets set TS_AUTHKEY='tskey-...' PINCER_TOKEN_HMAC_KEY="$(openssl rand -hex 32)" -a pincer`
+   - Optional model access: `flyctl secrets set OPENROUTER_API_KEY='...' -a pincer`
+4. Deploy:
+   - `flyctl deploy --remote-only -a pincer`
+5. Verify service registration and connectivity:
+   - `flyctl ssh console -a pincer -C "tailscale --socket=/var/run/tailscale/tailscaled.sock status"`
+   - `flyctl ssh console -a pincer -C "tailscale --socket=/var/run/tailscale/tailscaled.sock serve status"`
+   - Confirm `svc:pincer` appears in the serve output.
+
 ## Documentation
 
 - `docs/spec.md` - end-state system design and contracts.
