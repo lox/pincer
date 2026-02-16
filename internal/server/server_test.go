@@ -794,27 +794,18 @@ func TestWebFetchExecutesInlineAsReadTool(t *testing.T) {
 
 	msgs := listMessages(t, srv.URL, token, threadID)
 
-	// Expect: user message, tool_result system message, assistant message.
-	var foundToolResult, foundAssistant bool
+	// Tool result messages use role=internal and should be excluded from the API response.
+	var foundAssistant bool
 	for _, msg := range msgs {
+		if msg.Role == "internal" {
+			t.Fatalf("internal messages should not be visible via API, got: %v", msg)
+		}
 		if msg.Role == "system" && strings.Contains(msg.Content, "[tool_result:web_fetch]") {
-			foundToolResult = true
-			if !strings.Contains(msg.Content, "test-payload") {
-				t.Fatalf("expected tool result to contain fetched content, got: %q", msg.Content)
-			}
-			if !strings.Contains(msg.Content, "UNTRUSTED_WEB_CONTENT") {
-				t.Fatalf("expected tool result to include untrusted content marker, got: %q", msg.Content)
-			}
-			if !strings.Contains(msg.Content, "--- BEGIN BODY ---") {
-				t.Fatalf("expected tool result to include body delimiters, got: %q", msg.Content)
-			}
+			t.Fatalf("tool result system messages should no longer appear; they use role=internal now")
 		}
 		if msg.Role == "assistant" && strings.Contains(msg.Content, "test-payload") {
 			foundAssistant = true
 		}
-	}
-	if !foundToolResult {
-		t.Fatalf("expected a system message with [tool_result:web_fetch], got messages: %v", msgs)
 	}
 	if !foundAssistant {
 		t.Fatalf("expected assistant message referencing fetched content")
@@ -1406,6 +1397,217 @@ func connectErrorToHTTPStatus(err error) int {
 		return http.StatusNotImplemented
 	default:
 		return http.StatusInternalServerError
+	}
+}
+
+func TestInlineReadToolCallIDCorrelation(t *testing.T) {
+	t.Parallel()
+
+	contentServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprint(w, "hello from server")
+	}))
+	defer contentServer.Close()
+
+	callCount := 0
+	planner := &callCountPlanner{
+		plans: []agent.PlanResult{
+			{
+				AssistantMessage: "Fetching.",
+				ProposedActions: []agent.ProposedAction{
+					{
+						Tool:          "web_fetch",
+						Args:          json.RawMessage(fmt.Sprintf(`{"url":%q}`, contentServer.URL)),
+						Justification: "Fetch content.",
+						RiskClass:     "READ",
+					},
+				},
+			},
+			{
+				AssistantMessage: "Done.",
+				ProposedActions:  nil,
+			},
+		},
+		callCount: &callCount,
+	}
+
+	app := newTestAppWithPlannerAndFetcher(t, planner, agent.NewWebFetcherWithTransport(http.DefaultTransport))
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
+
+	token := bootstrapAuthToken(t, srv.URL)
+	threadID := createThread(t, srv.URL, token)
+
+	domain := agent.ExtractDomain(contentServer.URL)
+	if err := app.grantDomain(domain, threadID); err != nil {
+		t.Fatalf("failed to grant domain: %v", err)
+	}
+
+	// Collect all events from the StartTurn stream.
+	client := protocolv1connect.NewTurnsServiceClient(connectHTTPClient(token), srv.URL)
+	stream, err := client.StartTurn(context.Background(), connect.NewRequest(&protocolv1.StartTurnRequest{
+		ThreadId:    threadID,
+		UserText:    "fetch it",
+		TriggerType: protocolv1.TriggerType_CHAT_MESSAGE,
+	}))
+	if err != nil {
+		t.Fatalf("start turn: %v", err)
+	}
+
+	var plannedIDs []string
+	var executionToolCallIDs []string
+	for stream.Receive() {
+		event := stream.Msg()
+		if p := event.GetToolCallPlanned(); p != nil {
+			plannedIDs = append(plannedIDs, p.GetToolCallId())
+			if p.GetToolName() != "web_fetch" {
+				t.Errorf("expected tool_name=web_fetch, got %s", p.GetToolName())
+			}
+			if p.GetRiskClass() != protocolv1.RiskClass_READ {
+				t.Errorf("expected risk_class=READ, got %s", p.GetRiskClass())
+			}
+		}
+		if s := event.GetToolExecutionStarted(); s != nil {
+			executionToolCallIDs = append(executionToolCallIDs, s.GetToolCallId())
+		}
+	}
+	if err := stream.Err(); err != nil {
+		t.Fatalf("stream error: %v", err)
+	}
+
+	// ToolCallPlanned.tool_call_id must match ToolExecutionStarted.tool_call_id.
+	if len(plannedIDs) == 0 {
+		t.Fatal("expected at least one ToolCallPlanned event")
+	}
+	if len(executionToolCallIDs) == 0 {
+		t.Fatal("expected at least one ToolExecutionStarted event")
+	}
+	if plannedIDs[0] != executionToolCallIDs[0] {
+		t.Fatalf("ID mismatch: ToolCallPlanned.tool_call_id=%s, ToolExecutionStarted.tool_call_id=%s", plannedIDs[0], executionToolCallIDs[0])
+	}
+}
+
+func TestApprovalPathToolCallIDCorrelation(t *testing.T) {
+	t.Parallel()
+
+	planner := stubPlanner{
+		result: agent.PlanResult{
+			AssistantMessage: "Will run bash.",
+			ProposedActions: []agent.ProposedAction{
+				{
+					Tool:          "run_bash",
+					Args:          json.RawMessage(`{"command":"echo hi"}`),
+					Justification: "Test.",
+					RiskClass:     "HIGH",
+				},
+			},
+		},
+	}
+
+	app := newTestAppWithPlanner(t, planner)
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
+
+	token := bootstrapAuthToken(t, srv.URL)
+	threadID := createThread(t, srv.URL, token)
+
+	client := protocolv1connect.NewTurnsServiceClient(connectHTTPClient(token), srv.URL)
+	stream, err := client.StartTurn(context.Background(), connect.NewRequest(&protocolv1.StartTurnRequest{
+		ThreadId:    threadID,
+		UserText:    "run something",
+		TriggerType: protocolv1.TriggerType_CHAT_MESSAGE,
+	}))
+	if err != nil {
+		t.Fatalf("start turn: %v", err)
+	}
+
+	var plannedIDs []string
+	var proposedActionIDs []string
+	for stream.Receive() {
+		event := stream.Msg()
+		if p := event.GetToolCallPlanned(); p != nil {
+			plannedIDs = append(plannedIDs, p.GetToolCallId())
+		}
+		if a := event.GetProposedActionCreated(); a != nil {
+			proposedActionIDs = append(proposedActionIDs, a.GetActionId())
+		}
+	}
+	if err := stream.Err(); err != nil {
+		t.Fatalf("stream error: %v", err)
+	}
+
+	// ToolCallPlanned.tool_call_id must match ProposedActionCreated.action_id.
+	if len(plannedIDs) == 0 {
+		t.Fatal("expected at least one ToolCallPlanned event")
+	}
+	if len(proposedActionIDs) == 0 {
+		t.Fatal("expected at least one ProposedActionCreated event")
+	}
+	if plannedIDs[0] != proposedActionIDs[0] {
+		t.Fatalf("ID mismatch: ToolCallPlanned.tool_call_id=%s, ProposedActionCreated.action_id=%s", plannedIDs[0], proposedActionIDs[0])
+	}
+}
+
+func TestInlineReadToolCallArgsPersisted(t *testing.T) {
+	t.Parallel()
+
+	contentServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprint(w, "content")
+	}))
+	defer contentServer.Close()
+
+	fetchURL := contentServer.URL
+	callCount := 0
+	var capturedHistory []agent.Message
+	planner := &staticPlannerFunc{fn: func(_ context.Context, req agent.PlanRequest) (agent.PlanResult, error) {
+		callCount++
+		if callCount == 1 {
+			return agent.PlanResult{
+				AssistantMessage: "Fetching.",
+				ProposedActions: []agent.ProposedAction{
+					{
+						Tool:          "web_fetch",
+						Args:          json.RawMessage(fmt.Sprintf(`{"url":%q}`, fetchURL)),
+						Justification: "Fetch.",
+						RiskClass:     "READ",
+					},
+				},
+			}, nil
+		}
+		capturedHistory = req.History
+		return agent.PlanResult{AssistantMessage: "Done.", ProposedActions: nil}, nil
+	}}
+
+	app := newTestAppWithPlannerAndFetcher(t, planner, agent.NewWebFetcherWithTransport(http.DefaultTransport))
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
+
+	token := bootstrapAuthToken(t, srv.URL)
+	threadID := createThread(t, srv.URL, token)
+
+	domain := agent.ExtractDomain(contentServer.URL)
+	if err := app.grantDomain(domain, threadID); err != nil {
+		t.Fatalf("failed to grant domain: %v", err)
+	}
+
+	postMessage(t, srv.URL, token, threadID, "fetch it")
+
+	// The planner should have seen a [tool_call:web_fetch] message in history on the second call.
+	var foundToolCall, foundToolResult bool
+	for _, msg := range capturedHistory {
+		if strings.Contains(msg.Content, "[tool_call:web_fetch]") && strings.Contains(msg.Content, fetchURL) {
+			foundToolCall = true
+		}
+		if strings.Contains(msg.Content, "[tool_result:web_fetch]") {
+			foundToolResult = true
+		}
+	}
+	if !foundToolCall {
+		t.Fatalf("expected planner history to contain [tool_call:web_fetch] with args, got: %v", capturedHistory)
+	}
+	if !foundToolResult {
+		t.Fatalf("expected planner history to contain [tool_result:web_fetch], got: %v", capturedHistory)
 	}
 }
 

@@ -652,10 +652,20 @@ private struct MarkdownMessageText: View {
     }
 
     var body: some View {
-        StructuredText(markdown: text)
+        StructuredText(markdown: Self.escapeLeadingListMarkers(text))
             .font(font)
             .foregroundStyle(foregroundColor)
             .textual.textSelection(.enabled)
+    }
+
+    /// Escape leading ordered list markers so CommonMark doesn't
+    /// swallow them as block-level markup (e.g. "4." → empty list item).
+    private static func escapeLeadingListMarkers(_ input: String) -> String {
+        input.replacing(
+            /(?m)^(\d{1,9})([.)])/
+        ) { match in
+            "\(match.1)\\\(match.2)"
+        }
     }
 }
 

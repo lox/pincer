@@ -656,9 +656,14 @@ func (a *App) executeApprovedAction(actionID string) error {
 				a.emitToolExecutionStarted(streamCtx, item.SourceID, "", executionID, item.ActionID, item.Tool, args.URL)
 			}
 
+			fetchStart := time.Now()
 			result, fetchErr := a.webFetcher.Fetch(streamCtx, args)
+			fetchDuration := time.Since(fetchStart)
+			fetchExitCode := 0
+			fetchTruncated := false
 			if fetchErr != nil {
 				executionSystemMsg = fmt.Sprintf("[web_fetch] error: %v", fetchErr)
+				fetchExitCode = 1
 			} else {
 				var b strings.Builder
 				fmt.Fprintf(&b, "[web_fetch] url: %s\n", result.URL)
@@ -668,6 +673,7 @@ func (a *App) executeApprovedAction(actionID string) error {
 				fmt.Fprintf(&b, "status: %d\ncontent_type: %s\ntruncated: %v\n", result.StatusCode, result.ContentType, result.Truncated)
 				b.WriteString(result.Body)
 				executionSystemMsg = b.String()
+				fetchTruncated = result.Truncated
 
 				if item.Source == "chat" {
 					a.emitToolExecutionOutputDelta(streamCtx, item.SourceID, "", executionID, protocolv1.OutputStream_STDOUT, []byte(executionSystemMsg), 0)
@@ -675,9 +681,10 @@ func (a *App) executeApprovedAction(actionID string) error {
 			}
 
 			if item.Source == "chat" {
-				a.emitToolExecutionFinished(streamCtx, item.SourceID, "", executionID, bashExecutionResult{
-					Command: args.URL,
-					Output:  executionSystemMsg,
+				a.emitToolExecutionFinished(streamCtx, item.SourceID, "", executionID, toolExecutionResult{
+					ExitCode:  fetchExitCode,
+					Duration:  fetchDuration,
+					Truncated: fetchTruncated,
 				})
 			}
 
@@ -701,7 +708,12 @@ func (a *App) executeApprovedAction(actionID string) error {
 		})
 
 		if item.Source == "chat" {
-			a.emitToolExecutionFinished(streamCtx, item.SourceID, "", executionID, result)
+			a.emitToolExecutionFinished(streamCtx, item.SourceID, "", executionID, toolExecutionResult{
+				ExitCode:  result.ExitCode,
+				Duration:  result.Duration,
+				TimedOut:  result.TimedOut,
+				Truncated: result.Truncated,
+			})
 		}
 
 		executionSystemMsg = bashExecutionSystemMessage(item.ActionID, result)

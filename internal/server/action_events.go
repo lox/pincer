@@ -2,8 +2,10 @@ package server
 
 import (
 	"context"
+	"time"
 
 	protocolv1 "github.com/lox/pincer/gen/proto/pincer/protocol/v1"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 func (a *App) emitActionStatusEvent(ctx context.Context, source, sourceID, turnID, actionID string, status protocolv1.ActionStatus, reason string) {
@@ -60,7 +62,33 @@ func (a *App) emitToolExecutionOutputDelta(ctx context.Context, threadID, turnID
 	})
 }
 
-func (a *App) emitToolExecutionFinished(ctx context.Context, threadID, turnID, executionID string, result bashExecutionResult) {
+type toolExecutionResult struct {
+	ExitCode  int
+	Duration  time.Duration
+	TimedOut  bool
+	Truncated bool
+}
+
+func (a *App) emitToolCallPlanned(ctx context.Context, threadID, turnID, toolCallID, toolName string, args *structpb.Struct, riskClass protocolv1.RiskClass) {
+	if threadID == "" {
+		return
+	}
+	_, _ = a.appendThreadEvent(ctx, &protocolv1.ThreadEvent{
+		ThreadId:     threadID,
+		TurnId:       turnID,
+		Source:       protocolv1.EventSource_MODEL_UNTRUSTED,
+		ContentTrust: protocolv1.ContentTrust_UNTRUSTED_MODEL,
+		Payload: &protocolv1.ThreadEvent_ToolCallPlanned{ToolCallPlanned: &protocolv1.ToolCallPlanned{
+			ToolCallId: toolCallID,
+			ToolName:   toolName,
+			Args:       args,
+			RiskClass:  riskClass,
+			Identity:   protocolv1.Identity_IDENTITY_NONE,
+		}},
+	})
+}
+
+func (a *App) emitToolExecutionFinished(ctx context.Context, threadID, turnID, executionID string, result toolExecutionResult) {
 	if threadID == "" {
 		return
 	}
