@@ -41,6 +41,7 @@ type ProposedAction struct {
 
 type PlanResult struct {
 	AssistantMessage string           `json:"assistant_message"`
+	Thinking         string           `json:"thinking,omitempty"`
 	ProposedActions  []ProposedAction `json:"proposed_actions"`
 }
 
@@ -210,8 +211,9 @@ type openAIToolCall struct {
 }
 
 type openAIResponseMessage struct {
-	Content   *string          `json:"content"`
-	ToolCalls []openAIToolCall `json:"tool_calls,omitempty"`
+	Content          *string          `json:"content"`
+	ReasoningContent *string          `json:"reasoning_content,omitempty"`
+	ToolCalls        []openAIToolCall `json:"tool_calls,omitempty"`
 }
 
 type openAIChatCompletionResponse struct {
@@ -373,7 +375,16 @@ func (p *OpenAIPlanner) planWithModel(ctx context.Context, model string, req Pla
 	if msg.Content != nil {
 		content = *msg.Content
 	}
-	return parseToolCallResponse(content, msg.ToolCalls)
+	thinking := ""
+	if msg.ReasoningContent != nil {
+		thinking = *msg.ReasoningContent
+	}
+	result, err := parseToolCallResponse(content, msg.ToolCalls)
+	if err != nil {
+		return result, err
+	}
+	result.Thinking = thinking
+	return result, nil
 }
 
 func buildPlannerPrompt(req PlanRequest) string {
@@ -417,7 +428,7 @@ func parseToolCallResponse(content string, toolCalls []openAIToolCall) (PlanResu
 		actions = append(actions, ProposedAction{
 			Tool:          tool,
 			Args:          args,
-			Justification: "Proposed by planning model.",
+			Justification: justificationForAction(tool, args),
 		})
 	}
 
@@ -433,6 +444,44 @@ func parseToolCallResponse(content string, toolCalls []openAIToolCall) (PlanResu
 		AssistantMessage: assistant,
 		ProposedActions:  actions,
 	}, nil
+}
+
+func justificationForAction(tool string, args json.RawMessage) string {
+	switch strings.ToLower(strings.TrimSpace(tool)) {
+	case "run_bash":
+		var a struct {
+			Command string `json:"command"`
+		}
+		if json.Unmarshal(args, &a) == nil && strings.TrimSpace(a.Command) != "" {
+			cmd := strings.TrimSpace(a.Command)
+			if len(cmd) > 200 {
+				cmd = cmd[:200] + "…"
+			}
+			return fmt.Sprintf("Run: %s", cmd)
+		}
+	case "web_fetch":
+		var a struct {
+			URL string `json:"url"`
+		}
+		if json.Unmarshal(args, &a) == nil && strings.TrimSpace(a.URL) != "" {
+			return fmt.Sprintf("Fetch: %s", strings.TrimSpace(a.URL))
+		}
+	case "web_search":
+		var a struct {
+			Query string `json:"query"`
+		}
+		if json.Unmarshal(args, &a) == nil && strings.TrimSpace(a.Query) != "" {
+			return fmt.Sprintf("Search: %s", strings.TrimSpace(a.Query))
+		}
+	case "web_summarize":
+		var a struct {
+			URL string `json:"url"`
+		}
+		if json.Unmarshal(args, &a) == nil && strings.TrimSpace(a.URL) != "" {
+			return fmt.Sprintf("Summarize: %s", strings.TrimSpace(a.URL))
+		}
+	}
+	return "Proposed by planning model."
 }
 
 func isJSONObject(raw json.RawMessage) bool {
