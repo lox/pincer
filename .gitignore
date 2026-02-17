@@ -5,3 +5,4 @@ pincer.db-shm
 pincer.db-wal
 xcuserdata/
 *.xcuserstate
+decode_events
