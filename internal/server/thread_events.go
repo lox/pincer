@@ -231,6 +231,10 @@ func threadEventPayloadName(event *protocolv1.ThreadEvent) string {
 		return "turn_completed"
 	case *protocolv1.ThreadEvent_TurnFailed:
 		return "turn_failed"
+	case *protocolv1.ThreadEvent_TurnPaused:
+		return "turn_paused"
+	case *protocolv1.ThreadEvent_TurnResumed:
+		return "turn_resumed"
 	case *protocolv1.ThreadEvent_AssistantThinkingDelta:
 		return "assistant_thinking_delta"
 	case *protocolv1.ThreadEvent_AssistantTextDelta:

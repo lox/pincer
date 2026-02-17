@@ -112,8 +112,8 @@ func TestPostMessageUsesPlannerOutput(t *testing.T) {
 	threadID := createThread(t, srv.URL, token)
 	response := postMessageResponse(t, srv.URL, token, threadID, "hello harness")
 
-	if response.AssistantMessage != "" {
-		t.Fatalf("expected no assistant message when proposal is emitted, got %q", response.AssistantMessage)
+	if response.AssistantMessage != "Harness response ready." {
+		t.Fatalf("expected assistant message to be persisted with proposal, got %q", response.AssistantMessage)
 	}
 
 	pending := listApprovals(t, srv.URL, token, "pending")
@@ -149,11 +149,14 @@ func TestPostMessageWithProposalSkipsAssistantChatBubble(t *testing.T) {
 	postMessage(t, srv.URL, token, threadID, "run deploy")
 
 	msgs := listMessages(t, srv.URL, token, threadID)
-	if len(msgs) != 1 {
-		t.Fatalf("expected only 1 message in thread, got %d", len(msgs))
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 messages in thread (user + assistant), got %d", len(msgs))
 	}
 	if msgs[0].Role != "user" {
 		t.Fatalf("expected first message role user, got %q", msgs[0].Role)
+	}
+	if msgs[1].Role != "assistant" {
+		t.Fatalf("expected second message role assistant, got %q", msgs[1].Role)
 	}
 }
 

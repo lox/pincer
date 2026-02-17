@@ -55,7 +55,8 @@ func TestStartTurnStreamsLifecycleEvents(t *testing.T) {
 
 	gotStarted := false
 	gotProposal := false
-	gotCompleted := false
+	gotPaused := false
+	gotAssistantText := false
 
 	for stream.Receive() {
 		event := stream.Msg()
@@ -65,8 +66,11 @@ func TestStartTurnStreamsLifecycleEvents(t *testing.T) {
 		if event.GetProposedActionCreated() != nil {
 			gotProposal = true
 		}
-		if event.GetTurnCompleted() != nil {
-			gotCompleted = true
+		if event.GetTurnPaused() != nil {
+			gotPaused = true
+		}
+		if event.GetAssistantTextDelta() != nil {
+			gotAssistantText = true
 		}
 	}
 	if err := stream.Err(); err != nil {
@@ -79,8 +83,11 @@ func TestStartTurnStreamsLifecycleEvents(t *testing.T) {
 	if !gotProposal {
 		t.Fatalf("expected ProposedActionCreated event")
 	}
-	if !gotCompleted {
-		t.Fatalf("expected TurnCompleted event")
+	if !gotPaused {
+		t.Fatalf("expected TurnPaused event (turn pauses when proposals require approval)")
+	}
+	if !gotAssistantText {
+		t.Fatalf("expected AssistantTextDelta event (assistant text is always emitted)")
 	}
 }
 
@@ -130,8 +137,8 @@ func TestSendTurnReturnsProposedActionID(t *testing.T) {
 	if sendResp.Msg.GetActionId() == "" {
 		t.Fatalf("expected non-empty action_id")
 	}
-	if sendResp.Msg.GetAssistantMessage() != "" {
-		t.Fatalf("expected empty assistant_message when proposal is emitted, got %q", sendResp.Msg.GetAssistantMessage())
+	if sendResp.Msg.GetAssistantMessage() != "Proposing command execution." {
+		t.Fatalf("expected assistant_message to be persisted with proposal, got %q", sendResp.Msg.GetAssistantMessage())
 	}
 
 	pendingResp, err := approvalsClient.ListApprovals(context.Background(), connect.NewRequest(&protocolv1.ListApprovalsRequest{

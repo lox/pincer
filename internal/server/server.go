@@ -36,7 +36,7 @@ const (
 	defaultAssistantMessage           = "Message processed."
 	defaultActionJustification        = "User requested external follow-up"
 	defaultActionExpiry               = 24 * time.Hour
-	defaultPlannerHistoryLimit        = 12
+	defaultPlannerHistoryLimit        = 30
 	maxProposedActionsPerTurn         = 3
 	defaultActionExecutorPollInterval = 250 * time.Millisecond
 	defaultTokenTTL                   = 30 * 24 * time.Hour
@@ -47,6 +47,7 @@ const (
 	maxBashExecTimeout                = 15 * time.Minute
 	maxBashOutputBytes                = 8 * 1024
 	maxBashSystemMessageChars         = 4 * 1024
+	maxInlineToolSteps                = 10
 )
 
 var errIdempotencyConflict = errors.New("idempotency conflict")
@@ -82,6 +83,7 @@ type App struct {
 	eventAppendMu          sync.Mutex
 	eventSubsMu            sync.RWMutex
 	eventSubs              map[string]map[chan *threadEvent]struct{}
+	resumingTurns          sync.Map // turnID → struct{}: guards against double-resumption
 }
 
 type threadResponse struct {
@@ -563,6 +565,7 @@ func (a *App) markActionRejected(actionID, reason string) error {
 		return err
 	}
 	a.emitActionStatusEvent(context.Background(), source, sourceID, "", actionID, protocolv1.ActionStatus_REJECTED, reason)
+	a.maybeResumeTurn(actionID)
 	return nil
 }
 
@@ -739,10 +742,19 @@ func (a *App) executeApprovedAction(actionID string) error {
 	}
 
 	if item.Source == "chat" {
+		// Persist as system message for user visibility.
 		if _, err := finalizeTx.Exec(`
 			INSERT INTO messages(message_id, thread_id, role, content, created_at)
 			VALUES(?, ?, 'system', ?, ?)
 		`, newID("msg"), item.SourceID, executionSystemMsg, now); err != nil {
+			return err
+		}
+		// Also persist as internal message so the planner sees the result on continuation.
+		toolResultMsg := fmt.Sprintf("[tool_result:%s] %s", item.Tool, executionSystemMsg)
+		if _, err := finalizeTx.Exec(`
+			INSERT INTO messages(message_id, thread_id, role, content, created_at)
+			VALUES(?, ?, 'internal', ?, ?)
+		`, newID("msg"), item.SourceID, toolResultMsg, now); err != nil {
 			return err
 		}
 	}
@@ -758,6 +770,108 @@ func (a *App) executeApprovedAction(actionID string) error {
 	a.emitActionStatusEvent(streamCtx, item.Source, item.SourceID, "", actionID, protocolv1.ActionStatus_EXECUTED, "")
 	a.logger.Info("action executed", "action_id", actionID, "tool", item.Tool, "source", item.Source)
 	return nil
+}
+
+// maybeResumeTurn checks if all proposed actions for a turn have been resolved
+// (EXECUTED or REJECTED). If so, it triggers a continuation turn so the LLM can
+// observe the tool results and continue the planning loop.
+func (a *App) maybeResumeTurn(actionID string) {
+	var turnID string
+	var threadID string
+	var source string
+	err := a.db.QueryRow(`
+		SELECT turn_id, source_id, source
+		FROM proposed_actions
+		WHERE action_id = ?
+	`, actionID).Scan(&turnID, &threadID, &source)
+	if err != nil || turnID == "" || source != "chat" {
+		return
+	}
+
+	var pendingCount int
+	err = a.db.QueryRow(`
+		SELECT COUNT(*)
+		FROM proposed_actions
+		WHERE turn_id = ? AND status = 'PENDING'
+	`, turnID).Scan(&pendingCount)
+	if err != nil || pendingCount > 0 {
+		return
+	}
+
+	// Atomic guard: prevent double-resumption if multiple actions for the same
+	// turn are resolved concurrently.
+	if _, loaded := a.resumingTurns.LoadOrStore(turnID, struct{}{}); loaded {
+		return
+	}
+
+	// Count inline READ tool steps scoped to THIS turn (not the whole thread).
+	// Use the turn's first event timestamp to scope internal messages.
+	var turnStartedAt string
+	err = a.db.QueryRow(`
+		SELECT MIN(occurred_at) FROM thread_events WHERE turn_id = ?
+	`, turnID).Scan(&turnStartedAt)
+	if err != nil || turnStartedAt == "" {
+		a.resumingTurns.Delete(turnID)
+		return
+	}
+
+	var internalToolMessages int
+	err = a.db.QueryRow(`
+		SELECT COUNT(*)
+		FROM messages
+		WHERE thread_id = ? AND role = 'internal' AND content LIKE '[tool_call:%'
+		AND created_at >= ?
+	`, threadID, turnStartedAt).Scan(&internalToolMessages)
+	if err != nil {
+		internalToolMessages = 0
+	}
+
+	// Also count the actions that were just resolved in this turn as steps.
+	var resolvedActions int
+	err = a.db.QueryRow(`
+		SELECT COUNT(*)
+		FROM proposed_actions
+		WHERE turn_id = ?
+	`, turnID).Scan(&resolvedActions)
+	if err != nil {
+		resolvedActions = 0
+	}
+
+	stepsUsed := internalToolMessages + resolvedActions
+	if stepsUsed >= maxInlineToolSteps {
+		// Budget exhausted — complete the turn without re-planning.
+		_, _ = a.appendThreadEvent(context.Background(), &protocolv1.ThreadEvent{
+			ThreadId:     threadID,
+			TurnId:       turnID,
+			Source:       protocolv1.EventSource_SYSTEM,
+			ContentTrust: protocolv1.ContentTrust_TRUSTED_SYSTEM,
+			Payload: &protocolv1.ThreadEvent_TurnCompleted{TurnCompleted: &protocolv1.TurnCompleted{}},
+		})
+		a.resumingTurns.Delete(turnID)
+		return
+	}
+
+	// Load the user message that initiated THIS turn, not a later message.
+	var userText string
+	err = a.db.QueryRow(`
+		SELECT content FROM messages
+		WHERE thread_id = ? AND role = 'user'
+		AND created_at <= ?
+		ORDER BY created_at DESC LIMIT 1
+	`, threadID, turnStartedAt).Scan(&userText)
+	if err != nil {
+		userText = ""
+	}
+
+	a.logger.Info("resuming turn after approval", "turn_id", turnID, "thread_id", threadID, "steps_used", stepsUsed)
+
+	go func() {
+		defer a.resumingTurns.Delete(turnID)
+		_, err := a.executeTurnFromStep(context.Background(), threadID, userText, turnID, protocolv1.TriggerType_CHAT_MESSAGE, stepsUsed, true)
+		if err != nil {
+			a.logger.Error("turn continuation failed", "turn_id", turnID, "thread_id", threadID, "error", err)
+		}
+	}()
 }
 
 func (a *App) threadExists(threadID string) bool {
@@ -839,6 +953,7 @@ func (a *App) planTurn(ctx context.Context, threadID, userMessage string) (agent
 
 	return agent.PlanResult{
 		AssistantMessage: assistant,
+		Thinking:         strings.TrimSpace(plan.Thinking),
 		ProposedActions:  proposed,
 	}, nil
 }
@@ -847,7 +962,7 @@ func (a *App) loadPlannerHistory(threadID string, limit int) ([]agent.Message, e
 	rows, err := a.db.Query(`
 		SELECT role, content
 		FROM messages
-		WHERE thread_id = ?
+		WHERE thread_id = ? AND role != 'system'
 		ORDER BY created_at DESC
 		LIMIT ?
 	`, threadID, limit)
@@ -1296,10 +1411,13 @@ func (a *App) processActionQueueOnce() {
 		if err := a.executeApprovedAction(actionID); err != nil {
 			if errors.Is(err, errIdempotencyConflict) {
 				a.logger.Warn("action executor idempotency conflict", "action_id", actionID)
+				a.maybeResumeTurn(actionID)
 				continue
 			}
 			a.logger.Error("action executor failed to execute action", "action_id", actionID, "error", err)
+			continue
 		}
+		a.maybeResumeTurn(actionID)
 	}
 }
 
@@ -1561,6 +1679,7 @@ func migrate(db *sql.DB) error {
 			rejection_reason TEXT NOT NULL,
 			expires_at TEXT NOT NULL,
 			created_at TEXT NOT NULL,
+			turn_id TEXT NOT NULL DEFAULT '',
 			UNIQUE(user_id, tool, idempotency_key)
 		);`,
 		`CREATE TABLE IF NOT EXISTS idempotency(
@@ -1601,6 +1720,15 @@ func migrate(db *sql.DB) error {
 			return fmt.Errorf("migrate: %w", err)
 		}
 	}
+
+	// Additive column migrations for existing databases.
+	addColumns := []struct{ table, column, colDef string }{
+		{"proposed_actions", "turn_id", "TEXT NOT NULL DEFAULT ''"},
+	}
+	for _, ac := range addColumns {
+		_, _ = db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", ac.table, ac.column, ac.colDef))
+	}
+
 	return nil
 }
 

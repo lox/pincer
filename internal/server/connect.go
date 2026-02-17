@@ -524,7 +524,7 @@ func (a *App) StartTurn(ctx context.Context, req *connect.Request[protocolv1.Sta
 				a.logger.Warn("start turn stream send failed", "thread_id", threadID, "turn_id", turnID, "error", err)
 				return err
 			}
-			if event.GetTurnCompleted() != nil || event.GetTurnFailed() != nil {
+			if event.GetTurnCompleted() != nil || event.GetTurnFailed() != nil || event.GetTurnPaused() != nil {
 				turnDone = true
 				if execDone {
 					a.logger.Debug("start turn stream reached terminal event", "thread_id", threadID, "turn_id", turnID, "payload", threadEventPayloadName(event))
@@ -782,49 +782,66 @@ func (a *App) ListNotifications(context.Context, *connect.Request[protocolv1.Lis
 type turnExecutionResult struct {
 	AssistantMessage string
 	ActionIDs        []string
+	Paused           bool
 }
 
 func (a *App) executeTurn(ctx context.Context, threadID, userText, turnID string, triggerType protocolv1.TriggerType) (*turnExecutionResult, error) {
+	return a.executeTurnFromStep(ctx, threadID, userText, turnID, triggerType, 0, false)
+}
+
+func (a *App) executeTurnFromStep(ctx context.Context, threadID, userText, turnID string, triggerType protocolv1.TriggerType, startStep int, isContinuation bool) (*turnExecutionResult, error) {
 	result := &turnExecutionResult{}
 
-	if userText == "" {
+	if !isContinuation {
+		if userText == "" {
+			_, _ = a.appendThreadEvent(ctx, &protocolv1.ThreadEvent{
+				ThreadId:     threadID,
+				TurnId:       turnID,
+				Source:       protocolv1.EventSource_SYSTEM,
+				ContentTrust: protocolv1.ContentTrust_TRUSTED_SYSTEM,
+				Payload:      &protocolv1.ThreadEvent_TurnFailed{TurnFailed: &protocolv1.TurnFailed{Code: "INVALID_ARGUMENT", Message: "user_text is required", Retryable: false}},
+			})
+			return nil, errors.New("user_text is required")
+		}
+
+		now := time.Now().UTC()
+		nowStr := now.Format(time.RFC3339Nano)
+
+		userMessageID := newID("msg")
+		if _, err := a.db.ExecContext(ctx, `
+			INSERT INTO messages(message_id, thread_id, role, content, created_at)
+			VALUES(?, ?, 'user', ?, ?)
+		`, userMessageID, threadID, userText, nowStr); err != nil {
+			return nil, fmt.Errorf("insert user message: %w", err)
+		}
+
 		_, _ = a.appendThreadEvent(ctx, &protocolv1.ThreadEvent{
 			ThreadId:     threadID,
 			TurnId:       turnID,
 			Source:       protocolv1.EventSource_SYSTEM,
 			ContentTrust: protocolv1.ContentTrust_TRUSTED_SYSTEM,
-			Payload:      &protocolv1.ThreadEvent_TurnFailed{TurnFailed: &protocolv1.TurnFailed{Code: "INVALID_ARGUMENT", Message: "user_text is required", Retryable: false}},
+			Payload: &protocolv1.ThreadEvent_TurnStarted{TurnStarted: &protocolv1.TurnStarted{
+				UserMessageId: userMessageID,
+				TriggerType:   triggerType,
+			}},
 		})
-		return nil, errors.New("user_text is required")
+	} else {
+		_, _ = a.appendThreadEvent(ctx, &protocolv1.ThreadEvent{
+			ThreadId:     threadID,
+			TurnId:       turnID,
+			Source:       protocolv1.EventSource_SYSTEM,
+			ContentTrust: protocolv1.ContentTrust_TRUSTED_SYSTEM,
+			Payload: &protocolv1.ThreadEvent_TurnResumed{TurnResumed: &protocolv1.TurnResumed{
+				ResumedReason:  "all_actions_resolved",
+				StepsRemaining: uint32(maxInlineToolSteps - startStep),
+			}},
+		})
 	}
-
-	now := time.Now().UTC()
-	nowStr := now.Format(time.RFC3339Nano)
-
-	userMessageID := newID("msg")
-	if _, err := a.db.ExecContext(ctx, `
-		INSERT INTO messages(message_id, thread_id, role, content, created_at)
-		VALUES(?, ?, 'user', ?, ?)
-	`, userMessageID, threadID, userText, nowStr); err != nil {
-		return nil, fmt.Errorf("insert user message: %w", err)
-	}
-
-	_, _ = a.appendThreadEvent(ctx, &protocolv1.ThreadEvent{
-		ThreadId:     threadID,
-		TurnId:       turnID,
-		Source:       protocolv1.EventSource_SYSTEM,
-		ContentTrust: protocolv1.ContentTrust_TRUSTED_SYSTEM,
-		Payload: &protocolv1.ThreadEvent_TurnStarted{TurnStarted: &protocolv1.TurnStarted{
-			UserMessageId: userMessageID,
-			TriggerType:   triggerType,
-		}},
-	})
 
 	// Bounded inline READ tool loop.
 	// Each iteration: plan → split READ vs non-READ → execute READs inline → re-plan.
 	// Loop terminates when plan has no READ tools, or limits are hit.
-	const maxInlineToolSteps = 10
-	for step := 0; step < maxInlineToolSteps; step++ {
+	for step := startStep; step < maxInlineToolSteps; step++ {
 		plan, err := a.planTurn(ctx, threadID, userText)
 		if err != nil {
 			_, _ = a.appendThreadEvent(ctx, &protocolv1.ThreadEvent{
@@ -855,8 +872,11 @@ func (a *App) executeTurn(ctx context.Context, threadID, userText, turnID string
 
 		// If no READ actions, finalize the turn with whatever we have.
 		if len(readCalls) == 0 {
-			return a.finalizeTurn(ctx, threadID, turnID, plan.AssistantMessage, nonReadCalls, result)
+			return a.finalizeTurn(ctx, threadID, turnID, plan.AssistantMessage, plan.Thinking, nonReadCalls, step, result)
 		}
+
+		// Emit thinking from intermediate planning steps (before inline tool execution).
+		a.emitThinkingIfPresent(ctx, threadID, turnID, plan.Thinking)
 
 		// Execute READ tools inline and persist results as internal messages.
 		for _, tc := range readCalls {
@@ -904,7 +924,7 @@ func (a *App) executeTurn(ctx context.Context, threadID, userText, turnID string
 
 		// If there are also non-READ actions in this round, finalize with those.
 		if len(nonReadCalls) > 0 {
-			return a.finalizeTurn(ctx, threadID, turnID, plan.AssistantMessage, nonReadCalls, result)
+			return a.finalizeTurn(ctx, threadID, turnID, plan.AssistantMessage, plan.Thinking, nonReadCalls, step, result)
 		}
 
 		// Otherwise loop — planner will see the tool results and can continue.
@@ -917,7 +937,7 @@ func (a *App) executeTurn(ctx context.Context, threadID, userText, turnID string
 	}
 	planned := assignToolCallIDs(plan.ProposedActions)
 	_, nonReadCalls := a.splitPlannedByRiskClass(threadID, planned)
-	return a.finalizeTurn(ctx, threadID, turnID, plan.AssistantMessage, nonReadCalls, result)
+	return a.finalizeTurn(ctx, threadID, turnID, plan.AssistantMessage, plan.Thinking, nonReadCalls, maxInlineToolSteps, result)
 }
 
 // plannedToolCall pairs a stable ID with a proposed action. The toolCallID is
@@ -1021,11 +1041,27 @@ func (a *App) executeInlineReadTool(ctx context.Context, action agent.ProposedAc
 	}
 }
 
-func (a *App) finalizeTurn(ctx context.Context, threadID, turnID, assistantMessage string, proposedCalls []plannedToolCall, result *turnExecutionResult) (*turnExecutionResult, error) {
+func (a *App) emitThinkingIfPresent(ctx context.Context, threadID, turnID, thinking string) {
+	if thinking == "" || threadID == "" {
+		return
+	}
+	_, _ = a.appendThreadEvent(ctx, &protocolv1.ThreadEvent{
+		ThreadId:     threadID,
+		TurnId:       turnID,
+		Source:       protocolv1.EventSource_MODEL_UNTRUSTED,
+		ContentTrust: protocolv1.ContentTrust_UNTRUSTED_MODEL,
+		Payload: &protocolv1.ThreadEvent_AssistantThinkingDelta{AssistantThinkingDelta: &protocolv1.AssistantThinkingDelta{
+			SegmentId: "thinking",
+			Delta:     thinking,
+		}},
+	})
+}
+
+func (a *App) finalizeTurn(ctx context.Context, threadID, turnID, assistantMessage, thinking string, proposedCalls []plannedToolCall, stepsUsed int, result *turnExecutionResult) (*turnExecutionResult, error) {
 	now := time.Now().UTC()
 	nowStr := now.Format(time.RFC3339Nano)
 	expiresAt := now.Add(defaultActionExpiry).Format(time.RFC3339Nano)
-	assistantMessageID := ""
+	assistantMessageID := newID("msg")
 
 	tx, err := a.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -1033,73 +1069,75 @@ func (a *App) finalizeTurn(ctx context.Context, threadID, turnID, assistantMessa
 	}
 	defer tx.Rollback()
 
+	// Always persist the assistant message so the user sees the LLM's narrative.
+	result.AssistantMessage = assistantMessage
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO messages(message_id, thread_id, role, content, created_at)
+		VALUES(?, ?, 'assistant', ?, ?)
+	`, assistantMessageID, threadID, assistantMessage, nowStr); err != nil {
+		return nil, fmt.Errorf("insert assistant message: %w", err)
+	}
+
 	actions := make([]*protocolv1.ProposedActionCreated, 0, len(proposedCalls))
-	if len(proposedCalls) == 0 {
-		assistantMessageID = newID("msg")
-		result.AssistantMessage = assistantMessage
+	for _, tc := range proposedCalls {
+		actionID := tc.toolCallID // reuse the stable tool call ID as action_id
+		idempotencyKey := newID("idem")
+		argsJSON := string(tc.action.Args)
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO messages(message_id, thread_id, role, content, created_at)
-			VALUES(?, ?, 'assistant', ?, ?)
-		`, assistantMessageID, threadID, assistantMessage, nowStr); err != nil {
-			return nil, fmt.Errorf("insert assistant message: %w", err)
+			INSERT INTO proposed_actions(
+				action_id, user_id, source, source_id, tool, args_json, risk_class,
+				justification, idempotency_key, status, rejection_reason, expires_at, created_at, turn_id
+			) VALUES(?, ?, 'chat', ?, ?, ?, ?, ?, ?, 'PENDING', '', ?, ?, ?)
+		`, actionID, a.ownerID, threadID, tc.action.Tool, argsJSON, tc.action.RiskClass, tc.action.Justification, idempotencyKey, expiresAt, nowStr, turnID); err != nil {
+			return nil, fmt.Errorf("insert proposed action: %w", err)
 		}
-	} else {
-		for _, tc := range proposedCalls {
-			actionID := tc.toolCallID // reuse the stable tool call ID as action_id
-			idempotencyKey := newID("idem")
-			argsJSON := string(tc.action.Args)
-			if _, err := tx.ExecContext(ctx, `
-				INSERT INTO proposed_actions(
-					action_id, user_id, source, source_id, tool, args_json, risk_class,
-				justification, idempotency_key, status, rejection_reason, expires_at, created_at
-			) VALUES(?, ?, 'chat', ?, ?, ?, ?, ?, ?, 'PENDING', '', ?, ?)
-			`, actionID, a.ownerID, threadID, tc.action.Tool, argsJSON, tc.action.RiskClass, tc.action.Justification, idempotencyKey, expiresAt, nowStr); err != nil {
-				return nil, fmt.Errorf("insert proposed action: %w", err)
-			}
-			if err := insertAuditTx(tx, "action_proposed", actionID, argsJSON, nowStr); err != nil {
-				return nil, fmt.Errorf("insert action_proposed audit: %w", err)
-			}
-			result.ActionIDs = append(result.ActionIDs, actionID)
-			actions = append(actions, &protocolv1.ProposedActionCreated{
-				ActionId:             actionID,
-				Tool:                 tc.action.Tool,
-				RiskClass:            dbRiskToRiskClass(tc.action.RiskClass),
-				Identity:             protocolv1.Identity_IDENTITY_NONE,
-				IdempotencyKey:       idempotencyKey,
-				Justification:        tc.action.Justification,
-				DeterministicSummary: tc.action.Justification,
-				Preview:              jsonRawToStruct(tc.action.Args),
-				ExpiresAt:            timestampOrNil(expiresAt),
-			})
+		if err := insertAuditTx(tx, "action_proposed", actionID, argsJSON, nowStr); err != nil {
+			return nil, fmt.Errorf("insert action_proposed audit: %w", err)
 		}
+		result.ActionIDs = append(result.ActionIDs, actionID)
+		actions = append(actions, &protocolv1.ProposedActionCreated{
+			ActionId:             actionID,
+			Tool:                 tc.action.Tool,
+			RiskClass:            dbRiskToRiskClass(tc.action.RiskClass),
+			Identity:             protocolv1.Identity_IDENTITY_NONE,
+			IdempotencyKey:       idempotencyKey,
+			Justification:        tc.action.Justification,
+			DeterministicSummary: tc.action.Justification,
+			Preview:              jsonRawToStruct(tc.action.Args),
+			ExpiresAt:            timestampOrNil(expiresAt),
+		})
 	}
 
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit turn tx: %w", err)
 	}
 
-	if len(actions) == 0 {
-		_, _ = a.appendThreadEvent(ctx, &protocolv1.ThreadEvent{
-			ThreadId:     threadID,
-			TurnId:       turnID,
-			Source:       protocolv1.EventSource_MODEL_UNTRUSTED,
-			ContentTrust: protocolv1.ContentTrust_UNTRUSTED_MODEL,
-			Payload: &protocolv1.ThreadEvent_AssistantTextDelta{AssistantTextDelta: &protocolv1.AssistantTextDelta{
-				SegmentId: "assistant",
-				Delta:     assistantMessage,
-			}},
-		})
-		_, _ = a.appendThreadEvent(ctx, &protocolv1.ThreadEvent{
-			ThreadId:     threadID,
-			TurnId:       turnID,
-			Source:       protocolv1.EventSource_SYSTEM,
-			ContentTrust: protocolv1.ContentTrust_TRUSTED_SYSTEM,
-			Payload: &protocolv1.ThreadEvent_AssistantMessageCommitted{AssistantMessageCommitted: &protocolv1.AssistantMessageCommitted{
-				MessageId: assistantMessageID,
-				FullText:  assistantMessage,
-			}},
-		})
-	} else {
+	// Emit thinking before the assistant message so the UI can show the reasoning bubble.
+	a.emitThinkingIfPresent(ctx, threadID, turnID, thinking)
+
+	// Always emit the assistant message.
+	_, _ = a.appendThreadEvent(ctx, &protocolv1.ThreadEvent{
+		ThreadId:     threadID,
+		TurnId:       turnID,
+		Source:       protocolv1.EventSource_MODEL_UNTRUSTED,
+		ContentTrust: protocolv1.ContentTrust_UNTRUSTED_MODEL,
+		Payload: &protocolv1.ThreadEvent_AssistantTextDelta{AssistantTextDelta: &protocolv1.AssistantTextDelta{
+			SegmentId: "assistant",
+			Delta:     assistantMessage,
+		}},
+	})
+	_, _ = a.appendThreadEvent(ctx, &protocolv1.ThreadEvent{
+		ThreadId:     threadID,
+		TurnId:       turnID,
+		Source:       protocolv1.EventSource_SYSTEM,
+		ContentTrust: protocolv1.ContentTrust_TRUSTED_SYSTEM,
+		Payload: &protocolv1.ThreadEvent_AssistantMessageCommitted{AssistantMessageCommitted: &protocolv1.AssistantMessageCommitted{
+			MessageId: assistantMessageID,
+			FullText:  assistantMessage,
+		}},
+	})
+
+	if len(actions) > 0 {
 		for _, action := range actions {
 			_, _ = a.appendThreadEvent(ctx, &protocolv1.ThreadEvent{
 				ThreadId:     threadID,
@@ -1120,17 +1158,32 @@ func (a *App) finalizeTurn(ctx context.Context, threadID, turnID, assistantMessa
 				Payload:      &protocolv1.ThreadEvent_ProposedActionCreated{ProposedActionCreated: action},
 			})
 		}
+
+		// Turn pauses — will resume when all actions are resolved.
+		result.Paused = true
+		_, _ = a.appendThreadEvent(ctx, &protocolv1.ThreadEvent{
+			ThreadId:     threadID,
+			TurnId:       turnID,
+			Source:       protocolv1.EventSource_SYSTEM,
+			ContentTrust: protocolv1.ContentTrust_TRUSTED_SYSTEM,
+			Payload: &protocolv1.ThreadEvent_TurnPaused{TurnPaused: &protocolv1.TurnPaused{
+				PendingActionCount: uint32(len(actions)),
+				StepsUsed:          uint32(stepsUsed),
+				StepsRemaining:     uint32(maxInlineToolSteps - stepsUsed),
+			}},
+		})
+	} else {
+		_, _ = a.appendThreadEvent(ctx, &protocolv1.ThreadEvent{
+			ThreadId:     threadID,
+			TurnId:       turnID,
+			Source:       protocolv1.EventSource_SYSTEM,
+			ContentTrust: protocolv1.ContentTrust_TRUSTED_SYSTEM,
+			Payload: &protocolv1.ThreadEvent_TurnCompleted{TurnCompleted: &protocolv1.TurnCompleted{
+				AssistantMessageId: assistantMessageID,
+			}},
+		})
 	}
 
-	_, _ = a.appendThreadEvent(ctx, &protocolv1.ThreadEvent{
-		ThreadId:     threadID,
-		TurnId:       turnID,
-		Source:       protocolv1.EventSource_SYSTEM,
-		ContentTrust: protocolv1.ContentTrust_TRUSTED_SYSTEM,
-		Payload: &protocolv1.ThreadEvent_TurnCompleted{TurnCompleted: &protocolv1.TurnCompleted{
-			AssistantMessageId: assistantMessageID,
-		}},
-	})
 	return result, nil
 }
 

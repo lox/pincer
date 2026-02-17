@@ -1133,6 +1133,22 @@ public struct Pincer_Protocol_V1_ThreadEvent: @unchecked Sendable {
     set {_uniqueStorage()._payload = .turnFailed(newValue)}
   }
 
+  public var turnPaused: Pincer_Protocol_V1_TurnPaused {
+    get {
+      if case .turnPaused(let v)? = _storage._payload {return v}
+      return Pincer_Protocol_V1_TurnPaused()
+    }
+    set {_uniqueStorage()._payload = .turnPaused(newValue)}
+  }
+
+  public var turnResumed: Pincer_Protocol_V1_TurnResumed {
+    get {
+      if case .turnResumed(let v)? = _storage._payload {return v}
+      return Pincer_Protocol_V1_TurnResumed()
+    }
+    set {_uniqueStorage()._payload = .turnResumed(newValue)}
+  }
+
   public var assistantThinkingDelta: Pincer_Protocol_V1_AssistantThinkingDelta {
     get {
       if case .assistantThinkingDelta(let v)? = _storage._payload {return v}
@@ -1317,6 +1333,8 @@ public struct Pincer_Protocol_V1_ThreadEvent: @unchecked Sendable {
     case modelOutputRepairAttempted(Pincer_Protocol_V1_ModelOutputRepairAttempted)
     case turnCompleted(Pincer_Protocol_V1_TurnCompleted)
     case turnFailed(Pincer_Protocol_V1_TurnFailed)
+    case turnPaused(Pincer_Protocol_V1_TurnPaused)
+    case turnResumed(Pincer_Protocol_V1_TurnResumed)
     case assistantThinkingDelta(Pincer_Protocol_V1_AssistantThinkingDelta)
     case assistantTextDelta(Pincer_Protocol_V1_AssistantTextDelta)
     case assistantMessageCommitted(Pincer_Protocol_V1_AssistantMessageCommitted)
@@ -1418,6 +1436,36 @@ public struct Pincer_Protocol_V1_TurnFailed: Sendable {
   public var message: String = String()
 
   public var retryable: Bool = false
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+public struct Pincer_Protocol_V1_TurnPaused: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var pendingActionCount: UInt32 = 0
+
+  public var stepsUsed: UInt32 = 0
+
+  public var stepsRemaining: UInt32 = 0
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+public struct Pincer_Protocol_V1_TurnResumed: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var resumedReason: String = String()
+
+  public var stepsRemaining: UInt32 = 0
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
@@ -3427,7 +3475,7 @@ extension Pincer_Protocol_V1_ListThreadMessagesResponse: SwiftProtobuf.Message, 
 
 extension Pincer_Protocol_V1_ThreadEvent: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".ThreadEvent"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}event_id\0\u{3}thread_id\0\u{3}job_id\0\u{3}turn_id\0\u{1}sequence\0\u{3}occurred_at\0\u{1}source\0\u{3}content_trust\0\u{4}\u{c}turn_started\0\u{3}turn_budget_applied\0\u{3}model_output_repair_attempted\0\u{3}turn_completed\0\u{3}turn_failed\0\u{4}\u{6}assistant_thinking_delta\0\u{3}assistant_text_delta\0\u{3}assistant_message_committed\0\u{4}\u{8}tool_call_planned\0\u{3}tool_execution_started\0\u{3}tool_execution_output_delta\0\u{3}tool_execution_finished\0\u{4}\u{7}policy_decision_made\0\u{3}proposed_action_created\0\u{3}proposed_action_status_changed\0\u{3}idempotency_conflict\0\u{4}\u{7}job_status_changed\0\u{3}schedule_triggered\0\u{3}delegated_callback_received\0\u{4}\u{8}audit_event_recorded\0\u{3}notification_queued\0\u{3}artifact_created\0\u{3}memory_checkpoint_saved\0\u{3}skill_proposal_created\0\u{3}self_improvement_proposal_created\0\u{2}\u{f}heartbeat\0\u{3}stream_gap\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}event_id\0\u{3}thread_id\0\u{3}job_id\0\u{3}turn_id\0\u{1}sequence\0\u{3}occurred_at\0\u{1}source\0\u{3}content_trust\0\u{4}\u{c}turn_started\0\u{3}turn_budget_applied\0\u{3}model_output_repair_attempted\0\u{3}turn_completed\0\u{3}turn_failed\0\u{3}turn_paused\0\u{3}turn_resumed\0\u{4}\u{4}assistant_thinking_delta\0\u{3}assistant_text_delta\0\u{3}assistant_message_committed\0\u{4}\u{8}tool_call_planned\0\u{3}tool_execution_started\0\u{3}tool_execution_output_delta\0\u{3}tool_execution_finished\0\u{4}\u{7}policy_decision_made\0\u{3}proposed_action_created\0\u{3}proposed_action_status_changed\0\u{3}idempotency_conflict\0\u{4}\u{7}job_status_changed\0\u{3}schedule_triggered\0\u{3}delegated_callback_received\0\u{4}\u{8}audit_event_recorded\0\u{3}notification_queued\0\u{3}artifact_created\0\u{3}memory_checkpoint_saved\0\u{3}skill_proposal_created\0\u{3}self_improvement_proposal_created\0\u{2}\u{f}heartbeat\0\u{3}stream_gap\0")
 
   fileprivate class _StorageClass {
     var _eventID: String = String()
@@ -3547,6 +3595,32 @@ extension Pincer_Protocol_V1_ThreadEvent: SwiftProtobuf.Message, SwiftProtobuf._
           if let v = v {
             if hadOneofValue {try decoder.handleConflictingOneOf()}
             _storage._payload = .turnFailed(v)
+          }
+        }()
+        case 25: try {
+          var v: Pincer_Protocol_V1_TurnPaused?
+          var hadOneofValue = false
+          if let current = _storage._payload {
+            hadOneofValue = true
+            if case .turnPaused(let m) = current {v = m}
+          }
+          try decoder.decodeSingularMessageField(value: &v)
+          if let v = v {
+            if hadOneofValue {try decoder.handleConflictingOneOf()}
+            _storage._payload = .turnPaused(v)
+          }
+        }()
+        case 26: try {
+          var v: Pincer_Protocol_V1_TurnResumed?
+          var hadOneofValue = false
+          if let current = _storage._payload {
+            hadOneofValue = true
+            if case .turnResumed(let m) = current {v = m}
+          }
+          try decoder.decodeSingularMessageField(value: &v)
+          if let v = v {
+            if hadOneofValue {try decoder.handleConflictingOneOf()}
+            _storage._payload = .turnResumed(v)
           }
         }()
         case 30: try {
@@ -3892,6 +3966,14 @@ extension Pincer_Protocol_V1_ThreadEvent: SwiftProtobuf.Message, SwiftProtobuf._
         guard case .turnFailed(let v)? = _storage._payload else { preconditionFailure() }
         try visitor.visitSingularMessageField(value: v, fieldNumber: 24)
       }()
+      case .turnPaused?: try {
+        guard case .turnPaused(let v)? = _storage._payload else { preconditionFailure() }
+        try visitor.visitSingularMessageField(value: v, fieldNumber: 25)
+      }()
+      case .turnResumed?: try {
+        guard case .turnResumed(let v)? = _storage._payload else { preconditionFailure() }
+        try visitor.visitSingularMessageField(value: v, fieldNumber: 26)
+      }()
       case .assistantThinkingDelta?: try {
         guard case .assistantThinkingDelta(let v)? = _storage._payload else { preconditionFailure() }
         try visitor.visitSingularMessageField(value: v, fieldNumber: 30)
@@ -4178,6 +4260,81 @@ extension Pincer_Protocol_V1_TurnFailed: SwiftProtobuf.Message, SwiftProtobuf._M
     if lhs.code != rhs.code {return false}
     if lhs.message != rhs.message {return false}
     if lhs.retryable != rhs.retryable {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Pincer_Protocol_V1_TurnPaused: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".TurnPaused"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}pending_action_count\0\u{3}steps_used\0\u{3}steps_remaining\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularUInt32Field(value: &self.pendingActionCount) }()
+      case 2: try { try decoder.decodeSingularUInt32Field(value: &self.stepsUsed) }()
+      case 3: try { try decoder.decodeSingularUInt32Field(value: &self.stepsRemaining) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if self.pendingActionCount != 0 {
+      try visitor.visitSingularUInt32Field(value: self.pendingActionCount, fieldNumber: 1)
+    }
+    if self.stepsUsed != 0 {
+      try visitor.visitSingularUInt32Field(value: self.stepsUsed, fieldNumber: 2)
+    }
+    if self.stepsRemaining != 0 {
+      try visitor.visitSingularUInt32Field(value: self.stepsRemaining, fieldNumber: 3)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Pincer_Protocol_V1_TurnPaused, rhs: Pincer_Protocol_V1_TurnPaused) -> Bool {
+    if lhs.pendingActionCount != rhs.pendingActionCount {return false}
+    if lhs.stepsUsed != rhs.stepsUsed {return false}
+    if lhs.stepsRemaining != rhs.stepsRemaining {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Pincer_Protocol_V1_TurnResumed: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".TurnResumed"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}resumed_reason\0\u{3}steps_remaining\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.resumedReason) }()
+      case 2: try { try decoder.decodeSingularUInt32Field(value: &self.stepsRemaining) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.resumedReason.isEmpty {
+      try visitor.visitSingularStringField(value: self.resumedReason, fieldNumber: 1)
+    }
+    if self.stepsRemaining != 0 {
+      try visitor.visitSingularUInt32Field(value: self.stepsRemaining, fieldNumber: 2)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Pincer_Protocol_V1_TurnResumed, rhs: Pincer_Protocol_V1_TurnResumed) -> Bool {
+    if lhs.resumedReason != rhs.resumedReason {return false}
+    if lhs.stepsRemaining != rhs.stepsRemaining {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

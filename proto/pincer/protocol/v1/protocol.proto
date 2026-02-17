@@ -299,6 +299,8 @@ message ThreadEvent {
     ModelOutputRepairAttempted model_output_repair_attempted = 22;
     TurnCompleted turn_completed = 23;
     TurnFailed turn_failed = 24;
+    TurnPaused turn_paused = 25;
+    TurnResumed turn_resumed = 26;
 
     AssistantThinkingDelta assistant_thinking_delta = 30;
     AssistantTextDelta assistant_text_delta = 31;
@@ -352,6 +354,17 @@ message TurnFailed {
   string code = 1;
   string message = 2;
   bool retryable = 3;
+}
+
+message TurnPaused {
+  uint32 pending_action_count = 1;
+  uint32 steps_used = 2;
+  uint32 steps_remaining = 3;
+}
+
+message TurnResumed {
+  string resumed_reason = 1;
+  uint32 steps_remaining = 2;
 }
 
 message AssistantThinkingDelta {

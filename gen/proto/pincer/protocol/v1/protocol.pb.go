@@ -2038,6 +2038,8 @@ type ThreadEvent struct {
 	//	*ThreadEvent_ModelOutputRepairAttempted
 	//	*ThreadEvent_TurnCompleted
 	//	*ThreadEvent_TurnFailed
+	//	*ThreadEvent_TurnPaused
+	//	*ThreadEvent_TurnResumed
 	//	*ThreadEvent_AssistantThinkingDelta
 	//	*ThreadEvent_AssistantTextDelta
 	//	*ThreadEvent_AssistantMessageCommitted
@@ -2198,6 +2200,24 @@ func (x *ThreadEvent) GetTurnFailed() *TurnFailed {
 	if x != nil {
 		if x, ok := x.Payload.(*ThreadEvent_TurnFailed); ok {
 			return x.TurnFailed
+		}
+	}
+	return nil
+}
+
+func (x *ThreadEvent) GetTurnPaused() *TurnPaused {
+	if x != nil {
+		if x, ok := x.Payload.(*ThreadEvent_TurnPaused); ok {
+			return x.TurnPaused
+		}
+	}
+	return nil
+}
+
+func (x *ThreadEvent) GetTurnResumed() *TurnResumed {
+	if x != nil {
+		if x, ok := x.Payload.(*ThreadEvent_TurnResumed); ok {
+			return x.TurnResumed
 		}
 	}
 	return nil
@@ -2425,6 +2445,14 @@ type ThreadEvent_TurnFailed struct {
 	TurnFailed *TurnFailed `protobuf:"bytes,24,opt,name=turn_failed,json=turnFailed,proto3,oneof"`
 }
 
+type ThreadEvent_TurnPaused struct {
+	TurnPaused *TurnPaused `protobuf:"bytes,25,opt,name=turn_paused,json=turnPaused,proto3,oneof"`
+}
+
+type ThreadEvent_TurnResumed struct {
+	TurnResumed *TurnResumed `protobuf:"bytes,26,opt,name=turn_resumed,json=turnResumed,proto3,oneof"`
+}
+
 type ThreadEvent_AssistantThinkingDelta struct {
 	AssistantThinkingDelta *AssistantThinkingDelta `protobuf:"bytes,30,opt,name=assistant_thinking_delta,json=assistantThinkingDelta,proto3,oneof"`
 }
@@ -2522,6 +2550,10 @@ func (*ThreadEvent_ModelOutputRepairAttempted) isThreadEvent_Payload() {}
 func (*ThreadEvent_TurnCompleted) isThreadEvent_Payload() {}
 
 func (*ThreadEvent_TurnFailed) isThreadEvent_Payload() {}
+
+func (*ThreadEvent_TurnPaused) isThreadEvent_Payload() {}
+
+func (*ThreadEvent_TurnResumed) isThreadEvent_Payload() {}
 
 func (*ThreadEvent_AssistantThinkingDelta) isThreadEvent_Payload() {}
 
@@ -2819,6 +2851,118 @@ func (x *TurnFailed) GetRetryable() bool {
 	return false
 }
 
+type TurnPaused struct {
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	PendingActionCount uint32                 `protobuf:"varint,1,opt,name=pending_action_count,json=pendingActionCount,proto3" json:"pending_action_count,omitempty"`
+	StepsUsed          uint32                 `protobuf:"varint,2,opt,name=steps_used,json=stepsUsed,proto3" json:"steps_used,omitempty"`
+	StepsRemaining     uint32                 `protobuf:"varint,3,opt,name=steps_remaining,json=stepsRemaining,proto3" json:"steps_remaining,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *TurnPaused) Reset() {
+	*x = TurnPaused{}
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TurnPaused) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TurnPaused) ProtoMessage() {}
+
+func (x *TurnPaused) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TurnPaused.ProtoReflect.Descriptor instead.
+func (*TurnPaused) Descriptor() ([]byte, []int) {
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *TurnPaused) GetPendingActionCount() uint32 {
+	if x != nil {
+		return x.PendingActionCount
+	}
+	return 0
+}
+
+func (x *TurnPaused) GetStepsUsed() uint32 {
+	if x != nil {
+		return x.StepsUsed
+	}
+	return 0
+}
+
+func (x *TurnPaused) GetStepsRemaining() uint32 {
+	if x != nil {
+		return x.StepsRemaining
+	}
+	return 0
+}
+
+type TurnResumed struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	ResumedReason  string                 `protobuf:"bytes,1,opt,name=resumed_reason,json=resumedReason,proto3" json:"resumed_reason,omitempty"`
+	StepsRemaining uint32                 `protobuf:"varint,2,opt,name=steps_remaining,json=stepsRemaining,proto3" json:"steps_remaining,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *TurnResumed) Reset() {
+	*x = TurnResumed{}
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TurnResumed) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TurnResumed) ProtoMessage() {}
+
+func (x *TurnResumed) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TurnResumed.ProtoReflect.Descriptor instead.
+func (*TurnResumed) Descriptor() ([]byte, []int) {
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *TurnResumed) GetResumedReason() string {
+	if x != nil {
+		return x.ResumedReason
+	}
+	return ""
+}
+
+func (x *TurnResumed) GetStepsRemaining() uint32 {
+	if x != nil {
+		return x.StepsRemaining
+	}
+	return 0
+}
+
 type AssistantThinkingDelta struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SegmentId     string                 `protobuf:"bytes,1,opt,name=segment_id,json=segmentId,proto3" json:"segment_id,omitempty"`
@@ -2831,7 +2975,7 @@ type AssistantThinkingDelta struct {
 
 func (x *AssistantThinkingDelta) Reset() {
 	*x = AssistantThinkingDelta{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[29]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2843,7 +2987,7 @@ func (x *AssistantThinkingDelta) String() string {
 func (*AssistantThinkingDelta) ProtoMessage() {}
 
 func (x *AssistantThinkingDelta) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[29]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2856,7 +3000,7 @@ func (x *AssistantThinkingDelta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AssistantThinkingDelta.ProtoReflect.Descriptor instead.
 func (*AssistantThinkingDelta) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{29}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *AssistantThinkingDelta) GetSegmentId() string {
@@ -2897,7 +3041,7 @@ type AssistantTextDelta struct {
 
 func (x *AssistantTextDelta) Reset() {
 	*x = AssistantTextDelta{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[30]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2909,7 +3053,7 @@ func (x *AssistantTextDelta) String() string {
 func (*AssistantTextDelta) ProtoMessage() {}
 
 func (x *AssistantTextDelta) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[30]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2922,7 +3066,7 @@ func (x *AssistantTextDelta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AssistantTextDelta.ProtoReflect.Descriptor instead.
 func (*AssistantTextDelta) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{30}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *AssistantTextDelta) GetSegmentId() string {
@@ -2950,7 +3094,7 @@ type AssistantMessageCommitted struct {
 
 func (x *AssistantMessageCommitted) Reset() {
 	*x = AssistantMessageCommitted{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[31]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2962,7 +3106,7 @@ func (x *AssistantMessageCommitted) String() string {
 func (*AssistantMessageCommitted) ProtoMessage() {}
 
 func (x *AssistantMessageCommitted) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[31]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2975,7 +3119,7 @@ func (x *AssistantMessageCommitted) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AssistantMessageCommitted.ProtoReflect.Descriptor instead.
 func (*AssistantMessageCommitted) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{31}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *AssistantMessageCommitted) GetMessageId() string {
@@ -3012,7 +3156,7 @@ type ToolCallPlanned struct {
 
 func (x *ToolCallPlanned) Reset() {
 	*x = ToolCallPlanned{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[32]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3024,7 +3168,7 @@ func (x *ToolCallPlanned) String() string {
 func (*ToolCallPlanned) ProtoMessage() {}
 
 func (x *ToolCallPlanned) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[32]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3037,7 +3181,7 @@ func (x *ToolCallPlanned) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ToolCallPlanned.ProtoReflect.Descriptor instead.
 func (*ToolCallPlanned) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{32}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *ToolCallPlanned) GetToolCallId() string {
@@ -3087,7 +3231,7 @@ type ToolExecutionStarted struct {
 
 func (x *ToolExecutionStarted) Reset() {
 	*x = ToolExecutionStarted{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[33]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3099,7 +3243,7 @@ func (x *ToolExecutionStarted) String() string {
 func (*ToolExecutionStarted) ProtoMessage() {}
 
 func (x *ToolExecutionStarted) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[33]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3112,7 +3256,7 @@ func (x *ToolExecutionStarted) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ToolExecutionStarted.ProtoReflect.Descriptor instead.
 func (*ToolExecutionStarted) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{33}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *ToolExecutionStarted) GetExecutionId() string {
@@ -3156,7 +3300,7 @@ type ToolExecutionOutputDelta struct {
 
 func (x *ToolExecutionOutputDelta) Reset() {
 	*x = ToolExecutionOutputDelta{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[34]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3168,7 +3312,7 @@ func (x *ToolExecutionOutputDelta) String() string {
 func (*ToolExecutionOutputDelta) ProtoMessage() {}
 
 func (x *ToolExecutionOutputDelta) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[34]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3181,7 +3325,7 @@ func (x *ToolExecutionOutputDelta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ToolExecutionOutputDelta.ProtoReflect.Descriptor instead.
 func (*ToolExecutionOutputDelta) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{34}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *ToolExecutionOutputDelta) GetExecutionId() string {
@@ -3232,7 +3376,7 @@ type ToolExecutionFinished struct {
 
 func (x *ToolExecutionFinished) Reset() {
 	*x = ToolExecutionFinished{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[35]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3244,7 +3388,7 @@ func (x *ToolExecutionFinished) String() string {
 func (*ToolExecutionFinished) ProtoMessage() {}
 
 func (x *ToolExecutionFinished) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[35]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3257,7 +3401,7 @@ func (x *ToolExecutionFinished) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ToolExecutionFinished.ProtoReflect.Descriptor instead.
 func (*ToolExecutionFinished) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{35}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *ToolExecutionFinished) GetExecutionId() string {
@@ -3306,7 +3450,7 @@ type PolicyDecisionMade struct {
 
 func (x *PolicyDecisionMade) Reset() {
 	*x = PolicyDecisionMade{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[36]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3318,7 +3462,7 @@ func (x *PolicyDecisionMade) String() string {
 func (*PolicyDecisionMade) ProtoMessage() {}
 
 func (x *PolicyDecisionMade) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[36]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3331,7 +3475,7 @@ func (x *PolicyDecisionMade) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PolicyDecisionMade.ProtoReflect.Descriptor instead.
 func (*PolicyDecisionMade) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{36}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *PolicyDecisionMade) GetPolicyId() string {
@@ -3372,7 +3516,7 @@ type ProposedActionCreated struct {
 
 func (x *ProposedActionCreated) Reset() {
 	*x = ProposedActionCreated{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[37]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3384,7 +3528,7 @@ func (x *ProposedActionCreated) String() string {
 func (*ProposedActionCreated) ProtoMessage() {}
 
 func (x *ProposedActionCreated) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[37]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3397,7 +3541,7 @@ func (x *ProposedActionCreated) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProposedActionCreated.ProtoReflect.Descriptor instead.
 func (*ProposedActionCreated) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{37}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *ProposedActionCreated) GetActionId() string {
@@ -3474,7 +3618,7 @@ type ProposedActionStatusChanged struct {
 
 func (x *ProposedActionStatusChanged) Reset() {
 	*x = ProposedActionStatusChanged{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[38]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3486,7 +3630,7 @@ func (x *ProposedActionStatusChanged) String() string {
 func (*ProposedActionStatusChanged) ProtoMessage() {}
 
 func (x *ProposedActionStatusChanged) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[38]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3499,7 +3643,7 @@ func (x *ProposedActionStatusChanged) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProposedActionStatusChanged.ProtoReflect.Descriptor instead.
 func (*ProposedActionStatusChanged) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{38}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *ProposedActionStatusChanged) GetActionId() string {
@@ -3535,7 +3679,7 @@ type IdempotencyConflict struct {
 
 func (x *IdempotencyConflict) Reset() {
 	*x = IdempotencyConflict{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[39]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3547,7 +3691,7 @@ func (x *IdempotencyConflict) String() string {
 func (*IdempotencyConflict) ProtoMessage() {}
 
 func (x *IdempotencyConflict) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[39]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3560,7 +3704,7 @@ func (x *IdempotencyConflict) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IdempotencyConflict.ProtoReflect.Descriptor instead.
 func (*IdempotencyConflict) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{39}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *IdempotencyConflict) GetActionId() string {
@@ -3601,7 +3745,7 @@ type JobStatusChanged struct {
 
 func (x *JobStatusChanged) Reset() {
 	*x = JobStatusChanged{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[40]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3613,7 +3757,7 @@ func (x *JobStatusChanged) String() string {
 func (*JobStatusChanged) ProtoMessage() {}
 
 func (x *JobStatusChanged) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[40]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3626,7 +3770,7 @@ func (x *JobStatusChanged) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JobStatusChanged.ProtoReflect.Descriptor instead.
 func (*JobStatusChanged) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{40}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *JobStatusChanged) GetJobId() string {
@@ -3653,7 +3797,7 @@ type ScheduleTriggered struct {
 
 func (x *ScheduleTriggered) Reset() {
 	*x = ScheduleTriggered{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[41]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3665,7 +3809,7 @@ func (x *ScheduleTriggered) String() string {
 func (*ScheduleTriggered) ProtoMessage() {}
 
 func (x *ScheduleTriggered) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[41]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3678,7 +3822,7 @@ func (x *ScheduleTriggered) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ScheduleTriggered.ProtoReflect.Descriptor instead.
 func (*ScheduleTriggered) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{41}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *ScheduleTriggered) GetScheduleId() string {
@@ -3704,7 +3848,7 @@ type DelegatedCallbackReceived struct {
 
 func (x *DelegatedCallbackReceived) Reset() {
 	*x = DelegatedCallbackReceived{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[42]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3716,7 +3860,7 @@ func (x *DelegatedCallbackReceived) String() string {
 func (*DelegatedCallbackReceived) ProtoMessage() {}
 
 func (x *DelegatedCallbackReceived) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[42]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3729,7 +3873,7 @@ func (x *DelegatedCallbackReceived) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DelegatedCallbackReceived.ProtoReflect.Descriptor instead.
 func (*DelegatedCallbackReceived) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{42}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *DelegatedCallbackReceived) GetCallbackId() string {
@@ -3749,7 +3893,7 @@ type AuditEventRecorded struct {
 
 func (x *AuditEventRecorded) Reset() {
 	*x = AuditEventRecorded{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[43]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3761,7 +3905,7 @@ func (x *AuditEventRecorded) String() string {
 func (*AuditEventRecorded) ProtoMessage() {}
 
 func (x *AuditEventRecorded) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[43]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3774,7 +3918,7 @@ func (x *AuditEventRecorded) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AuditEventRecorded.ProtoReflect.Descriptor instead.
 func (*AuditEventRecorded) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{43}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *AuditEventRecorded) GetEntryId() string {
@@ -3801,7 +3945,7 @@ type NotificationQueued struct {
 
 func (x *NotificationQueued) Reset() {
 	*x = NotificationQueued{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[44]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3813,7 +3957,7 @@ func (x *NotificationQueued) String() string {
 func (*NotificationQueued) ProtoMessage() {}
 
 func (x *NotificationQueued) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[44]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3826,7 +3970,7 @@ func (x *NotificationQueued) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NotificationQueued.ProtoReflect.Descriptor instead.
 func (*NotificationQueued) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{44}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *NotificationQueued) GetNotificationId() string {
@@ -3854,7 +3998,7 @@ type ArtifactCreated struct {
 
 func (x *ArtifactCreated) Reset() {
 	*x = ArtifactCreated{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[45]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3866,7 +4010,7 @@ func (x *ArtifactCreated) String() string {
 func (*ArtifactCreated) ProtoMessage() {}
 
 func (x *ArtifactCreated) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[45]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3879,7 +4023,7 @@ func (x *ArtifactCreated) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ArtifactCreated.ProtoReflect.Descriptor instead.
 func (*ArtifactCreated) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{45}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *ArtifactCreated) GetArtifactId() string {
@@ -3913,7 +4057,7 @@ type MemoryCheckpointSaved struct {
 
 func (x *MemoryCheckpointSaved) Reset() {
 	*x = MemoryCheckpointSaved{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[46]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3925,7 +4069,7 @@ func (x *MemoryCheckpointSaved) String() string {
 func (*MemoryCheckpointSaved) ProtoMessage() {}
 
 func (x *MemoryCheckpointSaved) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[46]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3938,7 +4082,7 @@ func (x *MemoryCheckpointSaved) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MemoryCheckpointSaved.ProtoReflect.Descriptor instead.
 func (*MemoryCheckpointSaved) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{46}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *MemoryCheckpointSaved) GetCheckpointId() string {
@@ -3966,7 +4110,7 @@ type SkillProposalCreated struct {
 
 func (x *SkillProposalCreated) Reset() {
 	*x = SkillProposalCreated{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[47]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3978,7 +4122,7 @@ func (x *SkillProposalCreated) String() string {
 func (*SkillProposalCreated) ProtoMessage() {}
 
 func (x *SkillProposalCreated) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[47]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3991,7 +4135,7 @@ func (x *SkillProposalCreated) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SkillProposalCreated.ProtoReflect.Descriptor instead.
 func (*SkillProposalCreated) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{47}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *SkillProposalCreated) GetProposalId() string {
@@ -4026,7 +4170,7 @@ type SelfImprovementProposalCreated struct {
 
 func (x *SelfImprovementProposalCreated) Reset() {
 	*x = SelfImprovementProposalCreated{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[48]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4038,7 +4182,7 @@ func (x *SelfImprovementProposalCreated) String() string {
 func (*SelfImprovementProposalCreated) ProtoMessage() {}
 
 func (x *SelfImprovementProposalCreated) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[48]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4051,7 +4195,7 @@ func (x *SelfImprovementProposalCreated) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SelfImprovementProposalCreated.ProtoReflect.Descriptor instead.
 func (*SelfImprovementProposalCreated) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{48}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *SelfImprovementProposalCreated) GetProposalId() string {
@@ -4084,7 +4228,7 @@ type Heartbeat struct {
 
 func (x *Heartbeat) Reset() {
 	*x = Heartbeat{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[49]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4096,7 +4240,7 @@ func (x *Heartbeat) String() string {
 func (*Heartbeat) ProtoMessage() {}
 
 func (x *Heartbeat) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[49]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4109,7 +4253,7 @@ func (x *Heartbeat) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Heartbeat.ProtoReflect.Descriptor instead.
 func (*Heartbeat) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{49}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *Heartbeat) GetLatestSequence() uint64 {
@@ -4129,7 +4273,7 @@ type StreamGap struct {
 
 func (x *StreamGap) Reset() {
 	*x = StreamGap{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[50]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4141,7 +4285,7 @@ func (x *StreamGap) String() string {
 func (*StreamGap) ProtoMessage() {}
 
 func (x *StreamGap) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[50]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4154,7 +4298,7 @@ func (x *StreamGap) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamGap.ProtoReflect.Descriptor instead.
 func (*StreamGap) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{50}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *StreamGap) GetRequestedFromSequence() uint64 {
@@ -4191,7 +4335,7 @@ type Approval struct {
 
 func (x *Approval) Reset() {
 	*x = Approval{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[51]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4203,7 +4347,7 @@ func (x *Approval) String() string {
 func (*Approval) ProtoMessage() {}
 
 func (x *Approval) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[51]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4216,7 +4360,7 @@ func (x *Approval) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Approval.ProtoReflect.Descriptor instead.
 func (*Approval) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{51}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *Approval) GetActionId() string {
@@ -4312,7 +4456,7 @@ type ListApprovalsRequest struct {
 
 func (x *ListApprovalsRequest) Reset() {
 	*x = ListApprovalsRequest{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[52]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4324,7 +4468,7 @@ func (x *ListApprovalsRequest) String() string {
 func (*ListApprovalsRequest) ProtoMessage() {}
 
 func (x *ListApprovalsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[52]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4337,7 +4481,7 @@ func (x *ListApprovalsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListApprovalsRequest.ProtoReflect.Descriptor instead.
 func (*ListApprovalsRequest) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{52}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *ListApprovalsRequest) GetStatus() ActionStatus {
@@ -4356,7 +4500,7 @@ type ListApprovalsResponse struct {
 
 func (x *ListApprovalsResponse) Reset() {
 	*x = ListApprovalsResponse{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[53]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4368,7 +4512,7 @@ func (x *ListApprovalsResponse) String() string {
 func (*ListApprovalsResponse) ProtoMessage() {}
 
 func (x *ListApprovalsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[53]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4381,7 +4525,7 @@ func (x *ListApprovalsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListApprovalsResponse.ProtoReflect.Descriptor instead.
 func (*ListApprovalsResponse) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{53}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *ListApprovalsResponse) GetItems() []*Approval {
@@ -4400,7 +4544,7 @@ type ApproveActionRequest struct {
 
 func (x *ApproveActionRequest) Reset() {
 	*x = ApproveActionRequest{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[54]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4412,7 +4556,7 @@ func (x *ApproveActionRequest) String() string {
 func (*ApproveActionRequest) ProtoMessage() {}
 
 func (x *ApproveActionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[54]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4425,7 +4569,7 @@ func (x *ApproveActionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApproveActionRequest.ProtoReflect.Descriptor instead.
 func (*ApproveActionRequest) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{54}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *ApproveActionRequest) GetActionId() string {
@@ -4445,7 +4589,7 @@ type ApproveActionResponse struct {
 
 func (x *ApproveActionResponse) Reset() {
 	*x = ApproveActionResponse{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[55]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4457,7 +4601,7 @@ func (x *ApproveActionResponse) String() string {
 func (*ApproveActionResponse) ProtoMessage() {}
 
 func (x *ApproveActionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[55]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4470,7 +4614,7 @@ func (x *ApproveActionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApproveActionResponse.ProtoReflect.Descriptor instead.
 func (*ApproveActionResponse) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{55}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *ApproveActionResponse) GetActionId() string {
@@ -4497,7 +4641,7 @@ type RejectActionRequest struct {
 
 func (x *RejectActionRequest) Reset() {
 	*x = RejectActionRequest{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[56]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4509,7 +4653,7 @@ func (x *RejectActionRequest) String() string {
 func (*RejectActionRequest) ProtoMessage() {}
 
 func (x *RejectActionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[56]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4522,7 +4666,7 @@ func (x *RejectActionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RejectActionRequest.ProtoReflect.Descriptor instead.
 func (*RejectActionRequest) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{56}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *RejectActionRequest) GetActionId() string {
@@ -4549,7 +4693,7 @@ type RejectActionResponse struct {
 
 func (x *RejectActionResponse) Reset() {
 	*x = RejectActionResponse{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[57]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4561,7 +4705,7 @@ func (x *RejectActionResponse) String() string {
 func (*RejectActionResponse) ProtoMessage() {}
 
 func (x *RejectActionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[57]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4574,7 +4718,7 @@ func (x *RejectActionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RejectActionResponse.ProtoReflect.Descriptor instead.
 func (*RejectActionResponse) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{57}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *RejectActionResponse) GetActionId() string {
@@ -4610,7 +4754,7 @@ type Job struct {
 
 func (x *Job) Reset() {
 	*x = Job{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[58]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[60]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4622,7 +4766,7 @@ func (x *Job) String() string {
 func (*Job) ProtoMessage() {}
 
 func (x *Job) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[58]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[60]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4635,7 +4779,7 @@ func (x *Job) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Job.ProtoReflect.Descriptor instead.
 func (*Job) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{58}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{60}
 }
 
 func (x *Job) GetJobId() string {
@@ -4723,7 +4867,7 @@ type ListJobsRequest struct {
 
 func (x *ListJobsRequest) Reset() {
 	*x = ListJobsRequest{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[59]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4735,7 +4879,7 @@ func (x *ListJobsRequest) String() string {
 func (*ListJobsRequest) ProtoMessage() {}
 
 func (x *ListJobsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[59]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4748,7 +4892,7 @@ func (x *ListJobsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListJobsRequest.ProtoReflect.Descriptor instead.
 func (*ListJobsRequest) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{59}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{61}
 }
 
 type ListJobsResponse struct {
@@ -4760,7 +4904,7 @@ type ListJobsResponse struct {
 
 func (x *ListJobsResponse) Reset() {
 	*x = ListJobsResponse{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[60]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4772,7 +4916,7 @@ func (x *ListJobsResponse) String() string {
 func (*ListJobsResponse) ProtoMessage() {}
 
 func (x *ListJobsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[60]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4785,7 +4929,7 @@ func (x *ListJobsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListJobsResponse.ProtoReflect.Descriptor instead.
 func (*ListJobsResponse) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{60}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *ListJobsResponse) GetItems() []*Job {
@@ -4806,7 +4950,7 @@ type CreateJobRequest struct {
 
 func (x *CreateJobRequest) Reset() {
 	*x = CreateJobRequest{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[61]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4818,7 +4962,7 @@ func (x *CreateJobRequest) String() string {
 func (*CreateJobRequest) ProtoMessage() {}
 
 func (x *CreateJobRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[61]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4831,7 +4975,7 @@ func (x *CreateJobRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateJobRequest.ProtoReflect.Descriptor instead.
 func (*CreateJobRequest) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{61}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{63}
 }
 
 func (x *CreateJobRequest) GetGoal() string {
@@ -4864,7 +5008,7 @@ type CreateJobResponse struct {
 
 func (x *CreateJobResponse) Reset() {
 	*x = CreateJobResponse{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[62]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4876,7 +5020,7 @@ func (x *CreateJobResponse) String() string {
 func (*CreateJobResponse) ProtoMessage() {}
 
 func (x *CreateJobResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[62]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4889,7 +5033,7 @@ func (x *CreateJobResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateJobResponse.ProtoReflect.Descriptor instead.
 func (*CreateJobResponse) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{62}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{64}
 }
 
 func (x *CreateJobResponse) GetItem() *Job {
@@ -4908,7 +5052,7 @@ type GetJobRequest struct {
 
 func (x *GetJobRequest) Reset() {
 	*x = GetJobRequest{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[63]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4920,7 +5064,7 @@ func (x *GetJobRequest) String() string {
 func (*GetJobRequest) ProtoMessage() {}
 
 func (x *GetJobRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[63]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4933,7 +5077,7 @@ func (x *GetJobRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetJobRequest.ProtoReflect.Descriptor instead.
 func (*GetJobRequest) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{63}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{65}
 }
 
 func (x *GetJobRequest) GetJobId() string {
@@ -4952,7 +5096,7 @@ type GetJobResponse struct {
 
 func (x *GetJobResponse) Reset() {
 	*x = GetJobResponse{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[64]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[66]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4964,7 +5108,7 @@ func (x *GetJobResponse) String() string {
 func (*GetJobResponse) ProtoMessage() {}
 
 func (x *GetJobResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[64]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[66]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4977,7 +5121,7 @@ func (x *GetJobResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetJobResponse.ProtoReflect.Descriptor instead.
 func (*GetJobResponse) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{64}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{66}
 }
 
 func (x *GetJobResponse) GetItem() *Job {
@@ -4996,7 +5140,7 @@ type CancelJobRequest struct {
 
 func (x *CancelJobRequest) Reset() {
 	*x = CancelJobRequest{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[65]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[67]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5008,7 +5152,7 @@ func (x *CancelJobRequest) String() string {
 func (*CancelJobRequest) ProtoMessage() {}
 
 func (x *CancelJobRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[65]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[67]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5021,7 +5165,7 @@ func (x *CancelJobRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelJobRequest.ProtoReflect.Descriptor instead.
 func (*CancelJobRequest) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{65}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{67}
 }
 
 func (x *CancelJobRequest) GetJobId() string {
@@ -5041,7 +5185,7 @@ type CancelJobResponse struct {
 
 func (x *CancelJobResponse) Reset() {
 	*x = CancelJobResponse{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[66]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[68]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5053,7 +5197,7 @@ func (x *CancelJobResponse) String() string {
 func (*CancelJobResponse) ProtoMessage() {}
 
 func (x *CancelJobResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[66]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[68]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5066,7 +5210,7 @@ func (x *CancelJobResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelJobResponse.ProtoReflect.Descriptor instead.
 func (*CancelJobResponse) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{66}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{68}
 }
 
 func (x *CancelJobResponse) GetJobId() string {
@@ -5101,7 +5245,7 @@ type Schedule struct {
 
 func (x *Schedule) Reset() {
 	*x = Schedule{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[67]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[69]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5113,7 +5257,7 @@ func (x *Schedule) String() string {
 func (*Schedule) ProtoMessage() {}
 
 func (x *Schedule) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[67]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[69]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5126,7 +5270,7 @@ func (x *Schedule) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Schedule.ProtoReflect.Descriptor instead.
 func (*Schedule) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{67}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{69}
 }
 
 func (x *Schedule) GetScheduleId() string {
@@ -5207,7 +5351,7 @@ type ListSchedulesRequest struct {
 
 func (x *ListSchedulesRequest) Reset() {
 	*x = ListSchedulesRequest{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[68]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[70]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5219,7 +5363,7 @@ func (x *ListSchedulesRequest) String() string {
 func (*ListSchedulesRequest) ProtoMessage() {}
 
 func (x *ListSchedulesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[68]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[70]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5232,7 +5376,7 @@ func (x *ListSchedulesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSchedulesRequest.ProtoReflect.Descriptor instead.
 func (*ListSchedulesRequest) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{68}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{70}
 }
 
 type ListSchedulesResponse struct {
@@ -5244,7 +5388,7 @@ type ListSchedulesResponse struct {
 
 func (x *ListSchedulesResponse) Reset() {
 	*x = ListSchedulesResponse{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[69]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[71]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5256,7 +5400,7 @@ func (x *ListSchedulesResponse) String() string {
 func (*ListSchedulesResponse) ProtoMessage() {}
 
 func (x *ListSchedulesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[69]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[71]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5269,7 +5413,7 @@ func (x *ListSchedulesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSchedulesResponse.ProtoReflect.Descriptor instead.
 func (*ListSchedulesResponse) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{69}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{71}
 }
 
 func (x *ListSchedulesResponse) GetItems() []*Schedule {
@@ -5291,7 +5435,7 @@ type CreateScheduleRequest struct {
 
 func (x *CreateScheduleRequest) Reset() {
 	*x = CreateScheduleRequest{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[70]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[72]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5303,7 +5447,7 @@ func (x *CreateScheduleRequest) String() string {
 func (*CreateScheduleRequest) ProtoMessage() {}
 
 func (x *CreateScheduleRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[70]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[72]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5316,7 +5460,7 @@ func (x *CreateScheduleRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateScheduleRequest.ProtoReflect.Descriptor instead.
 func (*CreateScheduleRequest) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{70}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{72}
 }
 
 func (x *CreateScheduleRequest) GetName() string {
@@ -5356,7 +5500,7 @@ type CreateScheduleResponse struct {
 
 func (x *CreateScheduleResponse) Reset() {
 	*x = CreateScheduleResponse{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[71]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[73]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5368,7 +5512,7 @@ func (x *CreateScheduleResponse) String() string {
 func (*CreateScheduleResponse) ProtoMessage() {}
 
 func (x *CreateScheduleResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[71]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[73]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5381,7 +5525,7 @@ func (x *CreateScheduleResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateScheduleResponse.ProtoReflect.Descriptor instead.
 func (*CreateScheduleResponse) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{71}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{73}
 }
 
 func (x *CreateScheduleResponse) GetItem() *Schedule {
@@ -5401,7 +5545,7 @@ type UpdateScheduleRequest struct {
 
 func (x *UpdateScheduleRequest) Reset() {
 	*x = UpdateScheduleRequest{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[72]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[74]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5413,7 +5557,7 @@ func (x *UpdateScheduleRequest) String() string {
 func (*UpdateScheduleRequest) ProtoMessage() {}
 
 func (x *UpdateScheduleRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[72]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[74]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5426,7 +5570,7 @@ func (x *UpdateScheduleRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateScheduleRequest.ProtoReflect.Descriptor instead.
 func (*UpdateScheduleRequest) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{72}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{74}
 }
 
 func (x *UpdateScheduleRequest) GetScheduleId() string {
@@ -5452,7 +5596,7 @@ type UpdateScheduleResponse struct {
 
 func (x *UpdateScheduleResponse) Reset() {
 	*x = UpdateScheduleResponse{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[73]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[75]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5464,7 +5608,7 @@ func (x *UpdateScheduleResponse) String() string {
 func (*UpdateScheduleResponse) ProtoMessage() {}
 
 func (x *UpdateScheduleResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[73]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[75]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5477,7 +5621,7 @@ func (x *UpdateScheduleResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateScheduleResponse.ProtoReflect.Descriptor instead.
 func (*UpdateScheduleResponse) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{73}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{75}
 }
 
 func (x *UpdateScheduleResponse) GetItem() *Schedule {
@@ -5496,7 +5640,7 @@ type RunScheduleNowRequest struct {
 
 func (x *RunScheduleNowRequest) Reset() {
 	*x = RunScheduleNowRequest{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[74]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[76]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5508,7 +5652,7 @@ func (x *RunScheduleNowRequest) String() string {
 func (*RunScheduleNowRequest) ProtoMessage() {}
 
 func (x *RunScheduleNowRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[74]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[76]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5521,7 +5665,7 @@ func (x *RunScheduleNowRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunScheduleNowRequest.ProtoReflect.Descriptor instead.
 func (*RunScheduleNowRequest) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{74}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{76}
 }
 
 func (x *RunScheduleNowRequest) GetScheduleId() string {
@@ -5543,7 +5687,7 @@ type RunScheduleNowResponse struct {
 
 func (x *RunScheduleNowResponse) Reset() {
 	*x = RunScheduleNowResponse{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[75]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[77]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5555,7 +5699,7 @@ func (x *RunScheduleNowResponse) String() string {
 func (*RunScheduleNowResponse) ProtoMessage() {}
 
 func (x *RunScheduleNowResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[75]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[77]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5568,7 +5712,7 @@ func (x *RunScheduleNowResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunScheduleNowResponse.ProtoReflect.Descriptor instead.
 func (*RunScheduleNowResponse) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{75}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{77}
 }
 
 func (x *RunScheduleNowResponse) GetScheduleId() string {
@@ -5607,7 +5751,7 @@ type GetPolicySummaryRequest struct {
 
 func (x *GetPolicySummaryRequest) Reset() {
 	*x = GetPolicySummaryRequest{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[76]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[78]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5619,7 +5763,7 @@ func (x *GetPolicySummaryRequest) String() string {
 func (*GetPolicySummaryRequest) ProtoMessage() {}
 
 func (x *GetPolicySummaryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[76]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[78]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5632,7 +5776,7 @@ func (x *GetPolicySummaryRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPolicySummaryRequest.ProtoReflect.Descriptor instead.
 func (*GetPolicySummaryRequest) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{76}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{78}
 }
 
 type GetPolicySummaryResponse struct {
@@ -5645,7 +5789,7 @@ type GetPolicySummaryResponse struct {
 
 func (x *GetPolicySummaryResponse) Reset() {
 	*x = GetPolicySummaryResponse{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[77]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[79]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5657,7 +5801,7 @@ func (x *GetPolicySummaryResponse) String() string {
 func (*GetPolicySummaryResponse) ProtoMessage() {}
 
 func (x *GetPolicySummaryResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[77]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[79]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5670,7 +5814,7 @@ func (x *GetPolicySummaryResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPolicySummaryResponse.ProtoReflect.Descriptor instead.
 func (*GetPolicySummaryResponse) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{77}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{79}
 }
 
 func (x *GetPolicySummaryResponse) GetSummary() *structpb.Struct {
@@ -5702,7 +5846,7 @@ type AuditEntry struct {
 
 func (x *AuditEntry) Reset() {
 	*x = AuditEntry{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[78]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[80]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5714,7 +5858,7 @@ func (x *AuditEntry) String() string {
 func (*AuditEntry) ProtoMessage() {}
 
 func (x *AuditEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[78]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[80]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5727,7 +5871,7 @@ func (x *AuditEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AuditEntry.ProtoReflect.Descriptor instead.
 func (*AuditEntry) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{78}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{80}
 }
 
 func (x *AuditEntry) GetEntryId() string {
@@ -5787,7 +5931,7 @@ type ListAuditRequest struct {
 
 func (x *ListAuditRequest) Reset() {
 	*x = ListAuditRequest{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[79]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[81]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5799,7 +5943,7 @@ func (x *ListAuditRequest) String() string {
 func (*ListAuditRequest) ProtoMessage() {}
 
 func (x *ListAuditRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[79]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[81]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5812,7 +5956,7 @@ func (x *ListAuditRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAuditRequest.ProtoReflect.Descriptor instead.
 func (*ListAuditRequest) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{79}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{81}
 }
 
 type ListAuditResponse struct {
@@ -5824,7 +5968,7 @@ type ListAuditResponse struct {
 
 func (x *ListAuditResponse) Reset() {
 	*x = ListAuditResponse{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[80]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[82]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5836,7 +5980,7 @@ func (x *ListAuditResponse) String() string {
 func (*ListAuditResponse) ProtoMessage() {}
 
 func (x *ListAuditResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[80]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[82]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5849,7 +5993,7 @@ func (x *ListAuditResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAuditResponse.ProtoReflect.Descriptor instead.
 func (*ListAuditResponse) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{80}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{82}
 }
 
 func (x *ListAuditResponse) GetItems() []*AuditEntry {
@@ -5873,7 +6017,7 @@ type Notification struct {
 
 func (x *Notification) Reset() {
 	*x = Notification{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[81]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[83]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5885,7 +6029,7 @@ func (x *Notification) String() string {
 func (*Notification) ProtoMessage() {}
 
 func (x *Notification) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[81]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[83]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5898,7 +6042,7 @@ func (x *Notification) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Notification.ProtoReflect.Descriptor instead.
 func (*Notification) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{81}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{83}
 }
 
 func (x *Notification) GetNotificationId() string {
@@ -5951,7 +6095,7 @@ type ListNotificationsRequest struct {
 
 func (x *ListNotificationsRequest) Reset() {
 	*x = ListNotificationsRequest{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[82]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[84]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5963,7 +6107,7 @@ func (x *ListNotificationsRequest) String() string {
 func (*ListNotificationsRequest) ProtoMessage() {}
 
 func (x *ListNotificationsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[82]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[84]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5976,7 +6120,7 @@ func (x *ListNotificationsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListNotificationsRequest.ProtoReflect.Descriptor instead.
 func (*ListNotificationsRequest) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{82}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{84}
 }
 
 type ListNotificationsResponse struct {
@@ -5988,7 +6132,7 @@ type ListNotificationsResponse struct {
 
 func (x *ListNotificationsResponse) Reset() {
 	*x = ListNotificationsResponse{}
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[83]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[85]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6000,7 +6144,7 @@ func (x *ListNotificationsResponse) String() string {
 func (*ListNotificationsResponse) ProtoMessage() {}
 
 func (x *ListNotificationsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[83]
+	mi := &file_proto_pincer_protocol_v1_protocol_proto_msgTypes[85]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6013,7 +6157,7 @@ func (x *ListNotificationsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListNotificationsResponse.ProtoReflect.Descriptor instead.
 func (*ListNotificationsResponse) Descriptor() ([]byte, []int) {
-	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{83}
+	return file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP(), []int{85}
 }
 
 func (x *ListNotificationsResponse) GetItems() []*Notification {
@@ -6123,7 +6267,7 @@ const file_proto_pincer_protocol_v1_protocol_proto_rawDesc = "" +
 	"\x1aListThreadMessagesResponse\x127\n" +
 	"\x05items\x18\x01 \x03(\v2!.pincer.protocol.v1.ThreadMessageR\x05items\x12&\n" +
 	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\x12#\n" +
-	"\rlast_sequence\x18\x03 \x01(\x04R\flastSequence\"\xc0\x16\n" +
+	"\rlast_sequence\x18\x03 \x01(\x04R\flastSequence\"\xc9\x17\n" +
 	"\vThreadEvent\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x12\x1b\n" +
 	"\tthread_id\x18\x02 \x01(\tR\bthreadId\x12\x15\n" +
@@ -6139,7 +6283,10 @@ const file_proto_pincer_protocol_v1_protocol_proto_rawDesc = "" +
 	"\x1dmodel_output_repair_attempted\x18\x16 \x01(\v2..pincer.protocol.v1.ModelOutputRepairAttemptedH\x00R\x1amodelOutputRepairAttempted\x12J\n" +
 	"\x0eturn_completed\x18\x17 \x01(\v2!.pincer.protocol.v1.TurnCompletedH\x00R\rturnCompleted\x12A\n" +
 	"\vturn_failed\x18\x18 \x01(\v2\x1e.pincer.protocol.v1.TurnFailedH\x00R\n" +
-	"turnFailed\x12f\n" +
+	"turnFailed\x12A\n" +
+	"\vturn_paused\x18\x19 \x01(\v2\x1e.pincer.protocol.v1.TurnPausedH\x00R\n" +
+	"turnPaused\x12D\n" +
+	"\fturn_resumed\x18\x1a \x01(\v2\x1f.pincer.protocol.v1.TurnResumedH\x00R\vturnResumed\x12f\n" +
 	"\x18assistant_thinking_delta\x18\x1e \x01(\v2*.pincer.protocol.v1.AssistantThinkingDeltaH\x00R\x16assistantThinkingDelta\x12Z\n" +
 	"\x14assistant_text_delta\x18\x1f \x01(\v2&.pincer.protocol.v1.AssistantTextDeltaH\x00R\x12assistantTextDelta\x12o\n" +
 	"\x1bassistant_message_committed\x18  \x01(\v2-.pincer.protocol.v1.AssistantMessageCommittedH\x00R\x19assistantMessageCommitted\x12Q\n" +
@@ -6178,7 +6325,16 @@ const file_proto_pincer_protocol_v1_protocol_proto_rawDesc = "" +
 	"TurnFailed\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\tR\x04code\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12\x1c\n" +
-	"\tretryable\x18\x03 \x01(\bR\tretryable\"\xb2\x01\n" +
+	"\tretryable\x18\x03 \x01(\bR\tretryable\"\x86\x01\n" +
+	"\n" +
+	"TurnPaused\x120\n" +
+	"\x14pending_action_count\x18\x01 \x01(\rR\x12pendingActionCount\x12\x1d\n" +
+	"\n" +
+	"steps_used\x18\x02 \x01(\rR\tstepsUsed\x12'\n" +
+	"\x0fsteps_remaining\x18\x03 \x01(\rR\x0estepsRemaining\"]\n" +
+	"\vTurnResumed\x12%\n" +
+	"\x0eresumed_reason\x18\x01 \x01(\tR\rresumedReason\x12'\n" +
+	"\x0fsteps_remaining\x18\x02 \x01(\rR\x0estepsRemaining\"\xb2\x01\n" +
 	"\x16AssistantThinkingDelta\x12\x1d\n" +
 	"\n" +
 	"segment_id\x18\x01 \x01(\tR\tsegmentId\x12\x14\n" +
@@ -6553,7 +6709,7 @@ func file_proto_pincer_protocol_v1_protocol_proto_rawDescGZIP() []byte {
 }
 
 var file_proto_pincer_protocol_v1_protocol_proto_enumTypes = make([]protoimpl.EnumInfo, 13)
-var file_proto_pincer_protocol_v1_protocol_proto_msgTypes = make([]protoimpl.MessageInfo, 84)
+var file_proto_pincer_protocol_v1_protocol_proto_msgTypes = make([]protoimpl.MessageInfo, 86)
 var file_proto_pincer_protocol_v1_protocol_proto_goTypes = []any{
 	(QueueMode)(0),                         // 0: pincer.protocol.v1.QueueMode
 	(ReasoningVisibility)(0),               // 1: pincer.protocol.v1.ReasoningVisibility
@@ -6597,84 +6753,86 @@ var file_proto_pincer_protocol_v1_protocol_proto_goTypes = []any{
 	(*ModelOutputRepairAttempted)(nil),     // 39: pincer.protocol.v1.ModelOutputRepairAttempted
 	(*TurnCompleted)(nil),                  // 40: pincer.protocol.v1.TurnCompleted
 	(*TurnFailed)(nil),                     // 41: pincer.protocol.v1.TurnFailed
-	(*AssistantThinkingDelta)(nil),         // 42: pincer.protocol.v1.AssistantThinkingDelta
-	(*AssistantTextDelta)(nil),             // 43: pincer.protocol.v1.AssistantTextDelta
-	(*AssistantMessageCommitted)(nil),      // 44: pincer.protocol.v1.AssistantMessageCommitted
-	(*ToolCallPlanned)(nil),                // 45: pincer.protocol.v1.ToolCallPlanned
-	(*ToolExecutionStarted)(nil),           // 46: pincer.protocol.v1.ToolExecutionStarted
-	(*ToolExecutionOutputDelta)(nil),       // 47: pincer.protocol.v1.ToolExecutionOutputDelta
-	(*ToolExecutionFinished)(nil),          // 48: pincer.protocol.v1.ToolExecutionFinished
-	(*PolicyDecisionMade)(nil),             // 49: pincer.protocol.v1.PolicyDecisionMade
-	(*ProposedActionCreated)(nil),          // 50: pincer.protocol.v1.ProposedActionCreated
-	(*ProposedActionStatusChanged)(nil),    // 51: pincer.protocol.v1.ProposedActionStatusChanged
-	(*IdempotencyConflict)(nil),            // 52: pincer.protocol.v1.IdempotencyConflict
-	(*JobStatusChanged)(nil),               // 53: pincer.protocol.v1.JobStatusChanged
-	(*ScheduleTriggered)(nil),              // 54: pincer.protocol.v1.ScheduleTriggered
-	(*DelegatedCallbackReceived)(nil),      // 55: pincer.protocol.v1.DelegatedCallbackReceived
-	(*AuditEventRecorded)(nil),             // 56: pincer.protocol.v1.AuditEventRecorded
-	(*NotificationQueued)(nil),             // 57: pincer.protocol.v1.NotificationQueued
-	(*ArtifactCreated)(nil),                // 58: pincer.protocol.v1.ArtifactCreated
-	(*MemoryCheckpointSaved)(nil),          // 59: pincer.protocol.v1.MemoryCheckpointSaved
-	(*SkillProposalCreated)(nil),           // 60: pincer.protocol.v1.SkillProposalCreated
-	(*SelfImprovementProposalCreated)(nil), // 61: pincer.protocol.v1.SelfImprovementProposalCreated
-	(*Heartbeat)(nil),                      // 62: pincer.protocol.v1.Heartbeat
-	(*StreamGap)(nil),                      // 63: pincer.protocol.v1.StreamGap
-	(*Approval)(nil),                       // 64: pincer.protocol.v1.Approval
-	(*ListApprovalsRequest)(nil),           // 65: pincer.protocol.v1.ListApprovalsRequest
-	(*ListApprovalsResponse)(nil),          // 66: pincer.protocol.v1.ListApprovalsResponse
-	(*ApproveActionRequest)(nil),           // 67: pincer.protocol.v1.ApproveActionRequest
-	(*ApproveActionResponse)(nil),          // 68: pincer.protocol.v1.ApproveActionResponse
-	(*RejectActionRequest)(nil),            // 69: pincer.protocol.v1.RejectActionRequest
-	(*RejectActionResponse)(nil),           // 70: pincer.protocol.v1.RejectActionResponse
-	(*Job)(nil),                            // 71: pincer.protocol.v1.Job
-	(*ListJobsRequest)(nil),                // 72: pincer.protocol.v1.ListJobsRequest
-	(*ListJobsResponse)(nil),               // 73: pincer.protocol.v1.ListJobsResponse
-	(*CreateJobRequest)(nil),               // 74: pincer.protocol.v1.CreateJobRequest
-	(*CreateJobResponse)(nil),              // 75: pincer.protocol.v1.CreateJobResponse
-	(*GetJobRequest)(nil),                  // 76: pincer.protocol.v1.GetJobRequest
-	(*GetJobResponse)(nil),                 // 77: pincer.protocol.v1.GetJobResponse
-	(*CancelJobRequest)(nil),               // 78: pincer.protocol.v1.CancelJobRequest
-	(*CancelJobResponse)(nil),              // 79: pincer.protocol.v1.CancelJobResponse
-	(*Schedule)(nil),                       // 80: pincer.protocol.v1.Schedule
-	(*ListSchedulesRequest)(nil),           // 81: pincer.protocol.v1.ListSchedulesRequest
-	(*ListSchedulesResponse)(nil),          // 82: pincer.protocol.v1.ListSchedulesResponse
-	(*CreateScheduleRequest)(nil),          // 83: pincer.protocol.v1.CreateScheduleRequest
-	(*CreateScheduleResponse)(nil),         // 84: pincer.protocol.v1.CreateScheduleResponse
-	(*UpdateScheduleRequest)(nil),          // 85: pincer.protocol.v1.UpdateScheduleRequest
-	(*UpdateScheduleResponse)(nil),         // 86: pincer.protocol.v1.UpdateScheduleResponse
-	(*RunScheduleNowRequest)(nil),          // 87: pincer.protocol.v1.RunScheduleNowRequest
-	(*RunScheduleNowResponse)(nil),         // 88: pincer.protocol.v1.RunScheduleNowResponse
-	(*GetPolicySummaryRequest)(nil),        // 89: pincer.protocol.v1.GetPolicySummaryRequest
-	(*GetPolicySummaryResponse)(nil),       // 90: pincer.protocol.v1.GetPolicySummaryResponse
-	(*AuditEntry)(nil),                     // 91: pincer.protocol.v1.AuditEntry
-	(*ListAuditRequest)(nil),               // 92: pincer.protocol.v1.ListAuditRequest
-	(*ListAuditResponse)(nil),              // 93: pincer.protocol.v1.ListAuditResponse
-	(*Notification)(nil),                   // 94: pincer.protocol.v1.Notification
-	(*ListNotificationsRequest)(nil),       // 95: pincer.protocol.v1.ListNotificationsRequest
-	(*ListNotificationsResponse)(nil),      // 96: pincer.protocol.v1.ListNotificationsResponse
-	(*timestamppb.Timestamp)(nil),          // 97: google.protobuf.Timestamp
-	(*structpb.Struct)(nil),                // 98: google.protobuf.Struct
+	(*TurnPaused)(nil),                     // 42: pincer.protocol.v1.TurnPaused
+	(*TurnResumed)(nil),                    // 43: pincer.protocol.v1.TurnResumed
+	(*AssistantThinkingDelta)(nil),         // 44: pincer.protocol.v1.AssistantThinkingDelta
+	(*AssistantTextDelta)(nil),             // 45: pincer.protocol.v1.AssistantTextDelta
+	(*AssistantMessageCommitted)(nil),      // 46: pincer.protocol.v1.AssistantMessageCommitted
+	(*ToolCallPlanned)(nil),                // 47: pincer.protocol.v1.ToolCallPlanned
+	(*ToolExecutionStarted)(nil),           // 48: pincer.protocol.v1.ToolExecutionStarted
+	(*ToolExecutionOutputDelta)(nil),       // 49: pincer.protocol.v1.ToolExecutionOutputDelta
+	(*ToolExecutionFinished)(nil),          // 50: pincer.protocol.v1.ToolExecutionFinished
+	(*PolicyDecisionMade)(nil),             // 51: pincer.protocol.v1.PolicyDecisionMade
+	(*ProposedActionCreated)(nil),          // 52: pincer.protocol.v1.ProposedActionCreated
+	(*ProposedActionStatusChanged)(nil),    // 53: pincer.protocol.v1.ProposedActionStatusChanged
+	(*IdempotencyConflict)(nil),            // 54: pincer.protocol.v1.IdempotencyConflict
+	(*JobStatusChanged)(nil),               // 55: pincer.protocol.v1.JobStatusChanged
+	(*ScheduleTriggered)(nil),              // 56: pincer.protocol.v1.ScheduleTriggered
+	(*DelegatedCallbackReceived)(nil),      // 57: pincer.protocol.v1.DelegatedCallbackReceived
+	(*AuditEventRecorded)(nil),             // 58: pincer.protocol.v1.AuditEventRecorded
+	(*NotificationQueued)(nil),             // 59: pincer.protocol.v1.NotificationQueued
+	(*ArtifactCreated)(nil),                // 60: pincer.protocol.v1.ArtifactCreated
+	(*MemoryCheckpointSaved)(nil),          // 61: pincer.protocol.v1.MemoryCheckpointSaved
+	(*SkillProposalCreated)(nil),           // 62: pincer.protocol.v1.SkillProposalCreated
+	(*SelfImprovementProposalCreated)(nil), // 63: pincer.protocol.v1.SelfImprovementProposalCreated
+	(*Heartbeat)(nil),                      // 64: pincer.protocol.v1.Heartbeat
+	(*StreamGap)(nil),                      // 65: pincer.protocol.v1.StreamGap
+	(*Approval)(nil),                       // 66: pincer.protocol.v1.Approval
+	(*ListApprovalsRequest)(nil),           // 67: pincer.protocol.v1.ListApprovalsRequest
+	(*ListApprovalsResponse)(nil),          // 68: pincer.protocol.v1.ListApprovalsResponse
+	(*ApproveActionRequest)(nil),           // 69: pincer.protocol.v1.ApproveActionRequest
+	(*ApproveActionResponse)(nil),          // 70: pincer.protocol.v1.ApproveActionResponse
+	(*RejectActionRequest)(nil),            // 71: pincer.protocol.v1.RejectActionRequest
+	(*RejectActionResponse)(nil),           // 72: pincer.protocol.v1.RejectActionResponse
+	(*Job)(nil),                            // 73: pincer.protocol.v1.Job
+	(*ListJobsRequest)(nil),                // 74: pincer.protocol.v1.ListJobsRequest
+	(*ListJobsResponse)(nil),               // 75: pincer.protocol.v1.ListJobsResponse
+	(*CreateJobRequest)(nil),               // 76: pincer.protocol.v1.CreateJobRequest
+	(*CreateJobResponse)(nil),              // 77: pincer.protocol.v1.CreateJobResponse
+	(*GetJobRequest)(nil),                  // 78: pincer.protocol.v1.GetJobRequest
+	(*GetJobResponse)(nil),                 // 79: pincer.protocol.v1.GetJobResponse
+	(*CancelJobRequest)(nil),               // 80: pincer.protocol.v1.CancelJobRequest
+	(*CancelJobResponse)(nil),              // 81: pincer.protocol.v1.CancelJobResponse
+	(*Schedule)(nil),                       // 82: pincer.protocol.v1.Schedule
+	(*ListSchedulesRequest)(nil),           // 83: pincer.protocol.v1.ListSchedulesRequest
+	(*ListSchedulesResponse)(nil),          // 84: pincer.protocol.v1.ListSchedulesResponse
+	(*CreateScheduleRequest)(nil),          // 85: pincer.protocol.v1.CreateScheduleRequest
+	(*CreateScheduleResponse)(nil),         // 86: pincer.protocol.v1.CreateScheduleResponse
+	(*UpdateScheduleRequest)(nil),          // 87: pincer.protocol.v1.UpdateScheduleRequest
+	(*UpdateScheduleResponse)(nil),         // 88: pincer.protocol.v1.UpdateScheduleResponse
+	(*RunScheduleNowRequest)(nil),          // 89: pincer.protocol.v1.RunScheduleNowRequest
+	(*RunScheduleNowResponse)(nil),         // 90: pincer.protocol.v1.RunScheduleNowResponse
+	(*GetPolicySummaryRequest)(nil),        // 91: pincer.protocol.v1.GetPolicySummaryRequest
+	(*GetPolicySummaryResponse)(nil),       // 92: pincer.protocol.v1.GetPolicySummaryResponse
+	(*AuditEntry)(nil),                     // 93: pincer.protocol.v1.AuditEntry
+	(*ListAuditRequest)(nil),               // 94: pincer.protocol.v1.ListAuditRequest
+	(*ListAuditResponse)(nil),              // 95: pincer.protocol.v1.ListAuditResponse
+	(*Notification)(nil),                   // 96: pincer.protocol.v1.Notification
+	(*ListNotificationsRequest)(nil),       // 97: pincer.protocol.v1.ListNotificationsRequest
+	(*ListNotificationsResponse)(nil),      // 98: pincer.protocol.v1.ListNotificationsResponse
+	(*timestamppb.Timestamp)(nil),          // 99: google.protobuf.Timestamp
+	(*structpb.Struct)(nil),                // 100: google.protobuf.Struct
 }
 var file_proto_pincer_protocol_v1_protocol_proto_depIdxs = []int32{
-	97,  // 0: pincer.protocol.v1.CreatePairingCodeResponse.expires_at:type_name -> google.protobuf.Timestamp
-	97,  // 1: pincer.protocol.v1.BindPairingCodeResponse.expires_at:type_name -> google.protobuf.Timestamp
-	97,  // 2: pincer.protocol.v1.BindPairingCodeResponse.renew_after:type_name -> google.protobuf.Timestamp
-	97,  // 3: pincer.protocol.v1.RotateTokenResponse.expires_at:type_name -> google.protobuf.Timestamp
-	97,  // 4: pincer.protocol.v1.RotateTokenResponse.renew_after:type_name -> google.protobuf.Timestamp
-	97,  // 5: pincer.protocol.v1.Device.created_at:type_name -> google.protobuf.Timestamp
-	97,  // 6: pincer.protocol.v1.Device.revoked_at:type_name -> google.protobuf.Timestamp
+	99,  // 0: pincer.protocol.v1.CreatePairingCodeResponse.expires_at:type_name -> google.protobuf.Timestamp
+	99,  // 1: pincer.protocol.v1.BindPairingCodeResponse.expires_at:type_name -> google.protobuf.Timestamp
+	99,  // 2: pincer.protocol.v1.BindPairingCodeResponse.renew_after:type_name -> google.protobuf.Timestamp
+	99,  // 3: pincer.protocol.v1.RotateTokenResponse.expires_at:type_name -> google.protobuf.Timestamp
+	99,  // 4: pincer.protocol.v1.RotateTokenResponse.renew_after:type_name -> google.protobuf.Timestamp
+	99,  // 5: pincer.protocol.v1.Device.created_at:type_name -> google.protobuf.Timestamp
+	99,  // 6: pincer.protocol.v1.Device.revoked_at:type_name -> google.protobuf.Timestamp
 	19,  // 7: pincer.protocol.v1.ListDevicesResponse.items:type_name -> pincer.protocol.v1.Device
 	0,   // 8: pincer.protocol.v1.StartTurnRequest.queue_mode:type_name -> pincer.protocol.v1.QueueMode
 	1,   // 9: pincer.protocol.v1.StartTurnRequest.reasoning_visibility:type_name -> pincer.protocol.v1.ReasoningVisibility
 	9,   // 10: pincer.protocol.v1.StartTurnRequest.trigger_type:type_name -> pincer.protocol.v1.TriggerType
 	26,  // 11: pincer.protocol.v1.StartTurnRequest.requested_budget:type_name -> pincer.protocol.v1.TurnBudget
 	9,   // 12: pincer.protocol.v1.SendTurnRequest.trigger_type:type_name -> pincer.protocol.v1.TriggerType
-	98,  // 13: pincer.protocol.v1.ThreadMessage.metadata:type_name -> google.protobuf.Struct
+	100, // 13: pincer.protocol.v1.ThreadMessage.metadata:type_name -> google.protobuf.Struct
 	3,   // 14: pincer.protocol.v1.ThreadMessage.content_trust:type_name -> pincer.protocol.v1.ContentTrust
-	97,  // 15: pincer.protocol.v1.ThreadMessage.created_at:type_name -> google.protobuf.Timestamp
+	99,  // 15: pincer.protocol.v1.ThreadMessage.created_at:type_name -> google.protobuf.Timestamp
 	33,  // 16: pincer.protocol.v1.GetThreadSnapshotResponse.messages:type_name -> pincer.protocol.v1.ThreadMessage
 	33,  // 17: pincer.protocol.v1.ListThreadMessagesResponse.items:type_name -> pincer.protocol.v1.ThreadMessage
-	97,  // 18: pincer.protocol.v1.ThreadEvent.occurred_at:type_name -> google.protobuf.Timestamp
+	99,  // 18: pincer.protocol.v1.ThreadEvent.occurred_at:type_name -> google.protobuf.Timestamp
 	2,   // 19: pincer.protocol.v1.ThreadEvent.source:type_name -> pincer.protocol.v1.EventSource
 	3,   // 20: pincer.protocol.v1.ThreadEvent.content_trust:type_name -> pincer.protocol.v1.ContentTrust
 	37,  // 21: pincer.protocol.v1.ThreadEvent.turn_started:type_name -> pincer.protocol.v1.TurnStarted
@@ -6682,136 +6840,138 @@ var file_proto_pincer_protocol_v1_protocol_proto_depIdxs = []int32{
 	39,  // 23: pincer.protocol.v1.ThreadEvent.model_output_repair_attempted:type_name -> pincer.protocol.v1.ModelOutputRepairAttempted
 	40,  // 24: pincer.protocol.v1.ThreadEvent.turn_completed:type_name -> pincer.protocol.v1.TurnCompleted
 	41,  // 25: pincer.protocol.v1.ThreadEvent.turn_failed:type_name -> pincer.protocol.v1.TurnFailed
-	42,  // 26: pincer.protocol.v1.ThreadEvent.assistant_thinking_delta:type_name -> pincer.protocol.v1.AssistantThinkingDelta
-	43,  // 27: pincer.protocol.v1.ThreadEvent.assistant_text_delta:type_name -> pincer.protocol.v1.AssistantTextDelta
-	44,  // 28: pincer.protocol.v1.ThreadEvent.assistant_message_committed:type_name -> pincer.protocol.v1.AssistantMessageCommitted
-	45,  // 29: pincer.protocol.v1.ThreadEvent.tool_call_planned:type_name -> pincer.protocol.v1.ToolCallPlanned
-	46,  // 30: pincer.protocol.v1.ThreadEvent.tool_execution_started:type_name -> pincer.protocol.v1.ToolExecutionStarted
-	47,  // 31: pincer.protocol.v1.ThreadEvent.tool_execution_output_delta:type_name -> pincer.protocol.v1.ToolExecutionOutputDelta
-	48,  // 32: pincer.protocol.v1.ThreadEvent.tool_execution_finished:type_name -> pincer.protocol.v1.ToolExecutionFinished
-	49,  // 33: pincer.protocol.v1.ThreadEvent.policy_decision_made:type_name -> pincer.protocol.v1.PolicyDecisionMade
-	50,  // 34: pincer.protocol.v1.ThreadEvent.proposed_action_created:type_name -> pincer.protocol.v1.ProposedActionCreated
-	51,  // 35: pincer.protocol.v1.ThreadEvent.proposed_action_status_changed:type_name -> pincer.protocol.v1.ProposedActionStatusChanged
-	52,  // 36: pincer.protocol.v1.ThreadEvent.idempotency_conflict:type_name -> pincer.protocol.v1.IdempotencyConflict
-	53,  // 37: pincer.protocol.v1.ThreadEvent.job_status_changed:type_name -> pincer.protocol.v1.JobStatusChanged
-	54,  // 38: pincer.protocol.v1.ThreadEvent.schedule_triggered:type_name -> pincer.protocol.v1.ScheduleTriggered
-	55,  // 39: pincer.protocol.v1.ThreadEvent.delegated_callback_received:type_name -> pincer.protocol.v1.DelegatedCallbackReceived
-	56,  // 40: pincer.protocol.v1.ThreadEvent.audit_event_recorded:type_name -> pincer.protocol.v1.AuditEventRecorded
-	57,  // 41: pincer.protocol.v1.ThreadEvent.notification_queued:type_name -> pincer.protocol.v1.NotificationQueued
-	58,  // 42: pincer.protocol.v1.ThreadEvent.artifact_created:type_name -> pincer.protocol.v1.ArtifactCreated
-	59,  // 43: pincer.protocol.v1.ThreadEvent.memory_checkpoint_saved:type_name -> pincer.protocol.v1.MemoryCheckpointSaved
-	60,  // 44: pincer.protocol.v1.ThreadEvent.skill_proposal_created:type_name -> pincer.protocol.v1.SkillProposalCreated
-	61,  // 45: pincer.protocol.v1.ThreadEvent.self_improvement_proposal_created:type_name -> pincer.protocol.v1.SelfImprovementProposalCreated
-	62,  // 46: pincer.protocol.v1.ThreadEvent.heartbeat:type_name -> pincer.protocol.v1.Heartbeat
-	63,  // 47: pincer.protocol.v1.ThreadEvent.stream_gap:type_name -> pincer.protocol.v1.StreamGap
-	9,   // 48: pincer.protocol.v1.TurnStarted.trigger_type:type_name -> pincer.protocol.v1.TriggerType
-	26,  // 49: pincer.protocol.v1.TurnBudgetApplied.effective_budget:type_name -> pincer.protocol.v1.TurnBudget
-	1,   // 50: pincer.protocol.v1.AssistantThinkingDelta.visibility:type_name -> pincer.protocol.v1.ReasoningVisibility
-	98,  // 51: pincer.protocol.v1.AssistantMessageCommitted.metadata:type_name -> google.protobuf.Struct
-	98,  // 52: pincer.protocol.v1.ToolCallPlanned.args:type_name -> google.protobuf.Struct
-	5,   // 53: pincer.protocol.v1.ToolCallPlanned.risk_class:type_name -> pincer.protocol.v1.RiskClass
-	4,   // 54: pincer.protocol.v1.ToolCallPlanned.identity:type_name -> pincer.protocol.v1.Identity
-	8,   // 55: pincer.protocol.v1.ToolExecutionOutputDelta.stream:type_name -> pincer.protocol.v1.OutputStream
-	6,   // 56: pincer.protocol.v1.PolicyDecisionMade.decision:type_name -> pincer.protocol.v1.PolicyDecision
-	5,   // 57: pincer.protocol.v1.ProposedActionCreated.risk_class:type_name -> pincer.protocol.v1.RiskClass
-	4,   // 58: pincer.protocol.v1.ProposedActionCreated.identity:type_name -> pincer.protocol.v1.Identity
-	98,  // 59: pincer.protocol.v1.ProposedActionCreated.preview:type_name -> google.protobuf.Struct
-	97,  // 60: pincer.protocol.v1.ProposedActionCreated.expires_at:type_name -> google.protobuf.Timestamp
-	7,   // 61: pincer.protocol.v1.ProposedActionStatusChanged.status:type_name -> pincer.protocol.v1.ActionStatus
-	97,  // 62: pincer.protocol.v1.ScheduleTriggered.scheduled_for_utc:type_name -> google.protobuf.Timestamp
-	7,   // 63: pincer.protocol.v1.Approval.status:type_name -> pincer.protocol.v1.ActionStatus
-	5,   // 64: pincer.protocol.v1.Approval.risk_class:type_name -> pincer.protocol.v1.RiskClass
-	4,   // 65: pincer.protocol.v1.Approval.identity:type_name -> pincer.protocol.v1.Identity
-	98,  // 66: pincer.protocol.v1.Approval.preview:type_name -> google.protobuf.Struct
-	97,  // 67: pincer.protocol.v1.Approval.created_at:type_name -> google.protobuf.Timestamp
-	97,  // 68: pincer.protocol.v1.Approval.expires_at:type_name -> google.protobuf.Timestamp
-	7,   // 69: pincer.protocol.v1.ListApprovalsRequest.status:type_name -> pincer.protocol.v1.ActionStatus
-	64,  // 70: pincer.protocol.v1.ListApprovalsResponse.items:type_name -> pincer.protocol.v1.Approval
-	7,   // 71: pincer.protocol.v1.ApproveActionResponse.status:type_name -> pincer.protocol.v1.ActionStatus
-	7,   // 72: pincer.protocol.v1.RejectActionResponse.status:type_name -> pincer.protocol.v1.ActionStatus
-	10,  // 73: pincer.protocol.v1.Job.status:type_name -> pincer.protocol.v1.JobStatus
-	9,   // 74: pincer.protocol.v1.Job.trigger_type:type_name -> pincer.protocol.v1.TriggerType
-	26,  // 75: pincer.protocol.v1.Job.budget:type_name -> pincer.protocol.v1.TurnBudget
-	97,  // 76: pincer.protocol.v1.Job.created_at:type_name -> google.protobuf.Timestamp
-	97,  // 77: pincer.protocol.v1.Job.updated_at:type_name -> google.protobuf.Timestamp
-	71,  // 78: pincer.protocol.v1.ListJobsResponse.items:type_name -> pincer.protocol.v1.Job
-	26,  // 79: pincer.protocol.v1.CreateJobRequest.budget:type_name -> pincer.protocol.v1.TurnBudget
-	71,  // 80: pincer.protocol.v1.CreateJobResponse.item:type_name -> pincer.protocol.v1.Job
-	71,  // 81: pincer.protocol.v1.GetJobResponse.item:type_name -> pincer.protocol.v1.Job
-	10,  // 82: pincer.protocol.v1.CancelJobResponse.status:type_name -> pincer.protocol.v1.JobStatus
-	11,  // 83: pincer.protocol.v1.Schedule.trigger_kind:type_name -> pincer.protocol.v1.ScheduleTriggerKind
-	97,  // 84: pincer.protocol.v1.Schedule.next_run_at:type_name -> google.protobuf.Timestamp
-	97,  // 85: pincer.protocol.v1.Schedule.last_run_at:type_name -> google.protobuf.Timestamp
-	97,  // 86: pincer.protocol.v1.Schedule.created_at:type_name -> google.protobuf.Timestamp
-	97,  // 87: pincer.protocol.v1.Schedule.updated_at:type_name -> google.protobuf.Timestamp
-	80,  // 88: pincer.protocol.v1.ListSchedulesResponse.items:type_name -> pincer.protocol.v1.Schedule
-	11,  // 89: pincer.protocol.v1.CreateScheduleRequest.trigger_kind:type_name -> pincer.protocol.v1.ScheduleTriggerKind
-	80,  // 90: pincer.protocol.v1.CreateScheduleResponse.item:type_name -> pincer.protocol.v1.Schedule
-	98,  // 91: pincer.protocol.v1.UpdateScheduleRequest.patch:type_name -> google.protobuf.Struct
-	80,  // 92: pincer.protocol.v1.UpdateScheduleResponse.item:type_name -> pincer.protocol.v1.Schedule
-	98,  // 93: pincer.protocol.v1.GetPolicySummaryResponse.summary:type_name -> google.protobuf.Struct
-	98,  // 94: pincer.protocol.v1.AuditEntry.payload:type_name -> google.protobuf.Struct
-	97,  // 95: pincer.protocol.v1.AuditEntry.occurred_at:type_name -> google.protobuf.Timestamp
-	91,  // 96: pincer.protocol.v1.ListAuditResponse.items:type_name -> pincer.protocol.v1.AuditEntry
-	12,  // 97: pincer.protocol.v1.Notification.type:type_name -> pincer.protocol.v1.NotificationType
-	97,  // 98: pincer.protocol.v1.Notification.created_at:type_name -> google.protobuf.Timestamp
-	97,  // 99: pincer.protocol.v1.Notification.read_at:type_name -> google.protobuf.Timestamp
-	94,  // 100: pincer.protocol.v1.ListNotificationsResponse.items:type_name -> pincer.protocol.v1.Notification
-	13,  // 101: pincer.protocol.v1.AuthService.CreatePairingCode:input_type -> pincer.protocol.v1.CreatePairingCodeRequest
-	15,  // 102: pincer.protocol.v1.AuthService.BindPairingCode:input_type -> pincer.protocol.v1.BindPairingCodeRequest
-	17,  // 103: pincer.protocol.v1.AuthService.RotateToken:input_type -> pincer.protocol.v1.RotateTokenRequest
-	20,  // 104: pincer.protocol.v1.DevicesService.ListDevices:input_type -> pincer.protocol.v1.ListDevicesRequest
-	22,  // 105: pincer.protocol.v1.DevicesService.RevokeDevice:input_type -> pincer.protocol.v1.RevokeDeviceRequest
-	24,  // 106: pincer.protocol.v1.ThreadsService.CreateThread:input_type -> pincer.protocol.v1.CreateThreadRequest
-	31,  // 107: pincer.protocol.v1.ThreadsService.GetThreadSnapshot:input_type -> pincer.protocol.v1.GetThreadSnapshotRequest
-	32,  // 108: pincer.protocol.v1.ThreadsService.ListThreadMessages:input_type -> pincer.protocol.v1.ListThreadMessagesRequest
-	28,  // 109: pincer.protocol.v1.TurnsService.SendTurn:input_type -> pincer.protocol.v1.SendTurnRequest
-	27,  // 110: pincer.protocol.v1.TurnsService.StartTurn:input_type -> pincer.protocol.v1.StartTurnRequest
-	30,  // 111: pincer.protocol.v1.EventsService.WatchThread:input_type -> pincer.protocol.v1.WatchThreadRequest
-	65,  // 112: pincer.protocol.v1.ApprovalsService.ListApprovals:input_type -> pincer.protocol.v1.ListApprovalsRequest
-	67,  // 113: pincer.protocol.v1.ApprovalsService.ApproveAction:input_type -> pincer.protocol.v1.ApproveActionRequest
-	69,  // 114: pincer.protocol.v1.ApprovalsService.RejectAction:input_type -> pincer.protocol.v1.RejectActionRequest
-	72,  // 115: pincer.protocol.v1.JobsService.ListJobs:input_type -> pincer.protocol.v1.ListJobsRequest
-	74,  // 116: pincer.protocol.v1.JobsService.CreateJob:input_type -> pincer.protocol.v1.CreateJobRequest
-	76,  // 117: pincer.protocol.v1.JobsService.GetJob:input_type -> pincer.protocol.v1.GetJobRequest
-	78,  // 118: pincer.protocol.v1.JobsService.CancelJob:input_type -> pincer.protocol.v1.CancelJobRequest
-	81,  // 119: pincer.protocol.v1.SchedulesService.ListSchedules:input_type -> pincer.protocol.v1.ListSchedulesRequest
-	83,  // 120: pincer.protocol.v1.SchedulesService.CreateSchedule:input_type -> pincer.protocol.v1.CreateScheduleRequest
-	85,  // 121: pincer.protocol.v1.SchedulesService.UpdateSchedule:input_type -> pincer.protocol.v1.UpdateScheduleRequest
-	87,  // 122: pincer.protocol.v1.SchedulesService.RunScheduleNow:input_type -> pincer.protocol.v1.RunScheduleNowRequest
-	89,  // 123: pincer.protocol.v1.SystemService.GetPolicySummary:input_type -> pincer.protocol.v1.GetPolicySummaryRequest
-	92,  // 124: pincer.protocol.v1.SystemService.ListAudit:input_type -> pincer.protocol.v1.ListAuditRequest
-	95,  // 125: pincer.protocol.v1.SystemService.ListNotifications:input_type -> pincer.protocol.v1.ListNotificationsRequest
-	14,  // 126: pincer.protocol.v1.AuthService.CreatePairingCode:output_type -> pincer.protocol.v1.CreatePairingCodeResponse
-	16,  // 127: pincer.protocol.v1.AuthService.BindPairingCode:output_type -> pincer.protocol.v1.BindPairingCodeResponse
-	18,  // 128: pincer.protocol.v1.AuthService.RotateToken:output_type -> pincer.protocol.v1.RotateTokenResponse
-	21,  // 129: pincer.protocol.v1.DevicesService.ListDevices:output_type -> pincer.protocol.v1.ListDevicesResponse
-	23,  // 130: pincer.protocol.v1.DevicesService.RevokeDevice:output_type -> pincer.protocol.v1.RevokeDeviceResponse
-	25,  // 131: pincer.protocol.v1.ThreadsService.CreateThread:output_type -> pincer.protocol.v1.CreateThreadResponse
-	34,  // 132: pincer.protocol.v1.ThreadsService.GetThreadSnapshot:output_type -> pincer.protocol.v1.GetThreadSnapshotResponse
-	35,  // 133: pincer.protocol.v1.ThreadsService.ListThreadMessages:output_type -> pincer.protocol.v1.ListThreadMessagesResponse
-	29,  // 134: pincer.protocol.v1.TurnsService.SendTurn:output_type -> pincer.protocol.v1.SendTurnResponse
-	36,  // 135: pincer.protocol.v1.TurnsService.StartTurn:output_type -> pincer.protocol.v1.ThreadEvent
-	36,  // 136: pincer.protocol.v1.EventsService.WatchThread:output_type -> pincer.protocol.v1.ThreadEvent
-	66,  // 137: pincer.protocol.v1.ApprovalsService.ListApprovals:output_type -> pincer.protocol.v1.ListApprovalsResponse
-	68,  // 138: pincer.protocol.v1.ApprovalsService.ApproveAction:output_type -> pincer.protocol.v1.ApproveActionResponse
-	70,  // 139: pincer.protocol.v1.ApprovalsService.RejectAction:output_type -> pincer.protocol.v1.RejectActionResponse
-	73,  // 140: pincer.protocol.v1.JobsService.ListJobs:output_type -> pincer.protocol.v1.ListJobsResponse
-	75,  // 141: pincer.protocol.v1.JobsService.CreateJob:output_type -> pincer.protocol.v1.CreateJobResponse
-	77,  // 142: pincer.protocol.v1.JobsService.GetJob:output_type -> pincer.protocol.v1.GetJobResponse
-	79,  // 143: pincer.protocol.v1.JobsService.CancelJob:output_type -> pincer.protocol.v1.CancelJobResponse
-	82,  // 144: pincer.protocol.v1.SchedulesService.ListSchedules:output_type -> pincer.protocol.v1.ListSchedulesResponse
-	84,  // 145: pincer.protocol.v1.SchedulesService.CreateSchedule:output_type -> pincer.protocol.v1.CreateScheduleResponse
-	86,  // 146: pincer.protocol.v1.SchedulesService.UpdateSchedule:output_type -> pincer.protocol.v1.UpdateScheduleResponse
-	88,  // 147: pincer.protocol.v1.SchedulesService.RunScheduleNow:output_type -> pincer.protocol.v1.RunScheduleNowResponse
-	90,  // 148: pincer.protocol.v1.SystemService.GetPolicySummary:output_type -> pincer.protocol.v1.GetPolicySummaryResponse
-	93,  // 149: pincer.protocol.v1.SystemService.ListAudit:output_type -> pincer.protocol.v1.ListAuditResponse
-	96,  // 150: pincer.protocol.v1.SystemService.ListNotifications:output_type -> pincer.protocol.v1.ListNotificationsResponse
-	126, // [126:151] is the sub-list for method output_type
-	101, // [101:126] is the sub-list for method input_type
-	101, // [101:101] is the sub-list for extension type_name
-	101, // [101:101] is the sub-list for extension extendee
-	0,   // [0:101] is the sub-list for field type_name
+	42,  // 26: pincer.protocol.v1.ThreadEvent.turn_paused:type_name -> pincer.protocol.v1.TurnPaused
+	43,  // 27: pincer.protocol.v1.ThreadEvent.turn_resumed:type_name -> pincer.protocol.v1.TurnResumed
+	44,  // 28: pincer.protocol.v1.ThreadEvent.assistant_thinking_delta:type_name -> pincer.protocol.v1.AssistantThinkingDelta
+	45,  // 29: pincer.protocol.v1.ThreadEvent.assistant_text_delta:type_name -> pincer.protocol.v1.AssistantTextDelta
+	46,  // 30: pincer.protocol.v1.ThreadEvent.assistant_message_committed:type_name -> pincer.protocol.v1.AssistantMessageCommitted
+	47,  // 31: pincer.protocol.v1.ThreadEvent.tool_call_planned:type_name -> pincer.protocol.v1.ToolCallPlanned
+	48,  // 32: pincer.protocol.v1.ThreadEvent.tool_execution_started:type_name -> pincer.protocol.v1.ToolExecutionStarted
+	49,  // 33: pincer.protocol.v1.ThreadEvent.tool_execution_output_delta:type_name -> pincer.protocol.v1.ToolExecutionOutputDelta
+	50,  // 34: pincer.protocol.v1.ThreadEvent.tool_execution_finished:type_name -> pincer.protocol.v1.ToolExecutionFinished
+	51,  // 35: pincer.protocol.v1.ThreadEvent.policy_decision_made:type_name -> pincer.protocol.v1.PolicyDecisionMade
+	52,  // 36: pincer.protocol.v1.ThreadEvent.proposed_action_created:type_name -> pincer.protocol.v1.ProposedActionCreated
+	53,  // 37: pincer.protocol.v1.ThreadEvent.proposed_action_status_changed:type_name -> pincer.protocol.v1.ProposedActionStatusChanged
+	54,  // 38: pincer.protocol.v1.ThreadEvent.idempotency_conflict:type_name -> pincer.protocol.v1.IdempotencyConflict
+	55,  // 39: pincer.protocol.v1.ThreadEvent.job_status_changed:type_name -> pincer.protocol.v1.JobStatusChanged
+	56,  // 40: pincer.protocol.v1.ThreadEvent.schedule_triggered:type_name -> pincer.protocol.v1.ScheduleTriggered
+	57,  // 41: pincer.protocol.v1.ThreadEvent.delegated_callback_received:type_name -> pincer.protocol.v1.DelegatedCallbackReceived
+	58,  // 42: pincer.protocol.v1.ThreadEvent.audit_event_recorded:type_name -> pincer.protocol.v1.AuditEventRecorded
+	59,  // 43: pincer.protocol.v1.ThreadEvent.notification_queued:type_name -> pincer.protocol.v1.NotificationQueued
+	60,  // 44: pincer.protocol.v1.ThreadEvent.artifact_created:type_name -> pincer.protocol.v1.ArtifactCreated
+	61,  // 45: pincer.protocol.v1.ThreadEvent.memory_checkpoint_saved:type_name -> pincer.protocol.v1.MemoryCheckpointSaved
+	62,  // 46: pincer.protocol.v1.ThreadEvent.skill_proposal_created:type_name -> pincer.protocol.v1.SkillProposalCreated
+	63,  // 47: pincer.protocol.v1.ThreadEvent.self_improvement_proposal_created:type_name -> pincer.protocol.v1.SelfImprovementProposalCreated
+	64,  // 48: pincer.protocol.v1.ThreadEvent.heartbeat:type_name -> pincer.protocol.v1.Heartbeat
+	65,  // 49: pincer.protocol.v1.ThreadEvent.stream_gap:type_name -> pincer.protocol.v1.StreamGap
+	9,   // 50: pincer.protocol.v1.TurnStarted.trigger_type:type_name -> pincer.protocol.v1.TriggerType
+	26,  // 51: pincer.protocol.v1.TurnBudgetApplied.effective_budget:type_name -> pincer.protocol.v1.TurnBudget
+	1,   // 52: pincer.protocol.v1.AssistantThinkingDelta.visibility:type_name -> pincer.protocol.v1.ReasoningVisibility
+	100, // 53: pincer.protocol.v1.AssistantMessageCommitted.metadata:type_name -> google.protobuf.Struct
+	100, // 54: pincer.protocol.v1.ToolCallPlanned.args:type_name -> google.protobuf.Struct
+	5,   // 55: pincer.protocol.v1.ToolCallPlanned.risk_class:type_name -> pincer.protocol.v1.RiskClass
+	4,   // 56: pincer.protocol.v1.ToolCallPlanned.identity:type_name -> pincer.protocol.v1.Identity
+	8,   // 57: pincer.protocol.v1.ToolExecutionOutputDelta.stream:type_name -> pincer.protocol.v1.OutputStream
+	6,   // 58: pincer.protocol.v1.PolicyDecisionMade.decision:type_name -> pincer.protocol.v1.PolicyDecision
+	5,   // 59: pincer.protocol.v1.ProposedActionCreated.risk_class:type_name -> pincer.protocol.v1.RiskClass
+	4,   // 60: pincer.protocol.v1.ProposedActionCreated.identity:type_name -> pincer.protocol.v1.Identity
+	100, // 61: pincer.protocol.v1.ProposedActionCreated.preview:type_name -> google.protobuf.Struct
+	99,  // 62: pincer.protocol.v1.ProposedActionCreated.expires_at:type_name -> google.protobuf.Timestamp
+	7,   // 63: pincer.protocol.v1.ProposedActionStatusChanged.status:type_name -> pincer.protocol.v1.ActionStatus
+	99,  // 64: pincer.protocol.v1.ScheduleTriggered.scheduled_for_utc:type_name -> google.protobuf.Timestamp
+	7,   // 65: pincer.protocol.v1.Approval.status:type_name -> pincer.protocol.v1.ActionStatus
+	5,   // 66: pincer.protocol.v1.Approval.risk_class:type_name -> pincer.protocol.v1.RiskClass
+	4,   // 67: pincer.protocol.v1.Approval.identity:type_name -> pincer.protocol.v1.Identity
+	100, // 68: pincer.protocol.v1.Approval.preview:type_name -> google.protobuf.Struct
+	99,  // 69: pincer.protocol.v1.Approval.created_at:type_name -> google.protobuf.Timestamp
+	99,  // 70: pincer.protocol.v1.Approval.expires_at:type_name -> google.protobuf.Timestamp
+	7,   // 71: pincer.protocol.v1.ListApprovalsRequest.status:type_name -> pincer.protocol.v1.ActionStatus
+	66,  // 72: pincer.protocol.v1.ListApprovalsResponse.items:type_name -> pincer.protocol.v1.Approval
+	7,   // 73: pincer.protocol.v1.ApproveActionResponse.status:type_name -> pincer.protocol.v1.ActionStatus
+	7,   // 74: pincer.protocol.v1.RejectActionResponse.status:type_name -> pincer.protocol.v1.ActionStatus
+	10,  // 75: pincer.protocol.v1.Job.status:type_name -> pincer.protocol.v1.JobStatus
+	9,   // 76: pincer.protocol.v1.Job.trigger_type:type_name -> pincer.protocol.v1.TriggerType
+	26,  // 77: pincer.protocol.v1.Job.budget:type_name -> pincer.protocol.v1.TurnBudget
+	99,  // 78: pincer.protocol.v1.Job.created_at:type_name -> google.protobuf.Timestamp
+	99,  // 79: pincer.protocol.v1.Job.updated_at:type_name -> google.protobuf.Timestamp
+	73,  // 80: pincer.protocol.v1.ListJobsResponse.items:type_name -> pincer.protocol.v1.Job
+	26,  // 81: pincer.protocol.v1.CreateJobRequest.budget:type_name -> pincer.protocol.v1.TurnBudget
+	73,  // 82: pincer.protocol.v1.CreateJobResponse.item:type_name -> pincer.protocol.v1.Job
+	73,  // 83: pincer.protocol.v1.GetJobResponse.item:type_name -> pincer.protocol.v1.Job
+	10,  // 84: pincer.protocol.v1.CancelJobResponse.status:type_name -> pincer.protocol.v1.JobStatus
+	11,  // 85: pincer.protocol.v1.Schedule.trigger_kind:type_name -> pincer.protocol.v1.ScheduleTriggerKind
+	99,  // 86: pincer.protocol.v1.Schedule.next_run_at:type_name -> google.protobuf.Timestamp
+	99,  // 87: pincer.protocol.v1.Schedule.last_run_at:type_name -> google.protobuf.Timestamp
+	99,  // 88: pincer.protocol.v1.Schedule.created_at:type_name -> google.protobuf.Timestamp
+	99,  // 89: pincer.protocol.v1.Schedule.updated_at:type_name -> google.protobuf.Timestamp
+	82,  // 90: pincer.protocol.v1.ListSchedulesResponse.items:type_name -> pincer.protocol.v1.Schedule
+	11,  // 91: pincer.protocol.v1.CreateScheduleRequest.trigger_kind:type_name -> pincer.protocol.v1.ScheduleTriggerKind
+	82,  // 92: pincer.protocol.v1.CreateScheduleResponse.item:type_name -> pincer.protocol.v1.Schedule
+	100, // 93: pincer.protocol.v1.UpdateScheduleRequest.patch:type_name -> google.protobuf.Struct
+	82,  // 94: pincer.protocol.v1.UpdateScheduleResponse.item:type_name -> pincer.protocol.v1.Schedule
+	100, // 95: pincer.protocol.v1.GetPolicySummaryResponse.summary:type_name -> google.protobuf.Struct
+	100, // 96: pincer.protocol.v1.AuditEntry.payload:type_name -> google.protobuf.Struct
+	99,  // 97: pincer.protocol.v1.AuditEntry.occurred_at:type_name -> google.protobuf.Timestamp
+	93,  // 98: pincer.protocol.v1.ListAuditResponse.items:type_name -> pincer.protocol.v1.AuditEntry
+	12,  // 99: pincer.protocol.v1.Notification.type:type_name -> pincer.protocol.v1.NotificationType
+	99,  // 100: pincer.protocol.v1.Notification.created_at:type_name -> google.protobuf.Timestamp
+	99,  // 101: pincer.protocol.v1.Notification.read_at:type_name -> google.protobuf.Timestamp
+	96,  // 102: pincer.protocol.v1.ListNotificationsResponse.items:type_name -> pincer.protocol.v1.Notification
+	13,  // 103: pincer.protocol.v1.AuthService.CreatePairingCode:input_type -> pincer.protocol.v1.CreatePairingCodeRequest
+	15,  // 104: pincer.protocol.v1.AuthService.BindPairingCode:input_type -> pincer.protocol.v1.BindPairingCodeRequest
+	17,  // 105: pincer.protocol.v1.AuthService.RotateToken:input_type -> pincer.protocol.v1.RotateTokenRequest
+	20,  // 106: pincer.protocol.v1.DevicesService.ListDevices:input_type -> pincer.protocol.v1.ListDevicesRequest
+	22,  // 107: pincer.protocol.v1.DevicesService.RevokeDevice:input_type -> pincer.protocol.v1.RevokeDeviceRequest
+	24,  // 108: pincer.protocol.v1.ThreadsService.CreateThread:input_type -> pincer.protocol.v1.CreateThreadRequest
+	31,  // 109: pincer.protocol.v1.ThreadsService.GetThreadSnapshot:input_type -> pincer.protocol.v1.GetThreadSnapshotRequest
+	32,  // 110: pincer.protocol.v1.ThreadsService.ListThreadMessages:input_type -> pincer.protocol.v1.ListThreadMessagesRequest
+	28,  // 111: pincer.protocol.v1.TurnsService.SendTurn:input_type -> pincer.protocol.v1.SendTurnRequest
+	27,  // 112: pincer.protocol.v1.TurnsService.StartTurn:input_type -> pincer.protocol.v1.StartTurnRequest
+	30,  // 113: pincer.protocol.v1.EventsService.WatchThread:input_type -> pincer.protocol.v1.WatchThreadRequest
+	67,  // 114: pincer.protocol.v1.ApprovalsService.ListApprovals:input_type -> pincer.protocol.v1.ListApprovalsRequest
+	69,  // 115: pincer.protocol.v1.ApprovalsService.ApproveAction:input_type -> pincer.protocol.v1.ApproveActionRequest
+	71,  // 116: pincer.protocol.v1.ApprovalsService.RejectAction:input_type -> pincer.protocol.v1.RejectActionRequest
+	74,  // 117: pincer.protocol.v1.JobsService.ListJobs:input_type -> pincer.protocol.v1.ListJobsRequest
+	76,  // 118: pincer.protocol.v1.JobsService.CreateJob:input_type -> pincer.protocol.v1.CreateJobRequest
+	78,  // 119: pincer.protocol.v1.JobsService.GetJob:input_type -> pincer.protocol.v1.GetJobRequest
+	80,  // 120: pincer.protocol.v1.JobsService.CancelJob:input_type -> pincer.protocol.v1.CancelJobRequest
+	83,  // 121: pincer.protocol.v1.SchedulesService.ListSchedules:input_type -> pincer.protocol.v1.ListSchedulesRequest
+	85,  // 122: pincer.protocol.v1.SchedulesService.CreateSchedule:input_type -> pincer.protocol.v1.CreateScheduleRequest
+	87,  // 123: pincer.protocol.v1.SchedulesService.UpdateSchedule:input_type -> pincer.protocol.v1.UpdateScheduleRequest
+	89,  // 124: pincer.protocol.v1.SchedulesService.RunScheduleNow:input_type -> pincer.protocol.v1.RunScheduleNowRequest
+	91,  // 125: pincer.protocol.v1.SystemService.GetPolicySummary:input_type -> pincer.protocol.v1.GetPolicySummaryRequest
+	94,  // 126: pincer.protocol.v1.SystemService.ListAudit:input_type -> pincer.protocol.v1.ListAuditRequest
+	97,  // 127: pincer.protocol.v1.SystemService.ListNotifications:input_type -> pincer.protocol.v1.ListNotificationsRequest
+	14,  // 128: pincer.protocol.v1.AuthService.CreatePairingCode:output_type -> pincer.protocol.v1.CreatePairingCodeResponse
+	16,  // 129: pincer.protocol.v1.AuthService.BindPairingCode:output_type -> pincer.protocol.v1.BindPairingCodeResponse
+	18,  // 130: pincer.protocol.v1.AuthService.RotateToken:output_type -> pincer.protocol.v1.RotateTokenResponse
+	21,  // 131: pincer.protocol.v1.DevicesService.ListDevices:output_type -> pincer.protocol.v1.ListDevicesResponse
+	23,  // 132: pincer.protocol.v1.DevicesService.RevokeDevice:output_type -> pincer.protocol.v1.RevokeDeviceResponse
+	25,  // 133: pincer.protocol.v1.ThreadsService.CreateThread:output_type -> pincer.protocol.v1.CreateThreadResponse
+	34,  // 134: pincer.protocol.v1.ThreadsService.GetThreadSnapshot:output_type -> pincer.protocol.v1.GetThreadSnapshotResponse
+	35,  // 135: pincer.protocol.v1.ThreadsService.ListThreadMessages:output_type -> pincer.protocol.v1.ListThreadMessagesResponse
+	29,  // 136: pincer.protocol.v1.TurnsService.SendTurn:output_type -> pincer.protocol.v1.SendTurnResponse
+	36,  // 137: pincer.protocol.v1.TurnsService.StartTurn:output_type -> pincer.protocol.v1.ThreadEvent
+	36,  // 138: pincer.protocol.v1.EventsService.WatchThread:output_type -> pincer.protocol.v1.ThreadEvent
+	68,  // 139: pincer.protocol.v1.ApprovalsService.ListApprovals:output_type -> pincer.protocol.v1.ListApprovalsResponse
+	70,  // 140: pincer.protocol.v1.ApprovalsService.ApproveAction:output_type -> pincer.protocol.v1.ApproveActionResponse
+	72,  // 141: pincer.protocol.v1.ApprovalsService.RejectAction:output_type -> pincer.protocol.v1.RejectActionResponse
+	75,  // 142: pincer.protocol.v1.JobsService.ListJobs:output_type -> pincer.protocol.v1.ListJobsResponse
+	77,  // 143: pincer.protocol.v1.JobsService.CreateJob:output_type -> pincer.protocol.v1.CreateJobResponse
+	79,  // 144: pincer.protocol.v1.JobsService.GetJob:output_type -> pincer.protocol.v1.GetJobResponse
+	81,  // 145: pincer.protocol.v1.JobsService.CancelJob:output_type -> pincer.protocol.v1.CancelJobResponse
+	84,  // 146: pincer.protocol.v1.SchedulesService.ListSchedules:output_type -> pincer.protocol.v1.ListSchedulesResponse
+	86,  // 147: pincer.protocol.v1.SchedulesService.CreateSchedule:output_type -> pincer.protocol.v1.CreateScheduleResponse
+	88,  // 148: pincer.protocol.v1.SchedulesService.UpdateSchedule:output_type -> pincer.protocol.v1.UpdateScheduleResponse
+	90,  // 149: pincer.protocol.v1.SchedulesService.RunScheduleNow:output_type -> pincer.protocol.v1.RunScheduleNowResponse
+	92,  // 150: pincer.protocol.v1.SystemService.GetPolicySummary:output_type -> pincer.protocol.v1.GetPolicySummaryResponse
+	95,  // 151: pincer.protocol.v1.SystemService.ListAudit:output_type -> pincer.protocol.v1.ListAuditResponse
+	98,  // 152: pincer.protocol.v1.SystemService.ListNotifications:output_type -> pincer.protocol.v1.ListNotificationsResponse
+	128, // [128:153] is the sub-list for method output_type
+	103, // [103:128] is the sub-list for method input_type
+	103, // [103:103] is the sub-list for extension type_name
+	103, // [103:103] is the sub-list for extension extendee
+	0,   // [0:103] is the sub-list for field type_name
 }
 
 func init() { file_proto_pincer_protocol_v1_protocol_proto_init() }
@@ -6825,6 +6985,8 @@ func file_proto_pincer_protocol_v1_protocol_proto_init() {
 		(*ThreadEvent_ModelOutputRepairAttempted)(nil),
 		(*ThreadEvent_TurnCompleted)(nil),
 		(*ThreadEvent_TurnFailed)(nil),
+		(*ThreadEvent_TurnPaused)(nil),
+		(*ThreadEvent_TurnResumed)(nil),
 		(*ThreadEvent_AssistantThinkingDelta)(nil),
 		(*ThreadEvent_AssistantTextDelta)(nil),
 		(*ThreadEvent_AssistantMessageCommitted)(nil),
@@ -6854,7 +7016,7 @@ func file_proto_pincer_protocol_v1_protocol_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_pincer_protocol_v1_protocol_proto_rawDesc), len(file_proto_pincer_protocol_v1_protocol_proto_rawDesc)),
 			NumEnums:      13,
-			NumMessages:   84,
+			NumMessages:   86,
 			NumExtensions: 0,
 			NumServices:   9,
 		},
