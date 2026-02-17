@@ -1,22 +1,16 @@
 import Foundation
 import Combine
 
-struct ApprovedInlineIndicator: Identifiable, Equatable {
-    let actionID: String
-    let tool: String
-    let approvedAt: Date
-
-    var id: String { actionID }
-}
-
 @MainActor
 final class ChatViewModel: ObservableObject {
     @Published var threadID: String?
     @Published var messages: [Message] = []
+    @Published var timelineItems: [ChatTimelineItem] = []
     @Published private(set) var inlineApprovals: [Approval] = []
-    @Published private(set) var approvedInlineIndicators: [ApprovedInlineIndicator] = []
     @Published private(set) var approvingActionIDs: Set<String> = []
+
     @Published private(set) var isAwaitingAssistantProgress = false
+
     @Published var input: String = ""
     @Published var errorText: String?
     @Published var isBusy = false
@@ -68,11 +62,10 @@ final class ChatViewModel: ObservableObject {
             messages: snapshot.messages,
             lastSequence: snapshot.lastSequence
         )
-        messages = snapshot.messages
+        rebuildTimeline()
 
         await approvalsStore.refreshPendingWithoutBusyState()
         syncInlineApprovals()
-        cleanupApprovedInlineIndicators()
         startWatchThreadIfNeeded(for: threadID)
     }
 
@@ -118,14 +111,10 @@ final class ChatViewModel: ObservableObject {
     func approveInline(_ actionID: String) async {
         guard threadID != nil else { return }
         guard !approvingActionIDs.contains(actionID) else { return }
-        let approvedItem = inlineApprovals.first { $0.actionID == actionID }
 
         let approved = await approvalsStore.approve(actionID)
         if approved {
             inlineApprovals.removeAll { $0.actionID == actionID }
-            if let approvedItem {
-                upsertApprovedIndicator(from: approvedItem)
-            }
             await refreshAfterApproval()
         } else {
             errorText = approvalsStore.errorText
@@ -143,14 +132,10 @@ final class ChatViewModel: ObservableObject {
         var encounteredFailure = false
         for actionID in actionIDs {
             guard !approvingActionIDs.contains(actionID) else { continue }
-            let approvedItem = inlineApprovals.first { $0.actionID == actionID }
 
             let approved = await approvalsStore.approve(actionID)
             if approved {
                 inlineApprovals.removeAll { $0.actionID == actionID }
-                if let approvedItem {
-                    upsertApprovedIndicator(from: approvedItem)
-                }
             } else {
                 encounteredFailure = true
                 errorText = approvalsStore.errorText
@@ -169,7 +154,6 @@ final class ChatViewModel: ObservableObject {
         guard threadID != nil else { return }
         await approvalsStore.refreshPendingWithoutBusyState()
         syncInlineApprovals()
-        cleanupApprovedInlineIndicators()
     }
 
     private func bindStore() {
@@ -177,7 +161,6 @@ final class ChatViewModel: ObservableObject {
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
                 self?.syncInlineApprovals()
-                self?.cleanupApprovedInlineIndicators()
             }
             .store(in: &cancellables)
 
@@ -190,13 +173,22 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func appendLocalMessage(_ message: Message) {
-        messages.append(message)
         threadEventState.messages.append(message)
+        rebuildTimeline()
     }
 
     private func removeMessage(messageID: String) {
-        messages.removeAll { $0.messageID == messageID }
         threadEventState.messages.removeAll { $0.messageID == messageID }
+        rebuildTimeline()
+    }
+
+    private func rebuildTimeline() {
+        var items: [ChatTimelineItem] = threadEventState.messages.map { .message($0) }
+        for approval in inlineApprovals {
+            items.append(.approval(approval))
+        }
+        timelineItems = items
+        messages = threadEventState.messages
     }
 
     private func startWatchThreadIfNeeded(for threadID: String) {
@@ -249,12 +241,11 @@ final class ChatViewModel: ObservableObject {
             fallbackThreadID: threadID
         )
 
-        messages = threadEventState.messages
+        rebuildTimeline()
 
         if effect.shouldRefreshApprovals {
             await approvalsStore.refreshPendingWithoutBusyState()
             syncInlineApprovals()
-            cleanupApprovedInlineIndicators()
         }
 
         if effect.shouldResyncMessages {
@@ -288,41 +279,11 @@ final class ChatViewModel: ObservableObject {
             messages: snapshot.messages,
             lastSequence: snapshot.lastSequence
         )
-        messages = snapshot.messages
+        rebuildTimeline()
     }
 
     private func syncInlineApprovals() {
         inlineApprovals = approvalsStore.pendingApprovals(forThreadID: threadID)
-    }
-
-    private func upsertApprovedIndicator(from approval: Approval) {
-        if approvedInlineIndicators.contains(where: { $0.actionID == approval.actionID }) {
-            return
-        }
-        approvedInlineIndicators.append(ApprovedInlineIndicator(
-            actionID: approval.actionID,
-            tool: approval.tool,
-            approvedAt: Date()
-        ))
-    }
-
-    private func cleanupApprovedInlineIndicators() {
-        approvedInlineIndicators.removeAll { indicator in
-            hasApprovalMessage(for: indicator.actionID) || hasExecutionMessage(for: indicator.actionID)
-        }
-    }
-
-    private func hasApprovalMessage(for actionID: String) -> Bool {
-        let marker = "Action \(actionID) approved."
-        return messages.contains { message in
-            message.role == "system" && message.content.contains(marker)
-        }
-    }
-
-    private func hasExecutionMessage(for actionID: String) -> Bool {
-        let marker = "Action \(actionID) executed."
-        return messages.contains { message in
-            message.role == "system" && message.content.contains(marker)
-        }
+        rebuildTimeline()
     }
 }

@@ -4,10 +4,16 @@ struct ThreadEventReducerState {
     var messages: [Message]
     var lastSequence: UInt64
 
+    var turnActivities: [String: TurnActivity] = [:]
+    var turnOrder: [String] = []
+    var activeTurnID: String?
+
     fileprivate var seenEventIDs: Set<String>
     fileprivate var assistantDraftMessageIDByTurnID: [String: String]
     fileprivate var thinkingMessageIDByTurnID: [String: String]
     fileprivate var toolMessageIDByExecutionID: [String: String]
+    fileprivate var toolCallIDByExecutionID: [String: String]
+    fileprivate var toolCallIDByActionID: [String: String]
 
     init(messages: [Message] = [], lastSequence: UInt64 = 0) {
         self.messages = messages
@@ -16,6 +22,11 @@ struct ThreadEventReducerState {
         self.assistantDraftMessageIDByTurnID = [:]
         self.thinkingMessageIDByTurnID = [:]
         self.toolMessageIDByExecutionID = [:]
+        self.toolCallIDByExecutionID = [:]
+        self.toolCallIDByActionID = [:]
+        self.turnActivities = [:]
+        self.turnOrder = []
+        self.activeTurnID = nil
     }
 }
 
@@ -66,7 +77,21 @@ enum ThreadEventReducer {
 
         let createdAt = timestampString(for: event)
 
+        let eventDate = dateFromEvent(event)
+
         switch event.payload {
+        case .turnStarted:
+            let turnID = event.turnID
+            if !turnID.isEmpty {
+                var activity = TurnActivity(turnID: turnID)
+                activity.startedAt = eventDate
+                state.turnActivities[turnID] = activity
+                if !state.turnOrder.contains(turnID) {
+                    state.turnOrder.append(turnID)
+                }
+                state.activeTurnID = turnID
+            }
+
         case .assistantThinkingDelta(let delta):
             effect.receivedProgressSignal = true
             let key = turnScopedKey(turnID: event.turnID, fallback: delta.segmentID)
@@ -85,6 +110,12 @@ enum ThreadEventReducer {
                 delta: text,
                 state: &state
             )
+
+            let activityTurnID = ensureActiveTurn(event.turnID, eventDate: eventDate, state: &state)
+            if !activityTurnID.isEmpty {
+                state.turnActivities[activityTurnID]?.thinking.text += delta.delta
+                state.turnActivities[activityTurnID]?.thinking.isStreaming = true
+            }
 
         case .assistantTextDelta(let delta):
             effect.receivedProgressSignal = true
@@ -125,6 +156,31 @@ enum ThreadEventReducer {
             )
             state.assistantDraftMessageIDByTurnID[key] = finalMessageID
 
+            let commitTurnID = event.turnID.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !commitTurnID.isEmpty {
+                state.turnActivities[commitTurnID]?.assistantMessageID = finalMessageID
+            }
+
+        case .toolCallPlanned(let planned):
+            effect.receivedProgressSignal = true
+            let activityTurnID = ensureActiveTurn(event.turnID, eventDate: eventDate, state: &state)
+            if !activityTurnID.isEmpty {
+                if state.turnActivities[activityTurnID]?.firstToolCallAt == nil {
+                    state.turnActivities[activityTurnID]?.firstToolCallAt = eventDate
+                }
+                let argsPreview = extractArgsPreview(from: planned)
+                let toolCall = ToolCallActivity(
+                    toolCallID: planned.toolCallID,
+                    toolName: planned.toolName,
+                    displayLabel: planned.toolName,
+                    argsPreview: argsPreview,
+                    actionID: nil,
+                    state: .planned,
+                    executions: []
+                )
+                upsertToolCall(toolCall, inTurn: activityTurnID, state: &state)
+            }
+
         case .toolExecutionStarted(let started):
             effect.receivedProgressSignal = true
             let key = started.executionID.isEmpty ? event.eventID : started.executionID
@@ -146,19 +202,38 @@ enum ThreadEventReducer {
                 state: &state
             )
 
+            state.toolCallIDByExecutionID[started.executionID] = started.toolCallID
+            if let (matchedTurnID, tcIdx) = findToolCall(toolCallID: started.toolCallID, preferredTurnID: event.turnID, state: state) {
+                state.turnActivities[matchedTurnID]?.toolCalls[tcIdx].executions.append(
+                    ToolExecutionState(executionID: started.executionID)
+                )
+                state.turnActivities[matchedTurnID]?.toolCalls[tcIdx].state = .running
+                let displayCommand = started.displayCommand.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !displayCommand.isEmpty {
+                    state.turnActivities[matchedTurnID]?.toolCalls[tcIdx].displayLabel = displayCommand
+                }
+            }
+
         case .toolExecutionOutputDelta(let delta):
             effect.receivedProgressSignal = true
             let key = delta.executionID.isEmpty ? event.eventID : delta.executionID
             let messageID = state.toolMessageIDByExecutionID[key] ?? "stream_tool_\(key)"
             state.toolMessageIDByExecutionID[key] = messageID
+            let chunk = decodedChunk(delta)
             appendMessageContent(
                 messageID: messageID,
                 role: "tool",
                 threadID: threadID,
                 createdAt: createdAt,
-                delta: decodedChunk(delta),
+                delta: chunk,
                 state: &state
             )
+
+            if let toolCallID = state.toolCallIDByExecutionID[delta.executionID],
+               let (matchedTurnID, tcIdx) = findToolCall(toolCallID: toolCallID, preferredTurnID: event.turnID, state: state),
+               let exIdx = state.turnActivities[matchedTurnID]?.toolCalls[tcIdx].executions.firstIndex(where: { $0.executionID == delta.executionID }) {
+                state.turnActivities[matchedTurnID]?.toolCalls[tcIdx].executions[exIdx].stdout += chunk
+            }
 
         case .toolExecutionFinished(let finished):
             effect.receivedProgressSignal = true
@@ -190,8 +265,36 @@ enum ThreadEventReducer {
                 state: &state
             )
 
-        case .proposedActionCreated:
+            if let toolCallID = state.toolCallIDByExecutionID[finished.executionID],
+               let (matchedTurnID, tcIdx) = findToolCall(toolCallID: toolCallID, preferredTurnID: event.turnID, state: state),
+               let exIdx = state.turnActivities[matchedTurnID]?.toolCalls[tcIdx].executions.firstIndex(where: { $0.executionID == finished.executionID }) {
+                state.turnActivities[matchedTurnID]?.toolCalls[tcIdx].executions[exIdx].exitCode = finished.exitCode
+                state.turnActivities[matchedTurnID]?.toolCalls[tcIdx].executions[exIdx].durationMs = finished.durationMs
+                state.turnActivities[matchedTurnID]?.toolCalls[tcIdx].executions[exIdx].isStreaming = false
+                state.turnActivities[matchedTurnID]?.toolCalls[tcIdx].executions[exIdx].truncated = finished.truncated
+                state.turnActivities[matchedTurnID]?.toolCalls[tcIdx].state = finished.exitCode == 0 ? .succeeded : .failed
+            }
+
+        case .proposedActionCreated(let created):
             effect.shouldRefreshApprovals = true
+
+            let activityTurnID = ensureActiveTurn(event.turnID, eventDate: eventDate, state: &state)
+            // Match by toolCallID == actionID (backend reuses toolCallID as actionID),
+            // falling back to tool name match for older event streams.
+            if !activityTurnID.isEmpty,
+               let tcIdx = state.turnActivities[activityTurnID]?.toolCalls.firstIndex(where: {
+                   $0.toolCallID == created.actionID
+               }) ?? state.turnActivities[activityTurnID]?.toolCalls.firstIndex(where: {
+                   $0.toolName == created.tool && $0.actionID == nil
+               }) {
+                state.turnActivities[activityTurnID]?.toolCalls[tcIdx].actionID = created.actionID
+                state.turnActivities[activityTurnID]?.toolCalls[tcIdx].state = .waitingApproval
+                state.toolCallIDByActionID[created.actionID] = state.turnActivities[activityTurnID]?.toolCalls[tcIdx].toolCallID
+                let summary = created.deterministicSummary.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !summary.isEmpty {
+                    state.turnActivities[activityTurnID]?.toolCalls[tcIdx].argsPreview = summary
+                }
+            }
 
         case .proposedActionStatusChanged(let statusChanged):
             effect.shouldRefreshApprovals = true
@@ -212,6 +315,26 @@ enum ThreadEventReducer {
                 )
             }
 
+            if let toolCallID = state.toolCallIDByActionID[statusChanged.actionID] {
+                for turnID in state.turnActivities.keys {
+                    if let tcIdx = state.turnActivities[turnID]?.toolCalls.firstIndex(where: { $0.toolCallID == toolCallID }) {
+                        switch statusChanged.status {
+                        case .approved:
+                            // Only transition if still waiting — avoids overwriting .running/.succeeded
+                            // when approval event arrives after execution has already started.
+                            if case .waitingApproval = state.turnActivities[turnID]?.toolCalls[tcIdx].state {
+                                state.turnActivities[turnID]?.toolCalls[tcIdx].state = .planned
+                            }
+                        case .rejected:
+                            state.turnActivities[turnID]?.toolCalls[tcIdx].state = .rejected(reason: statusChanged.reason)
+                        default:
+                            break
+                        }
+                        break
+                    }
+                }
+            }
+
         case .turnFailed(let turnFailed):
             effect.reachedTurnTerminal = true
             effect.turnFailureMessage = turnFailed.message.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -226,8 +349,56 @@ enum ThreadEventReducer {
                 state: &state
             )
 
+            if let activeTurnID = state.activeTurnID {
+                state.turnActivities[activeTurnID]?.status = .failed(message: turnFailed.message)
+                state.turnActivities[activeTurnID]?.thinking.isStreaming = false
+                state.turnActivities[activeTurnID]?.endedAt = eventDate
+                // Fail any non-terminal tool calls
+                if let toolCalls = state.turnActivities[activeTurnID]?.toolCalls {
+                    for (idx, tc) in toolCalls.enumerated() {
+                        switch tc.state {
+                        case .planned, .waitingApproval, .running:
+                            state.turnActivities[activeTurnID]?.toolCalls[idx].state = .failed
+                        default:
+                            break
+                        }
+                    }
+                }
+                state.activeTurnID = nil
+            }
+
+        case .turnPaused:
+            // Turn is paused awaiting approval — not terminal, but stop the spinner.
+            if let activeTurnID = state.activeTurnID {
+                state.turnActivities[activeTurnID]?.status = .paused
+                state.turnActivities[activeTurnID]?.thinking.isStreaming = false
+            }
+
+        case .turnResumed:
+            // Turn resumes after all actions resolved — restart the spinner.
+            // Use ensureActiveTurn so replay from snapshot correctly recovers the turn.
+            let resumedTurnID = ensureActiveTurn(event.turnID, eventDate: eventDate, state: &state)
+            if !resumedTurnID.isEmpty {
+                state.turnActivities[resumedTurnID]?.status = .running
+            }
+
+            // Clear draft message mappings so the next assistant response creates
+            // a new message instead of overwriting the previous step's message.
+            let resumeKey = turnScopedKey(turnID: event.turnID, fallback: "")
+            if !resumeKey.isEmpty {
+                state.assistantDraftMessageIDByTurnID.removeValue(forKey: resumeKey)
+                state.thinkingMessageIDByTurnID.removeValue(forKey: resumeKey)
+            }
+
         case .turnCompleted:
             effect.reachedTurnTerminal = true
+
+            if let activeTurnID = state.activeTurnID {
+                state.turnActivities[activeTurnID]?.status = .completed
+                state.turnActivities[activeTurnID]?.thinking.isStreaming = false
+                state.turnActivities[activeTurnID]?.endedAt = eventDate
+                state.activeTurnID = nil
+            }
 
         case .streamGap:
             effect.shouldResyncMessages = true
@@ -338,6 +509,27 @@ enum ThreadEventReducer {
         return "global"
     }
 
+    private static func findToolCall(toolCallID: String, preferredTurnID: String, state: ThreadEventReducerState) -> (turnID: String, index: Int)? {
+        let preferred = preferredTurnID.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !preferred.isEmpty,
+           let tcIdx = state.turnActivities[preferred]?.toolCalls.firstIndex(where: { $0.toolCallID == toolCallID }) {
+            return (preferred, tcIdx)
+        }
+        for turnID in state.turnActivities.keys {
+            if let tcIdx = state.turnActivities[turnID]?.toolCalls.firstIndex(where: { $0.toolCallID == toolCallID }) {
+                return (turnID, tcIdx)
+            }
+        }
+        return nil
+    }
+
+    private static func dateFromEvent(_ event: Pincer_Protocol_V1_ThreadEvent) -> Date? {
+        guard event.hasOccurredAt else { return nil }
+        let seconds = TimeInterval(event.occurredAt.seconds)
+        let nanos = TimeInterval(event.occurredAt.nanos) / 1_000_000_000
+        return Date(timeIntervalSince1970: seconds + nanos)
+    }
+
     private static func timestampString(for event: Pincer_Protocol_V1_ThreadEvent) -> String {
         guard event.hasOccurredAt else {
             return ""
@@ -392,5 +584,48 @@ enum ThreadEventReducer {
             return "Turn failed (\(code))."
         }
         return "Turn failed (\(code)): \(message)"
+    }
+
+    static func orderedActivities(from state: ThreadEventReducerState) -> [TurnActivity] {
+        state.turnOrder.compactMap { state.turnActivities[$0] }
+    }
+
+    private static func ensureActiveTurn(_ turnID: String, eventDate: Date?, state: inout ThreadEventReducerState) -> String {
+        let id = turnID.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !id.isEmpty {
+            if state.turnActivities[id] == nil {
+                var activity = TurnActivity(turnID: id)
+                activity.startedAt = eventDate
+                state.turnActivities[id] = activity
+                if !state.turnOrder.contains(id) {
+                    state.turnOrder.append(id)
+                }
+            }
+            state.activeTurnID = id
+            return id
+        }
+        return state.activeTurnID ?? ""
+    }
+
+    private static func upsertToolCall(_ toolCall: ToolCallActivity, inTurn turnID: String, state: inout ThreadEventReducerState) {
+        guard var turn = state.turnActivities[turnID] else { return }
+        if let idx = turn.toolCalls.firstIndex(where: { $0.toolCallID == toolCall.toolCallID }) {
+            turn.toolCalls[idx] = toolCall
+        } else {
+            turn.toolCalls.append(toolCall)
+        }
+        state.turnActivities[turnID] = turn
+    }
+
+    private static func extractArgsPreview(from planned: Pincer_Protocol_V1_ToolCallPlanned) -> String? {
+        guard planned.hasArgs else { return nil }
+        let fields = planned.args.fields
+        guard !fields.isEmpty else { return nil }
+        for (_, value) in fields {
+            if case .stringValue(let s) = value.kind, !s.isEmpty {
+                return s
+            }
+        }
+        return planned.toolName
     }
 }

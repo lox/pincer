@@ -59,6 +59,35 @@ final class PincerUITests: XCTestCase {
         XCTAssertTrue(resolved, "Approval did not resolve after approving")
     }
 
+    func testAssistantMessageAppearsBeforeActivityCard() throws {
+        let chatScreen = app.otherElements["screen_chat"]
+        XCTAssertTrue(chatScreen.waitForExistence(timeout: 15), "Chat screen did not appear")
+
+        let chatInput = app.textFields["chat_input"]
+        XCTAssertTrue(chatInput.waitForExistence(timeout: 10), "Chat input not found")
+        chatInput.tap()
+        chatInput.typeText("Please run bash command pwd")
+
+        let sendButton = app.buttons["chat_send_button"]
+        XCTAssertTrue(sendButton.waitForExistence(timeout: 5), "Send button not found")
+        sendButton.tap()
+
+        // Wait for the LLM to respond with an assistant message and a tool proposal.
+        let activityLabel = app.staticTexts["Activity"]
+        XCTAssertTrue(activityLabel.waitForExistence(timeout: 30),
+                      "Activity card did not appear within timeout")
+
+        let assistantLabel = app.staticTexts["Assistant"]
+        XCTAssertTrue(assistantLabel.waitForExistence(timeout: 5),
+                      "Assistant message label did not appear")
+
+        // The assistant message should appear above (smaller Y) the activity card.
+        let assistantY = assistantLabel.frame.minY
+        let activityY = activityLabel.frame.minY
+        XCTAssertLessThan(assistantY, activityY,
+                          "Assistant message (y=\(assistantY)) should appear before activity card (y=\(activityY)) in the scroll view")
+    }
+
     private func dismissKeyboard() {
         // The keyboard toolbar has a "Done" button; tap it to dismiss.
         let doneButton = app.toolbars.buttons["Done"]

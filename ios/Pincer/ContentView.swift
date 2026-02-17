@@ -102,33 +102,45 @@ private struct ChatView: View {
                     ScrollViewReader { reader in
                         ScrollView(showsIndicators: false) {
                             VStack(alignment: .leading, spacing: 10) {
-                                if model.messages.isEmpty {
+                                if model.timelineItems.isEmpty {
                                     EmptyChatCard()
                                 }
 
-                                ForEach(model.messages) { message in
-                                    ChatMessageRow(message: message)
-                                        .id(message.id)
+                                ForEach(model.timelineItems) { item in
+                                    switch item {
+                                    case .message(let message):
+                                        ChatMessageRow(message: message)
+                                            .id(item.id)
+                                    case .approval(let approval):
+                                        InlineApprovalRow(
+                                            approval: approval,
+                                            isApproving: model.approvingActionIDs.contains(approval.actionID),
+                                            onApprove: {
+                                                Task { await model.approveInline(approval.actionID) }
+                                            }
+                                        )
+                                        .id(item.id)
+                                    }
+                                }
+
+                                if model.inlineApprovals.count > 1 {
+                                    Button(action: {
+                                        Task { await model.approveAllInline() }
+                                    }) {
+                                        Text("Approve All (\(model.inlineApprovals.count))")
+                                            .font(.system(.caption, design: .rounded).weight(.semibold))
+                                            .foregroundStyle(PincerPalette.accent)
+                                            .padding(.horizontal, 12)
+                                            .padding(.vertical, 6)
+                                            .background(PincerPalette.accentSoft)
+                                            .clipShape(Capsule())
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .trailing)
                                 }
 
                                 if model.isAwaitingAssistantProgress {
                                     AssistantProcessingRow()
                                         .id("assistant_processing_row")
-                                }
-
-                                if !model.inlineApprovals.isEmpty || !model.approvedInlineIndicators.isEmpty {
-                                    InlineApprovalsSection(
-                                        approvals: model.inlineApprovals,
-                                        approvedIndicators: model.approvedInlineIndicators,
-                                        approvingActionIDs: model.approvingActionIDs,
-                                        isApprovingAny: !model.approvingActionIDs.isEmpty,
-                                        onApprove: { actionID in
-                                            Task { await model.approveInline(actionID) }
-                                        },
-                                        onApproveAll: {
-                                            Task { await model.approveAllInline() }
-                                        }
-                                    )
                                 }
 
                                 Color.clear
@@ -140,18 +152,8 @@ private struct ChatView: View {
                             .padding(.bottom, 6)
                         }
                         .scrollDismissesKeyboard(.interactively)
-                        .onChange(of: model.messages.count) { _, _ in
+                        .onChange(of: model.timelineItems.count) { _, _ in
                             scrollToBottom(reader)
-                        }
-                        .onChange(of: model.inlineApprovals.count) { _, newCount in
-                            if newCount > 0 {
-                                scrollToBottom(reader)
-                            }
-                        }
-                        .onChange(of: model.approvedInlineIndicators.count) { _, newCount in
-                            if newCount > 0 {
-                                scrollToBottom(reader)
-                            }
                         }
                         .onChange(of: model.isAwaitingAssistantProgress) { _, isAwaiting in
                             if isAwaiting {
@@ -410,42 +412,35 @@ private struct ChatMessageRow: View {
     let message: Message
 
     private var isUser: Bool { message.role.lowercased() == "user" }
+    private var isSystem: Bool { message.role.lowercased() == "system" }
     private var isThinking: Bool { message.role.lowercased() == "thinking" }
     private var isTool: Bool { message.role.lowercased() == "tool" }
-    private var parsedBashExecution: ParsedBashExecutionMessage? {
-        guard message.role.lowercased() == "system" else { return nil }
-        return parseBashExecutionSystemMessage(message.content)
-    }
-    private var parsedApprovalStatus: ParsedApprovalStatusMessage? {
-        guard message.role.lowercased() == "system" else { return nil }
-        return parseApprovalStatusSystemMessage(message.content)
-    }
 
     var body: some View {
-        if let parsedApprovalStatus {
-            ApprovalStatusSystemRow(
-                parsed: parsedApprovalStatus,
-                timestamp: shortTimestamp(from: message.createdAt),
-                copyText: copyPayload
-            )
+        if isSystem {
+            Text(message.content)
+                .font(.system(.caption, design: .rounded).weight(.medium))
+                .foregroundStyle(PincerPalette.textTertiary)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.vertical, 2)
+        } else if isThinking {
+            // Fallback for history reload when activities are not reconstructed
+            FallbackThinkingRow(text: message.content)
+        } else if isTool {
+            // Fallback for history reload when activities are not reconstructed
+            FallbackToolOutputRow(content: message.content)
         } else {
             HStack {
                 if isUser { Spacer(minLength: 58) }
 
                 VStack(alignment: .leading, spacing: 6) {
-                    if !isUser && !isThinking {
-                        Text(roleTitle)
+                    if !isUser {
+                        Text("Assistant")
                             .font(.system(.caption, design: .rounded).weight(.semibold))
                             .foregroundStyle(PincerPalette.textTertiary)
                     }
 
-                    if isThinking {
-                        ThinkingMessageCard(text: message.content)
-                    } else if isTool {
-                        ToolExecutionStreamingCard(content: message.content)
-                    } else if let parsedBashExecution {
-                        BashExecutionMessageCard(parsed: parsedBashExecution)
-                    } else if isUser {
+                    if isUser {
                         Text(message.content)
                             .font(.system(.body, design: .rounded))
                             .foregroundStyle(Color.white)
@@ -467,7 +462,7 @@ private struct ChatMessageRow: View {
                         Spacer()
 
                         CopyIconButton(
-                            copyText: copyPayload,
+                            copyText: message.content,
                             tint: isUser ? Color.white.opacity(0.88) : PincerPalette.textTertiary
                         )
                     }
@@ -487,40 +482,9 @@ private struct ChatMessageRow: View {
             }
         }
     }
-
-    private var roleTitle: String {
-        if parsedBashExecution != nil {
-            return "Bash Result"
-        }
-
-        switch message.role.lowercased() {
-        case "assistant":
-            return "Assistant"
-        case "tool":
-            return "Command Output"
-        case "thinking":
-            return "Thinking"
-        case "system":
-            return "System"
-        default:
-            return "Message"
-        }
-    }
-
-    private var copyPayload: String {
-        if let parsedBashExecution {
-            return parsedBashExecution.output
-        }
-        if let parsedApprovalStatus {
-            let tool = parsedApprovalStatus.tool?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let displayTool = tool.isEmpty ? "Action" : tool
-            return "Approval: \(displayTool) \u{2705}"
-        }
-        return message.content
-    }
 }
 
-private struct ThinkingMessageCard: View {
+private struct FallbackThinkingRow: View {
     let text: String
     @State private var isExpanded = false
 
@@ -528,16 +492,78 @@ private struct ThinkingMessageCard: View {
         DisclosureGroup(isExpanded: $isExpanded) {
             MarkdownMessageText(
                 text,
-                font: .system(.subheadline, design: .rounded),
-                foregroundStyle: PincerPalette.textSecondary
+                font: .system(.caption, design: .rounded),
+                foregroundStyle: PincerPalette.textTertiary
             )
-            .padding(.top, 4)
+            .padding(.top, 2)
         } label: {
-            Text("Thinking")
-                .font(.system(.footnote, design: .rounded).weight(.semibold))
-                .foregroundStyle(PincerPalette.textSecondary)
+            HStack(spacing: 4) {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(PincerPalette.success)
+                Text("Thinking")
+                    .font(.system(.caption, design: .rounded).weight(.medium))
+                    .foregroundStyle(PincerPalette.textSecondary)
+            }
         }
-        .padding(.vertical, 2)
+        .padding(10)
+        .background(PincerPalette.card)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(PincerPalette.border, lineWidth: 1)
+        )
+    }
+}
+
+private struct FallbackToolOutputRow: View {
+    let content: String
+
+    var body: some View {
+        let parsed = parseToolExecutionStreamingContent(content)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Image(systemName: parsed.result != nil ? "checkmark" : "play.fill")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(parsed.result != nil ? PincerPalette.success : PincerPalette.accent)
+
+                Text(parsed.command ?? "Tool Output")
+                    .font(.system(.caption, design: .monospaced).weight(.medium))
+                    .foregroundStyle(PincerPalette.textPrimary)
+                    .lineLimit(1)
+            }
+
+            if !parsed.output.isEmpty {
+                Text(parsed.output)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(PincerPalette.terminalText)
+                    .lineLimit(6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(6)
+                    .background(PincerPalette.terminalBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            }
+
+            if let result = parsed.result {
+                Text(result.line)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(resultColor(result))
+            }
+        }
+        .padding(10)
+        .background(PincerPalette.card)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(PincerPalette.border, lineWidth: 1)
+        )
+    }
+
+    private func resultColor(_ result: ToolExecutionResult) -> Color {
+        switch result {
+        case .exit(let code, _): return code == 0 ? PincerPalette.success : PincerPalette.danger
+        case .timedOut: return PincerPalette.warning
+        }
     }
 }
 
@@ -575,68 +601,50 @@ private struct AssistantProcessingRow: View {
     }
 }
 
-private struct ToolExecutionStreamingCard: View {
-    let content: String
-    private var parsed: ParsedToolExecutionStreamingContent {
-        parseToolExecutionStreamingContent(content)
-    }
-
-    private var statusColor: Color {
-        guard let result = parsed.result else {
-            return PincerPalette.terminalMuted
-        }
-        switch result {
-        case .timedOut:
-            return PincerPalette.warning
-        case .exit(let code, _):
-            return code == 0 ? PincerPalette.success : PincerPalette.danger
-        }
-    }
+private struct InlineApprovalRow: View {
+    let approval: Approval
+    let isApproving: Bool
+    let onApprove: () -> Void
 
     var body: some View {
-        Group {
-            if parsed.isStructured {
-                VStack(alignment: .leading, spacing: 6) {
-                    if let command = parsed.command {
-                        Text("$ \(command)")
-                            .foregroundStyle(PincerPalette.terminalPrompt)
-                    }
+        HStack(spacing: 8) {
+            Image(systemName: "clock")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(PincerPalette.warning)
+                .frame(width: 14)
 
-                    if let cwd = parsed.cwd, !cwd.isEmpty {
-                        Text("# cwd: \(cwd)")
-                            .foregroundStyle(PincerPalette.terminalMuted)
-                    }
+            Text(approval.tool)
+                .font(.system(.caption, design: .monospaced).weight(.medium))
+                .foregroundStyle(PincerPalette.textPrimary)
 
-                    if !parsed.output.isEmpty {
-                        Text(parsed.output)
-                            .foregroundStyle(PincerPalette.terminalText)
-                    }
-
-                    if let result = parsed.result {
-                        Text(result.line)
-                            .foregroundStyle(statusColor)
-                    }
-
-                    if parsed.truncated {
-                        Text("result: output truncated")
-                            .foregroundStyle(PincerPalette.terminalMuted)
-                    }
-                }
-            } else {
-                Text(content)
-                    .foregroundStyle(PincerPalette.terminalText)
+            if !approval.deterministicSummary.isEmpty {
+                Text(approval.deterministicSummary)
+                    .font(.system(.caption, design: .rounded))
+                    .foregroundStyle(PincerPalette.textTertiary)
+                    .lineLimit(1)
             }
+
+            Spacer()
+
+            Button(action: onApprove) {
+                Text(isApproving ? "Approving..." : "Approve")
+                    .font(.system(.caption2, design: .rounded).weight(.semibold))
+                    .foregroundStyle(PincerPalette.accent)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(PincerPalette.accentSoft)
+                    .clipShape(Capsule())
+            }
+            .disabled(isApproving)
+            .accessibilityIdentifier("inline_approve_\(approval.actionID)")
         }
-        .font(.system(.subheadline, design: .monospaced))
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(PincerPalette.terminalBackground)
+        .padding(10)
+        .background(PincerPalette.card)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(PincerPalette.terminalBorder, lineWidth: 1)
+                .stroke(PincerPalette.border, lineWidth: 1)
         )
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .textSelection(.enabled)
     }
 }
 
@@ -666,93 +674,6 @@ private struct MarkdownMessageText: View {
         ) { match in
             "\(match.1)\\\(match.2)"
         }
-    }
-}
-
-private struct BashExecutionMessageCard: View {
-    let parsed: ParsedBashExecutionMessage
-
-    private var statusColor: Color {
-        if parsed.timedOut {
-            return PincerPalette.warning
-        }
-        if parsed.exitCode == 0 {
-            return PincerPalette.success
-        }
-        return PincerPalette.danger
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("$ \(parsed.command)")
-                .foregroundStyle(PincerPalette.terminalPrompt)
-
-            if let cwd = parsed.cwd, !cwd.isEmpty {
-                Text("# cwd: \(cwd)")
-                    .foregroundStyle(PincerPalette.terminalMuted)
-            }
-
-            Text(parsed.output)
-                .foregroundStyle(PincerPalette.terminalText)
-
-            Text(resultLine)
-                .foregroundStyle(statusColor)
-
-            if parsed.truncated {
-                Text("result: output truncated")
-                    .foregroundStyle(PincerPalette.terminalMuted)
-            }
-        }
-        .font(.system(.subheadline, design: .monospaced))
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(PincerPalette.terminalBackground)
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(PincerPalette.terminalBorder, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .textSelection(.enabled)
-    }
-
-    private var resultLine: String {
-        if parsed.timedOut {
-            return "result: timed out (\(parsed.durationMillis)ms)"
-        }
-        return "result: exit \(parsed.exitCode) (\(parsed.durationMillis)ms)"
-    }
-}
-
-private struct ApprovalStatusSystemRow: View {
-    let parsed: ParsedApprovalStatusMessage
-    let timestamp: String
-    let copyText: String
-
-    var body: some View {
-        ZStack(alignment: .bottomTrailing) {
-            VStack(spacing: 2) {
-                Text("Approval: \(displayTool) \u{2705}")
-                    .font(.system(.footnote, design: .rounded).weight(.semibold))
-                    .foregroundStyle(PincerPalette.textSecondary)
-
-                Text(timestamp)
-                    .font(.system(size: 11, weight: .medium, design: .rounded))
-                    .foregroundStyle(PincerPalette.textTertiary)
-            }
-            .frame(maxWidth: .infinity, alignment: .center)
-
-            CopyIconButton(copyText: copyText, tint: PincerPalette.textTertiary)
-                .padding(.trailing, 2)
-        }
-        .padding(.vertical, 2)
-    }
-
-    private var displayTool: String {
-        let tool = parsed.tool?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if tool.isEmpty {
-            return "Action"
-        }
-        return tool
     }
 }
 
@@ -845,109 +766,6 @@ private struct EmptyApprovalsCard: View {
             Text("New external actions from Chat will show up here for explicit approval.")
                 .font(.system(.subheadline, design: .rounded))
                 .foregroundStyle(PincerPalette.textSecondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .cardSurface()
-    }
-}
-
-private struct InlineApprovalsSection: View {
-    let approvals: [Approval]
-    let approvedIndicators: [ApprovedInlineIndicator]
-    let approvingActionIDs: Set<String>
-    let isApprovingAny: Bool
-    let onApprove: (String) -> Void
-    let onApproveAll: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .center, spacing: 8) {
-                Text("Actions in this chat")
-                    .font(.system(.footnote, design: .rounded).weight(.semibold))
-                    .foregroundStyle(PincerPalette.textSecondary)
-
-                Spacer()
-
-                if approvals.count > 1 {
-                    Button(action: onApproveAll) {
-                        Text(isApprovingAny ? "Approving..." : "Approve All")
-                            .font(.system(.caption, design: .rounded).weight(.semibold))
-                            .foregroundStyle(PincerPalette.accent)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(PincerPalette.accentSoft)
-                            .clipShape(Capsule())
-                    }
-                    .disabled(isApprovingAny || approvals.isEmpty)
-                    .accessibilityIdentifier("chat_inline_approve_all")
-                }
-            }
-
-            ForEach(approvals) { item in
-                HStack(alignment: .top, spacing: 10) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(prettyToolName(item.tool))
-                            .font(.system(.subheadline, design: .rounded).weight(.semibold))
-                            .foregroundStyle(PincerPalette.textPrimary)
-
-                        Text("Risk: \(item.riskClass.capitalized)")
-                            .font(.system(.caption, design: .rounded))
-                            .foregroundStyle(PincerPalette.textSecondary)
-
-                        if !item.commandPreview.isEmpty {
-                            Text("$ \(item.commandPreview)")
-                                .font(.system(.caption, design: .monospaced))
-                                .foregroundStyle(PincerPalette.textSecondary)
-                            if let timeoutSummary = approvalTimeoutSummary(item.commandTimeoutMS) {
-                                Text(timeoutSummary)
-                                    .font(.system(.caption, design: .rounded))
-                                    .foregroundStyle(PincerPalette.textSecondary)
-                            }
-                        } else if !item.deterministicSummary.isEmpty {
-                            Text(item.deterministicSummary)
-                                .font(.system(.caption, design: .rounded))
-                                .foregroundStyle(PincerPalette.textSecondary)
-                                .lineLimit(2)
-                        }
-                    }
-
-                    Spacer()
-
-                    Button(action: { onApprove(item.actionID) }) {
-                        Text(approvingActionIDs.contains(item.actionID) ? "Approving..." : "Approve")
-                            .font(.system(.caption, design: .rounded).weight(.semibold))
-                            .foregroundStyle(PincerPalette.accent)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(PincerPalette.accentSoft)
-                            .clipShape(Capsule())
-                    }
-                    .disabled(isApprovingAny || approvingActionIDs.contains(item.actionID))
-                    .accessibilityIdentifier("chat_inline_approve_\(item.actionID)")
-                }
-                .padding(.vertical, 2)
-            }
-
-            ForEach(approvedIndicators) { item in
-                HStack(alignment: .top, spacing: 10) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(PincerPalette.success)
-
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(prettyToolName(item.tool))
-                            .font(.system(.subheadline, design: .rounded).weight(.semibold))
-                            .foregroundStyle(PincerPalette.textPrimary)
-
-                        Text("Approved. Waiting for execution...")
-                            .font(.system(.caption, design: .rounded))
-                            .foregroundStyle(PincerPalette.textSecondary)
-                    }
-
-                    Spacer()
-                }
-                .padding(.vertical, 2)
-            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .cardSurface()
@@ -1499,114 +1317,6 @@ private extension View {
     func cardSurface() -> some View {
         modifier(CardSurfaceModifier())
     }
-}
-
-private struct ParsedBashExecutionMessage {
-    let command: String
-    let exitCode: Int
-    let durationMillis: Int
-    let cwd: String?
-    let output: String
-    let timedOut: Bool
-    let truncated: Bool
-}
-
-private struct ParsedApprovalStatusMessage {
-    let actionID: String
-    let tool: String?
-    let status: String?
-}
-
-private func parseApprovalStatusSystemMessage(_ content: String) -> ParsedApprovalStatusMessage? {
-    let lines = content.components(separatedBy: "\n")
-    guard let headline = lines.first else { return nil }
-
-    let prefix = "Action "
-    let suffix = " approved."
-    guard headline.hasPrefix(prefix), headline.hasSuffix(suffix) else { return nil }
-
-    let actionID = String(
-        headline
-            .dropFirst(prefix.count)
-            .dropLast(suffix.count)
-    ).trimmingCharacters(in: .whitespaces)
-    guard !actionID.isEmpty else { return nil }
-
-    var tool: String?
-    var status: String?
-    for line in lines.dropFirst() {
-        if line.hasPrefix("Tool: ") {
-            tool = String(line.dropFirst("Tool: ".count)).trimmingCharacters(in: .whitespaces)
-        } else if line.hasPrefix("Status: ") {
-            status = String(line.dropFirst("Status: ".count)).trimmingCharacters(in: .whitespaces)
-        }
-    }
-
-    return ParsedApprovalStatusMessage(actionID: actionID, tool: tool, status: status)
-}
-
-private func parseBashExecutionSystemMessage(_ content: String) -> ParsedBashExecutionMessage? {
-    let lines = content.components(separatedBy: "\n")
-    guard lines.count >= 4 else { return nil }
-    guard lines[0].hasPrefix("Action "), lines[0].hasSuffix(" executed.") else { return nil }
-    guard lines[1].hasPrefix("Command: ") else { return nil }
-
-    let command = String(lines[1].dropFirst("Command: ".count)).trimmingCharacters(in: .whitespaces)
-    var exitCode: Int?
-
-    var durationMillis = 0
-    var cwd: String?
-    var timedOut = false
-    var truncated = false
-    var outputStart = -1
-
-    for (idx, line) in lines.enumerated() {
-        if line == "Output:" {
-            outputStart = idx + 1
-            break
-        }
-        if line.hasPrefix("Exit code: ") {
-            let exitRaw = String(line.dropFirst("Exit code: ".count)).trimmingCharacters(in: .whitespaces)
-            if let parsed = Int(exitRaw) {
-                exitCode = parsed
-            }
-        } else if line.hasPrefix("Duration: ") {
-            let durationValue = line
-                .dropFirst("Duration: ".count)
-                .replacingOccurrences(of: "ms", with: "")
-                .trimmingCharacters(in: .whitespaces)
-            if let parsed = Int(durationValue) {
-                durationMillis = parsed
-            }
-        } else if line.hasPrefix("CWD: ") {
-            cwd = String(line.dropFirst("CWD: ".count)).trimmingCharacters(in: .whitespaces)
-        } else if line == "Timed out: true" {
-            timedOut = true
-        } else if line == "Output truncated: true" {
-            truncated = true
-        }
-    }
-
-    guard let exitCode else { return nil }
-
-    guard outputStart >= 0, outputStart <= lines.count else { return nil }
-    let outputLines: [String]
-    if outputStart >= lines.count {
-        outputLines = []
-    } else {
-        outputLines = Array(lines[outputStart...])
-    }
-    let output = outputLines.joined(separator: "\n")
-
-    return ParsedBashExecutionMessage(
-        command: command,
-        exitCode: exitCode,
-        durationMillis: durationMillis,
-        cwd: cwd,
-        output: output,
-        timedOut: timedOut,
-        truncated: truncated
-    )
 }
 
 private func prettyToolName(_ raw: String) -> String {
