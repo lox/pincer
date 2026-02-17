@@ -53,6 +53,8 @@ Go Backend (single binary)
 - **Web fetch with SSRF protections** — `web_fetch` retrieves raw URL content with private/loopback IP blocking, redirect caps, response size limits, and HTML-to-markdown conversion. Prefers Cloudflare Markdown for Agents via content negotiation.
 - **Domain capability leases** — first `web_fetch` to an unknown domain requires approval (exfiltration protection); approving grants the domain for the thread, so subsequent fetches execute inline.
 - **Live streaming** — turn progress, thinking indicators, and command output stream to the iOS app in real time via `StartTurn`/`WatchThread`.
+- **Post-approval turn continuation** — after tool execution, results feed back into the LLM for re-planning. Turns pause at approval gates (`TurnPaused`) and resume automatically after all actions resolve (`TurnResumed`), enabling multi-step adaptive agent behavior.
+- **Assistant thinking** — model reasoning (`reasoning_content`) is captured and streamed to the iOS app as `AssistantThinkingDelta` events, rendered as expandable thinking bubbles in the chat timeline.
 - **iOS control app** — SwiftUI chat with full markdown rendering (via Textual), approvals tab, device/session management, and settings.
 - **Audit log** — every side-effect transition (`proposed → approved → executed`) is recorded and queryable.
 - **SOUL-guided planner** — system prompt loaded from `SOUL.md` to shape assistant personality and safety posture.

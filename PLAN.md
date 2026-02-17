@@ -1,7 +1,7 @@
 # Pincer Implementation Plan
 
 Status: Active
-Last updated: 2026-02-15
+Last updated: 2026-02-18
 
 This document tracks phased delivery and concrete implementation status.
 The canonical end-state design is in `docs/spec.md`.
@@ -230,10 +230,16 @@ When memory and long-horizon primitives exist (Phase 4), adopt structured benchm
 - [x] All `run_bash` commands require explicit approval (no silent READ bypass). Matches spec §8.7.
 - [x] Upgrade iOS chat markdown rendering to `Textual` for full block-level markdown support.
 - [x] `web_fetch` raw URL read tool with SSRF protections (private/loopback IP blocking, redirect cap, response size cap).
+- [x] `TurnPaused`/`TurnResumed` protocol events for approval-gated turn continuation.
+- [x] Post-approval turn continuation (`maybeResumeTurn`) — LLM observes tool results and re-plans after approval.
+- [x] `AssistantThinkingDelta` emission from model `reasoning_content`.
+- [x] System-role messages filtered from planner history to prevent LLM referencing internal action IDs.
+- [x] Simplified iOS chat timeline (messages + appended approvals) with full activity state tracking in reducer.
 - [ ] Phase 2 integrations started.
 
 Next priority:
 
 - [ ] Test inline tool loop end-to-end with live Kagi API.
 - [x] Add web_fetch tool for raw URL content retrieval (with SSRF protections).
-- [ ] Continue Phase 3 foundation on turn orchestration and bounded tool-loop planning.
+- [x] Turn orchestration with pause/resume and bounded tool-loop planning (Phase 3 foundation).
+- [ ] Continue Phase 3: scheduler triggers, job runner, durable turn checkpoints.

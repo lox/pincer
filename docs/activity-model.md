@@ -55,17 +55,9 @@ Change: wrap inline READ execution with the existing event emission helpers:
 
 The helpers already exist in `action_events.go`. The `emitToolExecutionFinished` helper currently takes a `bashExecutionResult`; generalize it to accept a simpler result struct or add a parallel helper for non-bash tools.
 
-### 4.3 Hide inline READ tool-result messages
+### 4.3 Inline READ tool-result messages
 
-Today inline READ results are inserted as `role=system` messages:
-
-```
-[tool_result:web_search] {"results": [...]}
-```
-
-These leak into the user-visible chat transcript.
-
-Change: store these with `role=internal` and exclude that role from the `GetThreadSnapshot` / `ListThreadMessages` APIs. The planner still sees them (it queries raw messages). The iOS UI no longer needs to filter them out.
+Inline READ tool results are stored with `role=internal` and excluded from the user-visible chat transcript. The planner sees them via raw message queries, but `GetThreadSnapshot` / `ListThreadMessages` filter them out.
 
 ## 5. iOS: activity data model
 
@@ -131,17 +123,17 @@ struct ToolExecutionState: Identifiable {
 
 ### 5.2 Unified chat timeline
 
-Replace the flat `messages` list with a timeline that interleaves messages and activities:
+Messages are rendered in server order with pending approvals appended at the end:
 
 ```swift
 enum ChatTimelineItem: Identifiable {
     case message(Message)
-    case activity(TurnActivity)
+    case approval(Approval)
 
     var id: String {
         switch self {
-        case .message(let m): return m.id
-        case .activity(let a): return a.id
+        case .message(let m): return "msg_\(m.id)"
+        case .approval(let a): return "apv_\(a.id)"
         }
     }
 }

@@ -1,6 +1,6 @@
 # Agentic Loop: Post-Approval Continuation
 
-Status: Proposed
+Status: Implemented
 Date: 2026-02-17
 References: `docs/spec.md`, `docs/protocol.md`, `docs/activity-model.md`, `PLAN.md`
 

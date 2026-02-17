@@ -1,7 +1,7 @@
 # Pincer ConnectRPC Streaming Protocol
 
 Status: Active (partially implemented)
-Date: 2026-02-14
+Date: 2026-02-17
 References: `docs/spec.md`, `docs/ios-ui-plan.md`
 
 This document defines a ConnectRPC + protobuf protocol for Pincer with first-class event streaming.
@@ -402,6 +402,8 @@ message ThreadEvent {
     ModelOutputRepairAttempted model_output_repair_attempted = 22;
     TurnCompleted turn_completed = 23;
     TurnFailed turn_failed = 24;
+    TurnPaused turn_paused = 25;
+    TurnResumed turn_resumed = 26;
 
     AssistantThinkingDelta assistant_thinking_delta = 30;
     AssistantTextDelta assistant_text_delta = 31;
@@ -455,6 +457,17 @@ message TurnFailed {
   string code = 1; // includes FAILED_MODEL_OUTPUT and budget violations
   string message = 2;
   bool retryable = 3;
+}
+
+message TurnPaused {
+  uint32 pending_action_count = 1;
+  uint32 steps_used = 2;
+  uint32 steps_remaining = 3;
+}
+
+message TurnResumed {
+  string resumed_reason = 1;
+  uint32 steps_remaining = 2;
 }
 
 message AssistantThinkingDelta {
@@ -915,7 +928,7 @@ The protocol does not replace storage constraints from `docs/spec.md`; server im
 
 Chat:
 
-1. `TurnStarted`/`TurnCompleted`/`TurnFailed` drives activity indicators.
+1. `TurnStarted`/`TurnCompleted`/`TurnFailed`/`TurnPaused`/`TurnResumed` drives activity indicators.
 2. `AssistantThinkingDelta` feeds expandable "Thinking" panel.
 3. `AssistantTextDelta` supports incremental assistant rendering.
 4. Tool execution events render live terminal output cards.
