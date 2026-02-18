@@ -69,8 +69,8 @@ Steps:
 - [ ] Add Calendar read tool.
 - [x] Add web search tool (Kagi Search API) and web summarize tool (Kagi Universal Summarizer API).
 - [x] Add web_fetch raw URL read tool with SSRF and size constraints.
-- [ ] Add `image_describe` multimodal tool for image analysis via vision-capable model.
-- [ ] Add safe image rendering in iOS chat with provenance tracking and proxy (Camo-style) to prevent exfiltration.
+- [x] Add `image_describe` multimodal tool for image analysis via vision-capable model.
+- [x] Add safe image rendering in iOS chat with HMAC-signed image proxy to prevent exfiltration (goldmark AST rewriter + HTML stripping).
 - [ ] Add structured inline citations for web content summaries (source markers in text + sources array in planner output, rendered as tappable chips in iOS with domain/title/link).
 - [ ] Add deterministic approval-card rendering for each tool type.
 
@@ -235,7 +235,9 @@ When memory and long-horizon primitives exist (Phase 4), adopt structured benchm
 - [x] `AssistantThinkingDelta` emission from model `reasoning_content`.
 - [x] System-role messages filtered from planner history to prevent LLM referencing internal action IDs.
 - [x] Simplified iOS chat timeline (messages + appended approvals) with full activity state tracking in reducer.
-- [ ] Phase 2 integrations started.
+- [x] `image_describe` multimodal tool via vision model (READ, inline execution, `anthropic/claude-opus-4.6` default).
+- [x] HMAC-signed image proxy (`/proxy/image`) with goldmark AST rewriter: rewrites `![](url)` to proxied URLs, strips raw HTML from assistant messages.
+- [ ] Phase 2 integrations continued.
 
 Next priority:
 

@@ -226,6 +226,55 @@ func htmlToMarkdown(html string, pageURL *url.URL) (string, error) {
 	return htmltomarkdown.ConvertString(html, opts...)
 }
 
+// FetchRawImage fetches a URL and returns the raw response body and content type.
+// Only allows image/* content types. Uses the same SSRF-safe transport.
+func (f *WebFetcher) FetchRawImage(ctx context.Context, rawURL string, maxBytes int64) (body []byte, contentType string, statusCode int, err error) {
+	targetURL := strings.TrimSpace(rawURL)
+	if targetURL == "" {
+		return nil, "", 0, fmt.Errorf("url is required")
+	}
+
+	parsed, parseErr := url.Parse(targetURL)
+	if parseErr != nil {
+		return nil, "", 0, fmt.Errorf("invalid url: %w", parseErr)
+	}
+	if validateErr := validateFetchURL(parsed); validateErr != nil {
+		return nil, "", 0, validateErr
+	}
+
+	req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
+	if reqErr != nil {
+		return nil, "", 0, reqErr
+	}
+	req.Header.Set("User-Agent", "Pincer/0.1 (image_proxy; +https://github.com/lox/pincer)")
+	req.Header.Set("Accept", "image/*")
+
+	resp, doErr := f.httpClient.Do(req)
+	if doErr != nil {
+		return nil, "", 0, fmt.Errorf("fetch failed: %w", doErr)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, "", resp.StatusCode, fmt.Errorf("upstream status %d", resp.StatusCode)
+	}
+
+	ct := resp.Header.Get("Content-Type")
+	if !strings.HasPrefix(strings.ToLower(ct), "image/") {
+		return nil, ct, resp.StatusCode, fmt.Errorf("not an image: %s", ct)
+	}
+
+	if maxBytes <= 0 {
+		maxBytes = maxFetchResponseBytes
+	}
+	data, readErr := io.ReadAll(io.LimitReader(resp.Body, maxBytes))
+	if readErr != nil {
+		return nil, ct, resp.StatusCode, fmt.Errorf("read image body: %w", readErr)
+	}
+
+	return data, ct, resp.StatusCode, nil
+}
+
 func validateFetchURL(u *url.URL) error {
 	scheme := strings.ToLower(u.Scheme)
 	if scheme != "http" && scheme != "https" {

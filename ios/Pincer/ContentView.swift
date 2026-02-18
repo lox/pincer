@@ -659,11 +659,14 @@ private struct MarkdownMessageText: View {
         self.foregroundColor = foregroundStyle
     }
 
+    private var backendBaseURL: URL { AppConfig.baseURL }
+
     var body: some View {
-        StructuredText(markdown: Self.escapeLeadingListMarkers(text))
+        StructuredText(markdown: Self.escapeLeadingListMarkers(text), baseURL: backendBaseURL)
             .font(font)
             .foregroundStyle(foregroundColor)
             .textual.textSelection(.enabled)
+            .textual.imageAttachmentLoader(.image(relativeTo: backendBaseURL))
     }
 
     /// Escape leading ordered list markers so CommonMark doesn't

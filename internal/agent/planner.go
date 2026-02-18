@@ -223,10 +223,11 @@ type openAIChatCompletionResponse struct {
 }
 
 var knownTools = map[string]bool{
-	"web_search":    true,
-	"web_summarize": true,
-	"web_fetch":     true,
-	"run_bash":      true,
+	"web_search":     true,
+	"web_summarize":  true,
+	"web_fetch":      true,
+	"image_describe": true,
+	"run_bash":       true,
 }
 
 var plannerTools = []openAITool{
@@ -276,6 +277,21 @@ var plannerTools = []openAITool{
 	{
 		Type: "function",
 		Function: openAIToolFunction{
+			Name:        "image_describe",
+			Description: "Analyze an image at a URL using a vision model. Returns a detailed text description of the image contents. Use this for understanding screenshots, photos, diagrams, charts, or any visual content.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"url": {"type": "string", "description": "The image URL to analyze"},
+					"prompt": {"type": "string", "description": "Optional specific question or focus for the analysis"}
+				},
+				"required": ["url"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: openAIToolFunction{
 			Name:        "run_bash",
 			Description: "Execute a shell command on the host. All shell commands require user approval before execution. Do NOT use for web access — use web_search or web_summarize instead.",
 			Parameters: json.RawMessage(`{
@@ -305,6 +321,7 @@ func (p *OpenAIPlanner) planWithModel(ctx context.Context, model string, req Pla
 				"FORMATTING:\n" +
 				"- Your responses support markdown. Use it for bold, lists, and links.\n" +
 				"- Always render URLs as markdown links: [title](https://...). Never paste bare URLs.\n" +
+				"- To show an image inline, use markdown image syntax: ![description](https://image-url). The server proxies all image URLs for safety. Use this when showing an image would be helpful (e.g. after image_describe, or when referencing a visual).\n" +
 				"- When summarizing fetched web content, preserve important source links from the original page. Include them inline next to the relevant claims so users can click through to the source.",
 		},
 	}
@@ -479,6 +496,13 @@ func justificationForAction(tool string, args json.RawMessage) string {
 		}
 		if json.Unmarshal(args, &a) == nil && strings.TrimSpace(a.URL) != "" {
 			return fmt.Sprintf("Summarize: %s", strings.TrimSpace(a.URL))
+		}
+	case "image_describe":
+		var a struct {
+			URL string `json:"url"`
+		}
+		if json.Unmarshal(args, &a) == nil && strings.TrimSpace(a.URL) != "" {
+			return fmt.Sprintf("Describe image: %s", strings.TrimSpace(a.URL))
 		}
 	}
 	return "Proposed by planning model."

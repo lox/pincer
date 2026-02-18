@@ -1614,6 +1614,82 @@ func TestInlineReadToolCallArgsPersisted(t *testing.T) {
 	}
 }
 
+func TestImageDescribeInlineExecution(t *testing.T) {
+	t.Parallel()
+
+	// Mock vision API server.
+	visionServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]any{"content": "A photo of a cat sitting on a windowsill."}},
+			},
+		})
+	}))
+	defer visionServer.Close()
+
+	imageURL := "https://example.com/cat.jpg"
+	callCount := 0
+	var capturedHistory []agent.Message
+	planner := &staticPlannerFunc{fn: func(_ context.Context, req agent.PlanRequest) (agent.PlanResult, error) {
+		callCount++
+		if callCount == 1 {
+			return agent.PlanResult{
+				AssistantMessage: "Analyzing image.",
+				ProposedActions: []agent.ProposedAction{
+					{
+						Tool:          "image_describe",
+						Args:          json.RawMessage(fmt.Sprintf(`{"url":%q}`, imageURL)),
+						Justification: "Describe image.",
+						RiskClass:     "READ",
+					},
+				},
+			}, nil
+		}
+		capturedHistory = req.History
+		return agent.PlanResult{AssistantMessage: "It's a cat on a windowsill.", ProposedActions: nil}, nil
+	}}
+
+	app, err := New(AppConfig{
+		DBPath:         filepath.Join(t.TempDir(), "pincer-test.db"),
+		Planner:        planner,
+		ImageDescriber: agent.NewImageDescriber("test-key", visionServer.URL),
+	})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+	t.Cleanup(func() { _ = app.Close() })
+
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
+
+	token := bootstrapAuthToken(t, srv.URL)
+	threadID := createThread(t, srv.URL, token)
+
+	// Grant the image domain so image_describe executes inline (not escalated to EXFILTRATION).
+	if err := app.grantDomain("example.com", threadID); err != nil {
+		t.Fatalf("failed to grant domain: %v", err)
+	}
+
+	postMessage(t, srv.URL, token, threadID, "what's in this image?")
+
+	var foundToolCall, foundToolResult bool
+	for _, msg := range capturedHistory {
+		if strings.Contains(msg.Content, "[tool_call:image_describe]") && strings.Contains(msg.Content, imageURL) {
+			foundToolCall = true
+		}
+		if strings.Contains(msg.Content, "[tool_result:image_describe]") && strings.Contains(msg.Content, "cat") {
+			foundToolResult = true
+		}
+	}
+	if !foundToolCall {
+		t.Fatalf("expected planner history to contain [tool_call:image_describe], got: %v", capturedHistory)
+	}
+	if !foundToolResult {
+		t.Fatalf("expected planner history to contain [tool_result:image_describe] with vision output, got: %v", capturedHistory)
+	}
+}
+
 type stubPlanner struct {
 	result agent.PlanResult
 	err    error

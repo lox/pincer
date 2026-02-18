@@ -85,6 +85,8 @@ func (a *App) isPublicPath(path string) bool {
 	case protocolv1connect.AuthServiceCreatePairingCodeProcedure,
 		protocolv1connect.AuthServiceBindPairingCodeProcedure:
 		return true
+	case "/proxy/image":
+		return true // HMAC signature provides authentication
 	default:
 		return false
 	}
@@ -963,22 +965,38 @@ func (a *App) splitPlannedByRiskClass(threadID string, calls []plannedToolCall) 
 			nonRead = append(nonRead, tc)
 			continue
 		}
-		// web_fetch to ungranted domains requires approval.
-		if strings.EqualFold(tc.action.Tool, "web_fetch") {
-			var args agent.FetchArgs
-			if err := json.Unmarshal(tc.action.Args, &args); err == nil {
-				domain := agent.ExtractDomain(args.URL)
-				if domain != "" && !a.isDomainGranted(domain, threadID) {
-					tc.action.RiskClass = "EXFILTRATION"
-					tc.action.Justification = fmt.Sprintf("Fetch %s — approving grants access to %s for this thread.", args.URL, domain)
-					nonRead = append(nonRead, tc)
-					continue
-				}
+		// web_fetch and image_describe to ungranted domains require approval.
+		if urlForDomainCheck := extractToolURL(tc.action); urlForDomainCheck != "" {
+			domain := agent.ExtractDomain(urlForDomainCheck)
+			if domain != "" && !a.isDomainGranted(domain, threadID) {
+				tc.action.RiskClass = "EXFILTRATION"
+				tc.action.Justification = fmt.Sprintf("Access %s — approving grants access to %s for this thread.", urlForDomainCheck, domain)
+				nonRead = append(nonRead, tc)
+				continue
 			}
 		}
 		read = append(read, tc)
 	}
 	return
+}
+
+// extractToolURL returns the URL argument from tools that access external URLs,
+// or empty string if the tool doesn't have one.
+func extractToolURL(action agent.ProposedAction) string {
+	tool := strings.ToLower(strings.TrimSpace(action.Tool))
+	switch tool {
+	case "web_fetch":
+		var args agent.FetchArgs
+		if json.Unmarshal(action.Args, &args) == nil {
+			return strings.TrimSpace(args.URL)
+		}
+	case "image_describe":
+		var args agent.ImageDescribeArgs
+		if json.Unmarshal(action.Args, &args) == nil {
+			return strings.TrimSpace(args.URL)
+		}
+	}
+	return ""
 }
 
 func (a *App) executeInlineReadTool(ctx context.Context, action agent.ProposedAction) (string, error) {
@@ -1036,6 +1054,20 @@ func (a *App) executeInlineReadTool(ctx context.Context, action agent.ProposedAc
 		b.WriteString("\n--- END BODY ---")
 		return b.String(), nil
 
+	case tool == "image_describe":
+		if a.imageDescriber == nil {
+			return "image_describe unavailable: no vision model configured", fmt.Errorf("no vision model configured")
+		}
+		var args agent.ImageDescribeArgs
+		if err := json.Unmarshal(action.Args, &args); err != nil {
+			return fmt.Sprintf("invalid image_describe args: %v", err), err
+		}
+		description, err := a.imageDescriber.Describe(ctx, args)
+		if err != nil {
+			return fmt.Sprintf("image_describe error: %v", err), err
+		}
+		return description, nil
+
 	default:
 		return fmt.Sprintf("unknown inline read tool: %s", action.Tool), fmt.Errorf("unknown inline read tool: %s", action.Tool)
 	}
@@ -1068,6 +1100,14 @@ func (a *App) finalizeTurn(ctx context.Context, threadID, turnID, assistantMessa
 		return nil, fmt.Errorf("begin turn tx: %w", err)
 	}
 	defer tx.Rollback()
+
+	// Rewrite image URLs in the assistant message to proxied versions
+	// and strip raw HTML to prevent exfiltration via untrusted model output.
+	assistantMessage = a.imageProxyRewriter.Rewrite(assistantMessage)
+
+	// Eagerly download and cache images so the proxy can serve them
+	// even if the upstream CDN blocks direct server-side fetching later.
+	a.prefetchImages(ctx, assistantMessage)
 
 	// Always persist the assistant message so the user sees the LLM's narrative.
 	result.AssistantMessage = assistantMessage
@@ -1185,6 +1225,33 @@ func (a *App) finalizeTurn(ctx context.Context, threadID, turnID, assistantMessa
 	}
 
 	return result, nil
+}
+
+func (a *App) prefetchImages(ctx context.Context, rewrittenMarkdown string) {
+	images := agent.ExtractProxiedURLs("/proxy/image", rewrittenMarkdown)
+	if len(images) == 0 {
+		return
+	}
+
+	fetchCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	for _, img := range images {
+		body, ct, statusCode, err := a.webFetcher.FetchRawImage(fetchCtx, img.OriginalURL, maxProxyImageBytes)
+		if err != nil {
+			a.logger.Debug("image prefetch failed", "url", img.OriginalURL, "error", err)
+			continue
+		}
+		if statusCode < 200 || statusCode >= 300 {
+			a.logger.Debug("image prefetch upstream error", "url", img.OriginalURL, "status", statusCode)
+			continue
+		}
+		if !isAllowedImageMIME(ct) {
+			continue
+		}
+		a.cacheImage(img.Sig, img.OriginalURL, ct, body)
+		a.logger.Debug("image prefetched", "url", img.OriginalURL, "size", len(body))
+	}
 }
 
 func (a *App) loadThreadMessages(ctx context.Context, threadID string, offset int) ([]*protocolv1.ThreadMessage, error) {
