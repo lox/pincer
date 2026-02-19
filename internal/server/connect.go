@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"connectrpc.com/connect"
@@ -844,7 +845,7 @@ func (a *App) executeTurnFromStep(ctx context.Context, threadID, userText, turnI
 	// Each iteration: plan → split READ vs non-READ → execute READs inline → re-plan.
 	// Loop terminates when plan has no READ tools, or limits are hit.
 	for step := startStep; step < maxInlineToolSteps; step++ {
-		plan, err := a.planTurn(ctx, threadID, userText)
+		plan, err := a.planTurn(ctx, threadID, userText, step, maxInlineToolSteps)
 		if err != nil {
 			_, _ = a.appendThreadEvent(ctx, &protocolv1.ThreadEvent{
 				ThreadId:     threadID,
@@ -880,30 +881,52 @@ func (a *App) executeTurnFromStep(ctx context.Context, threadID, userText, turnI
 		// Emit thinking from intermediate planning steps (before inline tool execution).
 		a.emitThinkingIfPresent(ctx, threadID, turnID, plan.Thinking)
 
-		// Execute READ tools inline and persist results as internal messages.
-		for _, tc := range readCalls {
-			executionID := newID("exec")
+		// Execute READ tools concurrently and persist results in order.
+		type readResult struct {
+			executionID string
+			displayLabel string
+			output      string
+			err         error
+			duration    time.Duration
+		}
+		results := make([]readResult, len(readCalls))
+		for i, tc := range readCalls {
+			results[i].executionID = newID("exec")
 			displayLabel := tc.action.Tool
 			if args := string(tc.action.Args); args != "" && args != "{}" {
 				displayLabel = tc.action.Tool + " " + args
 			}
+			results[i].displayLabel = displayLabel
+			a.emitToolExecutionStarted(ctx, threadID, turnID, results[i].executionID, tc.toolCallID, tc.action.Tool, displayLabel)
+		}
 
-			a.emitToolExecutionStarted(ctx, threadID, turnID, executionID, tc.toolCallID, tc.action.Tool, displayLabel)
+		var wg sync.WaitGroup
+		for i, tc := range readCalls {
+			wg.Add(1)
+			go func(idx int, action agent.ProposedAction) {
+				defer wg.Done()
+				start := time.Now()
+				output, err := a.executeInlineReadTool(ctx, action)
+				results[idx].output = output
+				results[idx].err = err
+				results[idx].duration = time.Since(start)
+			}(i, tc.action)
+		}
+		wg.Wait()
 
-			start := time.Now()
-			toolResult, toolErr := a.executeInlineReadTool(ctx, tc.action)
-			duration := time.Since(start)
-			a.logger.Info("inline tool executed", "tool", tc.action.Tool, "step", step)
+		for i, tc := range readCalls {
+			r := results[i]
+			a.logger.Info("inline tool executed", "tool", tc.action.Tool, "step", step, "duration", r.duration)
 
-			a.emitToolExecutionOutputDelta(ctx, threadID, turnID, executionID, protocolv1.OutputStream_STDOUT, []byte(toolResult), 0)
+			a.emitToolExecutionOutputDelta(ctx, threadID, turnID, r.executionID, protocolv1.OutputStream_STDOUT, []byte(r.output), 0)
 
 			exitCode := 0
-			if toolErr != nil {
+			if r.err != nil {
 				exitCode = 1
 			}
-			a.emitToolExecutionFinished(ctx, threadID, turnID, executionID, toolExecutionResult{
+			a.emitToolExecutionFinished(ctx, threadID, turnID, r.executionID, toolExecutionResult{
 				ExitCode: exitCode,
-				Duration: duration,
+				Duration: r.duration,
 			})
 
 			// Persist tool call + result as internal messages so planner sees them on next iteration.
@@ -915,7 +938,7 @@ func (a *App) executeTurnFromStep(ctx context.Context, threadID, userText, turnI
 			`, newID("msg"), threadID, callMsg, msgNow); err != nil {
 				return nil, fmt.Errorf("insert tool call message: %w", err)
 			}
-			resultMsg := fmt.Sprintf("[tool_result:%s] %s", tc.action.Tool, toolResult)
+			resultMsg := fmt.Sprintf("[tool_result:%s] %s", tc.action.Tool, r.output)
 			if _, err := a.db.ExecContext(ctx, `
 				INSERT INTO messages(message_id, thread_id, role, content, created_at)
 				VALUES(?, ?, 'internal', ?, ?)
@@ -933,7 +956,7 @@ func (a *App) executeTurnFromStep(ctx context.Context, threadID, userText, turnI
 	}
 
 	// If we hit the step limit, finalize with whatever the last plan said.
-	plan, err := a.planTurn(ctx, threadID, userText)
+	plan, err := a.planTurn(ctx, threadID, userText, maxInlineToolSteps, maxInlineToolSteps)
 	if err != nil {
 		return nil, fmt.Errorf("final plan after tool limit: %w", err)
 	}
