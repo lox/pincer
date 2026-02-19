@@ -592,5 +592,11 @@ func base64URLEncode(data []byte) string {
 
 // base64URLDecode decodes URL-safe base64 (with or without padding).
 func base64URLDecode(s string) ([]byte, error) {
-	return base64.RawURLEncoding.DecodeString(s)
+	// Try without padding first (Gmail usually omits padding).
+	decoded, err := base64.RawURLEncoding.DecodeString(s)
+	if err == nil {
+		return decoded, nil
+	}
+	// Fall back to padded URL-safe encoding.
+	return base64.URLEncoding.DecodeString(s)
 }
