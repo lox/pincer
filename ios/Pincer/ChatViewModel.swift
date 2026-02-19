@@ -260,6 +260,10 @@ final class ChatViewModel: ObservableObject {
             isAwaitingAssistantProgress = false
         }
 
+        if effect.shouldResumeAwaitingProgress && !effect.reachedTurnTerminal {
+            isAwaitingAssistantProgress = true
+        }
+
         if effect.reachedTurnTerminal {
             isBusy = false
             isAwaitingAssistantProgress = false

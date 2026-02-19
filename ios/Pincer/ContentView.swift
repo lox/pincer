@@ -424,11 +424,15 @@ private struct ChatMessageRow: View {
                 .frame(maxWidth: .infinity, alignment: .center)
                 .padding(.vertical, 2)
         } else if isThinking {
-            // Fallback for history reload when activities are not reconstructed
-            FallbackThinkingRow(text: message.content)
+            HStack {
+                FallbackThinkingRow(text: message.content)
+                Spacer(minLength: 58)
+            }
         } else if isTool {
-            // Fallback for history reload when activities are not reconstructed
-            FallbackToolOutputRow(content: message.content)
+            HStack {
+                FallbackToolOutputRow(content: message.content)
+                Spacer(minLength: 58)
+            }
         } else {
             HStack {
                 if isUser { Spacer(minLength: 58) }
@@ -521,6 +525,19 @@ private struct FallbackToolOutputRow: View {
 
     var body: some View {
         let parsed = parseToolExecutionStreamingContent(content)
+        if parsed.isBashCommand {
+            BashToolOutputCard(parsed: parsed)
+        } else {
+            ReadToolOutputCard(parsed: parsed)
+        }
+    }
+}
+
+/// Expanded terminal-style card for run_bash commands.
+private struct BashToolOutputCard: View {
+    let parsed: ParsedToolExecutionStreamingContent
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 Image(systemName: parsed.result != nil ? "checkmark" : "play.fill")
@@ -567,37 +584,120 @@ private struct FallbackToolOutputRow: View {
     }
 }
 
-private struct AssistantProcessingRow: View {
+/// Compact collapsed card for READ tools (gmail_search, web_search, etc.).
+private struct ReadToolOutputCard: View {
+    let parsed: ParsedToolExecutionStreamingContent
+    @State private var isExpanded = false
+
+    private var isDone: Bool { parsed.result != nil }
+    private var isError: Bool {
+        if case .exit(let code, _) = parsed.result { return code != 0 }
+        if case .timedOut = parsed.result { return true }
+        return false
+    }
+
     var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Assistant")
-                    .font(.system(.caption, design: .rounded).weight(.semibold))
-                    .foregroundStyle(PincerPalette.textTertiary)
-
-                HStack(spacing: 8) {
+        DisclosureGroup(isExpanded: $isExpanded) {
+            if !parsed.output.isEmpty {
+                Text(parsed.output)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(PincerPalette.terminalText)
+                    .lineLimit(20)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(6)
+                    .background(PincerPalette.terminalBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .padding(.top, 2)
+            }
+        } label: {
+            HStack(spacing: 6) {
+                if isDone {
+                    Image(systemName: isError ? "xmark" : "checkmark")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(isError ? PincerPalette.danger : PincerPalette.success)
+                } else {
                     ProgressView()
-                        .controlSize(.small)
-                        .tint(PincerPalette.textSecondary)
-
-                    Text("Thinking...")
-                        .font(.system(.subheadline, design: .rounded).weight(.medium))
-                        .foregroundStyle(PincerPalette.textSecondary)
+                        .controlSize(.mini)
+                }
+                Text(parsed.readToolSummary)
+                    .font(.system(.caption, design: .rounded).weight(.medium))
+                    .foregroundStyle(PincerPalette.textSecondary)
+                    .lineLimit(1)
+                if let result = parsed.result {
+                    Spacer()
+                    Text(durationLabel(result))
+                        .font(.system(.caption2, design: .rounded))
+                        .foregroundStyle(PincerPalette.textTertiary)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
+        }
+        .padding(10)
+        .background(PincerPalette.card)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(PincerPalette.border, lineWidth: 1)
+        )
+    }
+
+    private func durationLabel(_ result: ToolExecutionResult) -> String {
+        switch result {
+        case .exit(_, let ms): return formatDuration(ms)
+        case .timedOut(let ms): return "timed out (\(formatDuration(ms)))"
+        }
+    }
+
+    private func formatDuration(_ ms: Int) -> String {
+        if ms >= 1000 {
+            let seconds = Double(ms) / 1000.0
+            return String(format: "%.1fs", seconds)
+        }
+        return "\(ms)ms"
+    }
+}
+
+private struct AssistantProcessingRow: View {
+    @State private var phase: CGFloat = 0
+
+    var body: some View {
+        HStack {
+            HStack(spacing: 5) {
+                ForEach(0..<3) { index in
+                    Circle()
+                        .fill(PincerPalette.textTertiary)
+                        .frame(width: 6, height: 6)
+                        .opacity(dotOpacity(for: index))
+                        .scaleEffect(dotScale(for: index))
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
             .background(PincerPalette.card)
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .stroke(PincerPalette.border, lineWidth: 1)
             )
-            .shadow(color: PincerPalette.shadow, radius: 6, x: 0, y: 2)
 
-            Spacer(minLength: 58)
+            Spacer()
         }
+        .onAppear {
+            withAnimation(.linear(duration: 1.2).repeatForever(autoreverses: false)) {
+                phase = 1
+            }
+        }
+    }
+
+    private func dotOpacity(for index: Int) -> Double {
+        let offset = Double(index) / 3.0
+        let wave = sin((Double(phase) - offset) * .pi * 2)
+        return 0.3 + 0.7 * max(0, wave)
+    }
+
+    private func dotScale(for index: Int) -> CGFloat {
+        let offset = Double(index) / 3.0
+        let wave = sin((Double(phase) - offset) * .pi * 2)
+        return 0.7 + 0.3 * CGFloat(max(0, wave))
     }
 }
 

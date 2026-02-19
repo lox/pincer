@@ -35,6 +35,8 @@ struct ThreadEventReducerEffect {
     var shouldRefreshApprovals: Bool = false
     var shouldResyncMessages: Bool = false
     var receivedProgressSignal: Bool = false
+    /// Set when a tool execution finishes but the turn is still running — re-show "Thinking..." bubble.
+    var shouldResumeAwaitingProgress: Bool = false
     var turnFailureMessage: String?
 }
 
@@ -274,6 +276,8 @@ enum ThreadEventReducer {
                 state.turnActivities[matchedTurnID]?.toolCalls[tcIdx].executions[exIdx].truncated = finished.truncated
                 state.turnActivities[matchedTurnID]?.toolCalls[tcIdx].state = finished.exitCode == 0 ? .succeeded : .failed
             }
+
+            effect.shouldResumeAwaitingProgress = true
 
         case .proposedActionCreated(let created):
             effect.shouldRefreshApprovals = true
