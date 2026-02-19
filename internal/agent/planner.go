@@ -30,6 +30,10 @@ type PlanRequest struct {
 	ThreadID    string
 	UserMessage string
 	History     []Message
+	// Step is the current inline tool step (0-indexed). MaxSteps is the budget.
+	// When set, the planner prompt includes the remaining step count.
+	Step     int
+	MaxSteps int
 }
 
 type ProposedAction struct {
@@ -298,7 +302,7 @@ var plannerTools = []openAITool{
 		Type: "function",
 		Function: openAIToolFunction{
 			Name:        "gmail_search",
-			Description: "Search Gmail messages. Returns message summaries matching the query. Use Gmail search syntax (from:, to:, subject:, is:unread, etc.).",
+			Description: "Search Gmail messages. Returns message summaries with message_id and thread_id. Use Gmail search syntax (from:, to:, subject:, is:unread, etc.). To read a full conversation, pass the thread_id to gmail_get_thread.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -396,9 +400,11 @@ func (p *OpenAIPlanner) planWithModel(ctx context.Context, model string, req Pla
 				"TOOL EXECUTION MODEL:\n" +
 				"- When using a tool, call it via tool calling. Do not write JSON or describe tool calls in text.\n" +
 				"- READ tools execute inline. Their results are appended to the conversation and you are called again to continue.\n" +
-				"- You can chain multiple tool calls across rounds to gather information before giving a final answer.\n" +
+				"- You can call multiple tools in a single round. They execute concurrently.\n" +
+				"- You can chain tool calls across rounds to gather information before giving a final answer.\n" +
 				"- HIGH/WRITE/EXFILTRATION tools require user approval before execution.\n" +
-				"- When no tools are needed, respond with your answer directly.\n\n" +
+				"- When no tools are needed, respond with your answer directly.\n" +
+				"- You have a limited number of tool rounds. Synthesize and answer with what you have before running out. Do not say 'let me continue' — always give your best answer.\n\n" +
 				"FORMATTING:\n" +
 				"- Your responses support markdown. Use it for bold, lists, and links.\n" +
 				"- Always render URLs as markdown links: [title](https://...). Never paste bare URLs.\n" +
@@ -490,6 +496,15 @@ func buildPlannerPrompt(req PlanRequest) string {
 	b.WriteString("Thread ID: ")
 	b.WriteString(req.ThreadID)
 	b.WriteString("\n")
+
+	if req.MaxSteps > 0 {
+		remaining := req.MaxSteps - req.Step
+		b.WriteString(fmt.Sprintf("Tool rounds remaining: %d of %d", remaining, req.MaxSteps))
+		if remaining <= 2 {
+			b.WriteString(" — wrap up and give your final answer now")
+		}
+		b.WriteString("\n")
+	}
 
 	if len(req.History) > 0 {
 		b.WriteString("Recent messages:\n")

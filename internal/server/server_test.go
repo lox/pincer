@@ -694,7 +694,7 @@ func TestPlanTurnClassifiesRunBashRiskFromCommand(t *testing.T) {
 		},
 	})
 
-	plan, err := app.planTurn(context.Background(), "thr_risk", "run command")
+	plan, err := app.planTurn(context.Background(), "thr_risk", "run command", 0, 0)
 	if err != nil {
 		t.Fatalf("plan turn: %v", err)
 	}
@@ -723,7 +723,7 @@ func TestPlanTurnNormalizesRunBashTimeoutToMaxBound(t *testing.T) {
 		},
 	})
 
-	plan, err := app.planTurn(context.Background(), "thr_timeout", "run command")
+	plan, err := app.planTurn(context.Background(), "thr_timeout", "run command", 0, 0)
 	if err != nil {
 		t.Fatalf("plan turn: %v", err)
 	}

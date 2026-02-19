@@ -1054,7 +1054,7 @@ func (a *App) grantDomain(domain, threadID string) error {
 	return err
 }
 
-func (a *App) planTurn(ctx context.Context, threadID, userMessage string) (agent.PlanResult, error) {
+func (a *App) planTurn(ctx context.Context, threadID, userMessage string, step, maxSteps int) (agent.PlanResult, error) {
 	history, err := a.loadPlannerHistory(threadID, defaultPlannerHistoryLimit)
 	if err != nil {
 		return agent.PlanResult{}, fmt.Errorf("load planner history: %w", err)
@@ -1064,6 +1064,8 @@ func (a *App) planTurn(ctx context.Context, threadID, userMessage string) (agent
 		ThreadID:    threadID,
 		UserMessage: userMessage,
 		History:     history,
+		Step:        step,
+		MaxSteps:    maxSteps,
 	})
 	if err != nil {
 		return agent.PlanResult{}, err
