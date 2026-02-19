@@ -14,9 +14,10 @@ import (
 
 const (
 	gmailAPIBase        = "https://gmail.googleapis.com/gmail/v1"
-	defaultGmailTimeout = 30 * time.Second
-	maxGmailResults     = 20
-	maxGmailBodyBytes   = 32 * 1024
+	defaultGmailTimeout      = 30 * time.Second
+	maxGmailResults          = 20
+	maxGmailBodyBytes        = 32 * 1024
+	maxGmailAttachmentBytes  = 25 * 1024 * 1024 // 25 MB (Gmail's attachment limit)
 )
 
 // OAuthToken represents a stored OAuth token.
@@ -60,18 +61,28 @@ type GmailReadArgs struct {
 	MessageID string `json:"message_id"`
 }
 
+// AttachmentMeta describes a Gmail attachment without its content.
+type AttachmentMeta struct {
+	AttachmentID string `json:"attachment_id"`
+	MessageID    string `json:"message_id"`
+	Filename     string `json:"filename"`
+	MimeType     string `json:"mime_type"`
+	Size         int    `json:"size"`
+}
+
 // GmailReadResult is the full content of a single email.
 type GmailReadResult struct {
-	MessageID string   `json:"message_id"`
-	ThreadID  string   `json:"thread_id"`
-	Subject   string   `json:"subject"`
-	From      string   `json:"from"`
-	To        string   `json:"to"`
-	Cc        string   `json:"cc,omitempty"`
-	Date      string   `json:"date"`
-	Body      string   `json:"body"`
-	Truncated bool     `json:"truncated"`
-	Labels    []string `json:"labels,omitempty"`
+	MessageID   string           `json:"message_id"`
+	ThreadID    string           `json:"thread_id"`
+	Subject     string           `json:"subject"`
+	From        string           `json:"from"`
+	To          string           `json:"to"`
+	Cc          string           `json:"cc,omitempty"`
+	Date        string           `json:"date"`
+	Body        string           `json:"body"`
+	Truncated   bool             `json:"truncated"`
+	Labels      []string         `json:"labels,omitempty"`
+	Attachments []AttachmentMeta `json:"attachments,omitempty"`
 }
 
 // GmailGetThreadArgs are the arguments for gmail_get_thread tool calls.
@@ -87,13 +98,14 @@ type GmailGetThreadResult struct {
 
 // GmailThreadMessage is a summary of one message within a thread.
 type GmailThreadMessage struct {
-	MessageID string `json:"message_id"`
-	From      string `json:"from"`
-	To        string `json:"to"`
-	Date      string `json:"date"`
-	Snippet   string `json:"snippet"`
-	Body      string `json:"body"`
-	Truncated bool   `json:"truncated,omitempty"`
+	MessageID   string           `json:"message_id"`
+	From        string           `json:"from"`
+	To          string           `json:"to"`
+	Date        string           `json:"date"`
+	Snippet     string           `json:"snippet"`
+	Body        string           `json:"body"`
+	Truncated   bool             `json:"truncated,omitempty"`
+	Attachments []AttachmentMeta `json:"attachments,omitempty"`
 }
 
 // GmailCreateDraftArgs are the arguments for gmail_create_draft tool calls.
@@ -222,16 +234,17 @@ func (g *GmailClient) Read(ctx context.Context, accessToken string, args GmailRe
 	}
 
 	return GmailReadResult{
-		MessageID: resp.ID,
-		ThreadID:  resp.ThreadID,
-		Subject:   resp.headerValue("Subject"),
-		From:      resp.headerValue("From"),
-		To:        resp.headerValue("To"),
-		Cc:        resp.headerValue("Cc"),
-		Date:      resp.headerValue("Date"),
-		Body:      textBody,
-		Truncated: truncated,
-		Labels:    resp.LabelIDs,
+		MessageID:   resp.ID,
+		ThreadID:    resp.ThreadID,
+		Subject:     resp.headerValue("Subject"),
+		From:        resp.headerValue("From"),
+		To:          resp.headerValue("To"),
+		Cc:          resp.headerValue("Cc"),
+		Date:        resp.headerValue("Date"),
+		Body:        textBody,
+		Truncated:   truncated,
+		Labels:      resp.LabelIDs,
+		Attachments: resp.extractAttachments(resp.ID),
 	}, nil
 }
 
@@ -265,13 +278,14 @@ func (g *GmailClient) GetThread(ctx context.Context, accessToken string, args Gm
 			truncated = true
 		}
 		messages = append(messages, GmailThreadMessage{
-			MessageID: msg.ID,
-			From:      msg.headerValue("From"),
-			To:        msg.headerValue("To"),
-			Date:      msg.headerValue("Date"),
-			Snippet:   msg.Snippet,
-			Body:      textBody,
-			Truncated: truncated,
+			MessageID:   msg.ID,
+			From:        msg.headerValue("From"),
+			To:          msg.headerValue("To"),
+			Date:        msg.headerValue("Date"),
+			Snippet:     msg.Snippet,
+			Body:        textBody,
+			Truncated:   truncated,
+			Attachments: msg.extractAttachments(msg.ID),
 		})
 	}
 
@@ -379,8 +393,13 @@ func (g *GmailClient) SendDraft(ctx context.Context, accessToken string, args Gm
 	}, nil
 }
 
-// doGet performs an authenticated GET request.
+// doGet performs an authenticated GET request with a default 1 MB limit.
 func (g *GmailClient) doGet(ctx context.Context, accessToken, reqURL string) ([]byte, error) {
+	return g.doGetLimit(ctx, accessToken, reqURL, 1<<20)
+}
+
+// doGetLimit performs an authenticated GET request with a configurable body limit.
+func (g *GmailClient) doGetLimit(ctx context.Context, accessToken, reqURL string, maxBytes int64) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
 		return nil, err
@@ -394,7 +413,7 @@ func (g *GmailClient) doGet(ctx context.Context, accessToken, reqURL string) ([]
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes))
 	if err != nil {
 		return nil, err
 	}
@@ -454,9 +473,11 @@ type gmailMessageResponse struct {
 
 type gmailMessagePart struct {
 	MimeType string `json:"mimeType"`
+	Filename string `json:"filename"`
 	Body     struct {
-		Data string `json:"data"`
-		Size int    `json:"size"`
+		AttachmentId string `json:"attachmentId"`
+		Data         string `json:"data"`
+		Size         int    `json:"size"`
 	} `json:"body"`
 	Parts []gmailMessagePart `json:"parts"`
 }
@@ -501,6 +522,67 @@ func extractTextFromParts(parts []gmailMessagePart) string {
 		}
 	}
 	return ""
+}
+
+// extractAttachments recursively collects attachment metadata from a message.
+func (m *gmailMessageResponse) extractAttachments(messageID string) []AttachmentMeta {
+	var out []AttachmentMeta
+	collectAttachments(m.Payload.Parts, messageID, &out)
+	return out
+}
+
+func collectAttachments(parts []gmailMessagePart, messageID string, out *[]AttachmentMeta) {
+	for _, part := range parts {
+		if part.Body.AttachmentId != "" && part.Filename != "" {
+			*out = append(*out, AttachmentMeta{
+				AttachmentID: part.Body.AttachmentId,
+				MessageID:    messageID,
+				Filename:     part.Filename,
+				MimeType:     part.MimeType,
+				Size:         part.Body.Size,
+			})
+		}
+		collectAttachments(part.Parts, messageID, out)
+	}
+}
+
+// GmailGetAttachmentArgs are the arguments for fetching a Gmail attachment.
+type GmailGetAttachmentArgs struct {
+	MessageID    string `json:"message_id"`
+	AttachmentID string `json:"attachment_id"`
+}
+
+// GetAttachment fetches the raw bytes of a Gmail attachment.
+func (g *GmailClient) GetAttachment(ctx context.Context, accessToken string, args GmailGetAttachmentArgs) ([]byte, error) {
+	if args.MessageID == "" {
+		return nil, fmt.Errorf("message_id is required")
+	}
+	if args.AttachmentID == "" {
+		return nil, fmt.Errorf("attachment_id is required")
+	}
+
+	attURL := fmt.Sprintf("%s/users/me/messages/%s/attachments/%s",
+		gmailAPIBase, url.PathEscape(args.MessageID), url.PathEscape(args.AttachmentID))
+
+	body, err := g.doGetLimit(ctx, accessToken, attURL, maxGmailAttachmentBytes)
+	if err != nil {
+		return nil, fmt.Errorf("gmail get attachment: %w", err)
+	}
+
+	var resp struct {
+		Size int    `json:"size"`
+		Data string `json:"data"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("decode gmail attachment: %w", err)
+	}
+
+	decoded, err := base64URLDecode(resp.Data)
+	if err != nil {
+		return nil, fmt.Errorf("decode attachment data: %w", err)
+	}
+
+	return decoded, nil
 }
 
 // base64URLEncode encodes bytes to URL-safe base64 without padding.

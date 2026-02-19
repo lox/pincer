@@ -319,6 +319,7 @@ func (a *App) Handler() http.Handler {
 	mux := http.NewServeMux()
 	a.registerConnectHandlers(mux)
 	mux.HandleFunc("/proxy/image", a.handleImageProxy)
+	mux.HandleFunc("/proxy/gmail/attachment", a.handleGmailAttachmentProxy)
 	return a.loggingMiddleware(a.authMiddleware(mux))
 }
 
@@ -421,6 +422,58 @@ func isAllowedImageMIME(ct string) bool {
 	default:
 		return false
 	}
+}
+
+const maxGmailAttachmentBytes = 25 * 1024 * 1024 // 25 MB
+
+func (a *App) handleGmailAttachmentProxy(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	messageID := r.URL.Query().Get("message_id")
+	attachmentID := r.URL.Query().Get("attachment_id")
+	if messageID == "" || attachmentID == "" {
+		http.Error(w, "missing message_id or attachment_id parameter", http.StatusBadRequest)
+		return
+	}
+
+	oauthToken, err := a.loadOAuthToken(a.ownerID, "user", "google")
+	if err != nil {
+		a.logger.Warn("gmail attachment proxy: no oauth token", "error", err)
+		http.Error(w, "oauth token not available", http.StatusUnauthorized)
+		return
+	}
+
+	data, err := a.gmailClient.GetAttachment(r.Context(), oauthToken.AccessToken, agent.GmailGetAttachmentArgs{
+		MessageID:    messageID,
+		AttachmentID: attachmentID,
+	})
+	if err != nil {
+		a.logger.Warn("gmail attachment proxy fetch failed", "error", err)
+		http.Error(w, "fetch failed", http.StatusBadGateway)
+		return
+	}
+
+	if len(data) > maxGmailAttachmentBytes {
+		http.Error(w, "attachment too large", http.StatusBadGateway)
+		return
+	}
+
+	ct := r.URL.Query().Get("mime_type")
+	if ct == "" {
+		ct = "application/octet-stream"
+	}
+	w.Header().Set("Content-Type", ct)
+
+	if filename := r.URL.Query().Get("filename"); filename != "" {
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	}
+
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
 }
 
 func (a *App) loggingMiddleware(next http.Handler) http.Handler {

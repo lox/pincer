@@ -1,3 +1,4 @@
+import QuickLook
 import SwiftUI
 import Textual
 import UIKit
@@ -91,6 +92,8 @@ struct ContentView: View {
 
 private struct ChatView: View {
     @ObservedObject var model: ChatViewModel
+    @State private var previewURL: URL?
+    @State private var isDownloadingAttachment = false
     private let chatBottomAnchorID = "chat_bottom_anchor"
 
     var body: some View {
@@ -198,6 +201,52 @@ private struct ChatView: View {
             } message: {
                 Text(model.errorText ?? "Unknown error")
             }
+            .environment(\.openURL, OpenURLAction { url in
+                if url.path == "/proxy/gmail/attachment" || url.path.hasPrefix("/proxy/gmail/attachment") {
+                    Task { await downloadAndPreviewAttachment(url) }
+                    return .handled
+                }
+                return .systemAction
+            })
+            .quickLookPreview($previewURL)
+        }
+    }
+
+    private func downloadAndPreviewAttachment(_ url: URL) async {
+        guard !isDownloadingAttachment else { return }
+        isDownloadingAttachment = true
+        defer { isDownloadingAttachment = false }
+
+        var components = URLComponents(url: AppConfig.baseURL, resolvingAgainstBaseURL: false)!
+        components.path = url.path
+        components.query = url.query
+        guard let fullURL = components.url else { return }
+
+        var request = URLRequest(url: fullURL)
+        let token = AppConfig.bearerToken
+        if !token.isEmpty {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200..<300).contains(httpResponse.statusCode) else { return }
+
+            let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems
+            let filename = queryItems?.first(where: { $0.name == "filename" })?.value ?? "attachment"
+
+            let tempDir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("pincer_attachments", isDirectory: true)
+            try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+            let fileURL = tempDir.appendingPathComponent(filename)
+            try data.write(to: fileURL)
+
+            await MainActor.run {
+                previewURL = fileURL
+            }
+        } catch {
+            // Download failed silently
         }
     }
 

@@ -138,8 +138,9 @@ func TestExtractTextBodyMultipart(t *testing.T) {
 	msg.Payload.Parts = []gmailMessagePart{
 		{MimeType: "text/html"},
 		{MimeType: "text/plain", Body: struct {
-			Data string `json:"data"`
-			Size int    `json:"size"`
+			AttachmentId string `json:"attachmentId"`
+			Data         string `json:"data"`
+			Size         int    `json:"size"`
 		}{Data: encoded}},
 	}
 

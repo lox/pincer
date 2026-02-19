@@ -317,7 +317,7 @@ var plannerTools = []openAITool{
 		Type: "function",
 		Function: openAIToolFunction{
 			Name:        "gmail_read",
-			Description: "Read the full content of a specific Gmail message by its ID. Use gmail_search first to find message IDs.",
+			Description: "Read the full content of a specific Gmail message by its ID. Returns body text and attachment metadata (filename, size, attachment_id). Use gmail_search first to find message IDs.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -331,7 +331,7 @@ var plannerTools = []openAITool{
 		Type: "function",
 		Function: openAIToolFunction{
 			Name:        "gmail_get_thread",
-			Description: "Get all messages in a Gmail thread. Returns every message in the conversation thread, including replies. Use this to see the full conversation history, check if you replied, or read follow-ups. Use gmail_search first to find thread IDs.",
+			Description: "Get all messages in a Gmail thread. Returns every message with body text and attachment metadata. Use this to see the full conversation history, check if you replied, or read follow-ups. Use gmail_search first to find thread IDs.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -409,6 +409,7 @@ func (p *OpenAIPlanner) planWithModel(ctx context.Context, model string, req Pla
 				"- Your responses support markdown. Use it for bold, lists, and links.\n" +
 				"- Always render URLs as markdown links: [title](https://...). Never paste bare URLs.\n" +
 				"- To show an image inline, use markdown image syntax: ![description](https://image-url). The server proxies all image URLs for safety. Use this when showing an image would be helpful (e.g. after image_describe, or when referencing a visual).\n" +
+				"- To link to an email attachment, use: [filename](/proxy/gmail/attachment?message_id=ID&attachment_id=AID&filename=NAME&mime_type=TYPE). The user can tap to preview and export.\n" +
 				"- When summarizing fetched web content, preserve important source links from the original page. Include them inline next to the relevant claims so users can click through to the source.",
 		},
 	}
