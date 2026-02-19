@@ -21,6 +21,7 @@ final class ChatViewModel: ObservableObject {
     private var watchThreadTask: Task<Void, Never>?
     private var watchingThreadID: String?
     private var threadEventState = ThreadEventReducerState()
+    private var staleTurnTimer: Task<Void, Never>?
 
     private static let createdAtFormatter = ISO8601DateFormatter()
 
@@ -32,6 +33,7 @@ final class ChatViewModel: ObservableObject {
 
     deinit {
         watchThreadTask?.cancel()
+        staleTurnTimer?.cancel()
     }
 
     func bootstrapIfNeeded() async {
@@ -258,21 +260,39 @@ final class ChatViewModel: ObservableObject {
 
         if effect.receivedProgressSignal {
             isAwaitingAssistantProgress = false
+            cancelStaleTurnTimer()
         }
 
         if effect.shouldResumeAwaitingProgress && !effect.reachedTurnTerminal {
             isAwaitingAssistantProgress = true
+            resetStaleTurnTimer()
         }
 
         if effect.reachedTurnTerminal {
             isBusy = false
             isAwaitingAssistantProgress = false
+            cancelStaleTurnTimer()
         }
 
         if let failure = effect.turnFailureMessage,
            !failure.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             errorText = failure
         }
+    }
+
+    private func resetStaleTurnTimer() {
+        staleTurnTimer?.cancel()
+        staleTurnTimer = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 90_000_000_000)
+            guard !Task.isCancelled else { return }
+            self?.errorText = "Response is taking longer than expected."
+            self?.isAwaitingAssistantProgress = false
+        }
+    }
+
+    private func cancelStaleTurnTimer() {
+        staleTurnTimer?.cancel()
+        staleTurnTimer = nil
     }
 
     private func refreshMessagesOnly() async throws {

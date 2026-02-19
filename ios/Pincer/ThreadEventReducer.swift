@@ -386,6 +386,8 @@ enum ThreadEventReducer {
                 state.turnActivities[resumedTurnID]?.status = .running
             }
 
+            effect.shouldResumeAwaitingProgress = true
+
             // Clear draft message mappings so the next assistant response creates
             // a new message instead of overwriting the previous step's message.
             let resumeKey = turnScopedKey(turnID: event.turnID, fallback: "")

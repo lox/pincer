@@ -48,6 +48,7 @@ const (
 	maxBashExecTimeout                = 15 * time.Minute
 	maxBashOutputBytes                = 8 * 1024
 	maxBashSystemMessageChars         = 4 * 1024
+	maxToolResultMessageChars         = 4 * 1024
 	maxInlineToolSteps                = 10
 )
 
@@ -965,7 +966,12 @@ func (a *App) executeApprovedAction(actionID string) error {
 			return err
 		}
 		// Also persist as internal message so the planner sees the result on continuation.
-		toolResultMsg := fmt.Sprintf("[tool_result:%s] %s", item.Tool, executionSystemMsg)
+		// Truncate to keep planner context manageable.
+		plannerResult := executionSystemMsg
+		if len(plannerResult) > maxToolResultMessageChars {
+			plannerResult = plannerResult[:maxToolResultMessageChars] + "\n[truncated]"
+		}
+		toolResultMsg := fmt.Sprintf("[tool_result:%s] %s", item.Tool, plannerResult)
 		if _, err := finalizeTx.Exec(`
 			INSERT INTO messages(message_id, thread_id, role, content, created_at)
 			VALUES(?, ?, 'internal', ?, ?)
@@ -1116,6 +1122,13 @@ func (a *App) planTurn(ctx context.Context, threadID, userMessage string, step, 
 		return agent.PlanResult{}, fmt.Errorf("load planner history: %w", err)
 	}
 
+	var historyBytes int
+	for _, m := range history {
+		historyBytes += len(m.Content)
+	}
+	a.logger.Debug("calling planner", "thread_id", threadID, "step", step, "history_messages", len(history), "history_bytes", historyBytes)
+
+	planStart := time.Now()
 	plan, err := a.planner.Plan(ctx, agent.PlanRequest{
 		ThreadID:    threadID,
 		UserMessage: userMessage,
@@ -1124,8 +1137,10 @@ func (a *App) planTurn(ctx context.Context, threadID, userMessage string, step, 
 		MaxSteps:    maxSteps,
 	})
 	if err != nil {
+		a.logger.Warn("planner call failed", "thread_id", threadID, "step", step, "duration", time.Since(planStart), "error", err)
 		return agent.PlanResult{}, err
 	}
+	a.logger.Debug("planner call completed", "thread_id", threadID, "step", step, "duration", time.Since(planStart), "actions", len(plan.ProposedActions))
 
 	assistant := strings.TrimSpace(plan.AssistantMessage)
 	if assistant == "" {

@@ -938,7 +938,11 @@ func (a *App) executeTurnFromStep(ctx context.Context, threadID, userText, turnI
 			`, newID("msg"), threadID, callMsg, msgNow); err != nil {
 				return nil, fmt.Errorf("insert tool call message: %w", err)
 			}
-			resultMsg := fmt.Sprintf("[tool_result:%s] %s", tc.action.Tool, r.output)
+			plannerOutput := r.output
+			if len(plannerOutput) > maxToolResultMessageChars {
+				plannerOutput = plannerOutput[:maxToolResultMessageChars] + "\n[truncated]"
+			}
+			resultMsg := fmt.Sprintf("[tool_result:%s] %s", tc.action.Tool, plannerOutput)
 			if _, err := a.db.ExecContext(ctx, `
 				INSERT INTO messages(message_id, thread_id, role, content, created_at)
 				VALUES(?, ?, 'internal', ?, ?)

@@ -278,7 +278,7 @@ var plannerTools = []openAITool{
 		Type: "function",
 		Function: openAIToolFunction{
 			Name:        "web_fetch",
-			Description: "Fetch the raw content of a URL. Returns the HTTP status code, content type, and body text. Use this to read specific pages, API responses, or documents. Subject to size limits and SSRF protections. Prefer web_summarize for long pages where a summary is sufficient.",
+			Description: "Fetch the raw content of a URL. Returns HTTP status, content type, and body text. Best for APIs, JSON endpoints, and short plain-text pages. Do NOT use for HTML web pages — use web_summarize instead, which extracts readable content. Subject to size limits and SSRF protections.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -398,6 +398,9 @@ var plannerTools = []openAITool{
 }
 
 func (p *OpenAIPlanner) planWithModel(ctx context.Context, model string, req PlanRequest, repair bool) (PlanResult, error) {
+	reqCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	defer cancel()
+
 	messages := []openAIMessage{
 		{
 			Role: "system",
@@ -448,7 +451,7 @@ func (p *OpenAIPlanner) planWithModel(ctx context.Context, model string, req Pla
 		return PlanResult{}, err
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/chat/completions", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(reqCtx, http.MethodPost, p.baseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return PlanResult{}, err
 	}
