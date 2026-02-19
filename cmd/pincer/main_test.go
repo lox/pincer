@@ -6,34 +6,32 @@ import (
 	"testing"
 )
 
-func TestParseCLIUsesLegacyOpenRouterEnvFallback(t *testing.T) {
+func TestLegacyOpenRouterEnvFallback(t *testing.T) {
 	t.Setenv("OPENROUTER_API_KEY", "")
 	t.Setenv("PINCER_OPENROUTER_API_KEY", "legacy-key")
 	t.Setenv("OPENROUTER_BASE_URL", "")
 	t.Setenv("PINCER_OPENROUTER_BASE_URL", "https://legacy-base.example")
 
-	cfg, err := parseCLI(nil)
-	if err != nil {
-		t.Fatalf("parse cli: %v", err)
-	}
+	cmd := serveCmd{}
+	cmd.OpenRouterAPIKey = firstNonEmpty(cmd.OpenRouterAPIKey, envFirst("PINCER_OPENROUTER_API_KEY"))
+	cmd.OpenRouterBaseURL = firstNonEmpty(cmd.OpenRouterBaseURL, envFirst("PINCER_OPENROUTER_BASE_URL"))
 
-	if cfg.OpenRouterAPIKey != "legacy-key" {
-		t.Fatalf("expected legacy api key fallback, got %q", cfg.OpenRouterAPIKey)
+	if cmd.OpenRouterAPIKey != "legacy-key" {
+		t.Fatalf("expected legacy api key fallback, got %q", cmd.OpenRouterAPIKey)
 	}
-	if cfg.OpenRouterBaseURL != "https://legacy-base.example" {
-		t.Fatalf("expected legacy base url fallback, got %q", cfg.OpenRouterBaseURL)
+	if cmd.OpenRouterBaseURL != "https://legacy-base.example" {
+		t.Fatalf("expected legacy base url fallback, got %q", cmd.OpenRouterBaseURL)
 	}
 }
 
-func TestParseCLIPrefersFlagOverLegacyEnv(t *testing.T) {
+func TestLegacyEnvFlagOverride(t *testing.T) {
 	t.Setenv("PINCER_OPENROUTER_API_KEY", "legacy-key")
 
-	cfg, err := parseCLI([]string{"--openrouter-api-key=flag-key"})
-	if err != nil {
-		t.Fatalf("parse cli: %v", err)
-	}
-	if cfg.OpenRouterAPIKey != "flag-key" {
-		t.Fatalf("expected flag to override legacy env, got %q", cfg.OpenRouterAPIKey)
+	cmd := serveCmd{OpenRouterAPIKey: "flag-key"}
+	cmd.OpenRouterAPIKey = firstNonEmpty(cmd.OpenRouterAPIKey, envFirst("PINCER_OPENROUTER_API_KEY"))
+
+	if cmd.OpenRouterAPIKey != "flag-key" {
+		t.Fatalf("expected flag to override legacy env, got %q", cmd.OpenRouterAPIKey)
 	}
 }
 

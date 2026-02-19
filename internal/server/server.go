@@ -77,8 +77,9 @@ type App struct {
 	webFetcher             *agent.WebFetcher
 	imageDescriber         *agent.ImageDescriber
 	imageProxyRewriter     *agent.ImageProxyRewriter
-	ownerID                string
-	llmConfigured          bool
+	gmailClient *agent.GmailClient
+	ownerID     string
+	llmConfigured            bool
 	stopCh                 chan struct{}
 	doneCh                 chan struct{}
 	closeOnce              sync.Once
@@ -275,16 +276,19 @@ func New(cfg AppConfig) (*App, error) {
 
 	imageProxyRewriter := agent.NewImageProxyRewriter([]byte(tokenHMACKey), "/proxy/image")
 
+	gmailClient := agent.NewGmailClient()
+
 	app := &App{
-		db:                     db,
-		tokenHMACKey:           []byte(tokenHMACKey),
-		logger:                 logger,
-		planner:                planner,
-		kagiAPIKey:             strings.TrimSpace(cfg.KagiAPIKey),
-		webFetcher:             webFetcher,
-		imageDescriber:         imageDescriber,
-		imageProxyRewriter:     imageProxyRewriter,
-		ownerID:                defaultOwnerID,
+		db:                 db,
+		tokenHMACKey:       []byte(tokenHMACKey),
+		logger:             logger,
+		planner:            planner,
+		kagiAPIKey:         strings.TrimSpace(cfg.KagiAPIKey),
+		webFetcher:         webFetcher,
+		imageDescriber:     imageDescriber,
+		imageProxyRewriter: imageProxyRewriter,
+		gmailClient:        gmailClient,
+		ownerID:            defaultOwnerID,
 		llmConfigured:          cfg.OpenRouterAPIKey != "" || cfg.Planner != nil,
 		stopCh:                 make(chan struct{}),
 		doneCh:                 make(chan struct{}),
@@ -835,6 +839,47 @@ func (a *App) executeApprovedAction(actionID string) error {
 
 		executionSystemMsg = bashExecutionSystemMessage(item.ActionID, result)
 		actionExecutedAuditPayload = bashExecutionAuditPayload(item.Tool, result)
+	} else if strings.EqualFold(item.Tool, "gmail_create_draft") {
+		if a.gmailClient != nil {
+			var args agent.GmailCreateDraftArgs
+			if err := json.Unmarshal([]byte(item.ArgsJSON), &args); err == nil {
+				oauthToken, tokenErr := a.loadOAuthToken(item.UserID, "user", "google")
+				if tokenErr != nil {
+					executionSystemMsg = fmt.Sprintf("[gmail_create_draft] error: no OAuth token: %v", tokenErr)
+				} else if oauthToken.IsExpired() {
+					executionSystemMsg = "[gmail_create_draft] error: OAuth token expired"
+				} else {
+					result, draftErr := a.gmailClient.CreateDraft(streamCtx, oauthToken.AccessToken, args)
+					if draftErr != nil {
+						executionSystemMsg = fmt.Sprintf("[gmail_create_draft] error: %v", draftErr)
+					} else {
+						executionSystemMsg = fmt.Sprintf("[gmail_create_draft] Draft created. Draft ID: %s, Message ID: %s", result.DraftID, result.MessageID)
+						actionExecutedAuditPayload = fmt.Sprintf(`{"draft_id":%q,"message_id":%q,"to":%q,"subject":%q}`, result.DraftID, result.MessageID, args.To, args.Subject)
+					}
+				}
+			}
+		}
+	} else if strings.EqualFold(item.Tool, "gmail_send_draft") {
+		if a.gmailClient != nil {
+			var args agent.GmailSendDraftArgs
+			if err := json.Unmarshal([]byte(item.ArgsJSON), &args); err == nil {
+				// Send draft uses bot identity per spec.
+				oauthToken, tokenErr := a.loadOAuthToken(item.UserID, "bot", "google")
+				if tokenErr != nil {
+					executionSystemMsg = fmt.Sprintf("[gmail_send_draft] error: no bot OAuth token: %v", tokenErr)
+				} else if oauthToken.IsExpired() {
+					executionSystemMsg = "[gmail_send_draft] error: bot OAuth token expired"
+				} else {
+					result, sendErr := a.gmailClient.SendDraft(streamCtx, oauthToken.AccessToken, args)
+					if sendErr != nil {
+						executionSystemMsg = fmt.Sprintf("[gmail_send_draft] error: %v", sendErr)
+					} else {
+						executionSystemMsg = fmt.Sprintf("[gmail_send_draft] Draft sent. Message ID: %s, Thread ID: %s", result.MessageID, result.ThreadID)
+						actionExecutedAuditPayload = fmt.Sprintf(`{"message_id":%q,"thread_id":%q,"draft_id":%q}`, result.MessageID, result.ThreadID, args.DraftID)
+					}
+				}
+			}
+		}
 	}
 
 	finalizeTx, err := a.db.Begin()
@@ -1122,9 +1167,13 @@ func riskClassForTool(tool string) string {
 	switch strings.ToLower(strings.TrimSpace(tool)) {
 	case "web_search", "web_summarize", "web_fetch", "image_describe":
 		return "READ"
-	case "gmail_send_draft", "gmail_send_message":
+	case "gmail_search", "gmail_read", "gmail_get_thread":
+		return "READ"
+	case "gmail_send_draft":
 		return "EXFILTRATION"
-	case "artifact_put", "notes_write", "gmail_create_draft_reply":
+	case "gmail_create_draft":
+		return "WRITE"
+	case "artifact_put", "notes_write":
 		return "WRITE"
 	default:
 		return "HIGH"
@@ -1828,6 +1877,15 @@ func migrate(db *sql.DB) error {
 			created_at TEXT NOT NULL,
 			PRIMARY KEY(domain, thread_id)
 		);`,
+		`CREATE TABLE IF NOT EXISTS oauth_tokens(
+			user_id TEXT NOT NULL,
+			identity TEXT NOT NULL,
+			provider TEXT NOT NULL,
+			token_json TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			PRIMARY KEY(user_id, identity, provider)
+		);`,
 		`CREATE TABLE IF NOT EXISTS cached_images(
 			url_hash TEXT PRIMARY KEY,
 			original_url TEXT NOT NULL,
@@ -1851,6 +1909,38 @@ func migrate(db *sql.DB) error {
 	}
 
 	return nil
+}
+
+func (a *App) storeOAuthToken(userID, identity, provider string, token agent.OAuthToken) error {
+	tokenJSON, err := json.Marshal(token)
+	if err != nil {
+		return fmt.Errorf("marshal oauth token: %w", err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err = a.db.Exec(`
+		INSERT INTO oauth_tokens(user_id, identity, provider, token_json, created_at, updated_at)
+		VALUES(?, ?, ?, ?, ?, ?)
+		ON CONFLICT(user_id, identity, provider) DO UPDATE SET
+			token_json = excluded.token_json,
+			updated_at = excluded.updated_at
+	`, userID, identity, provider, string(tokenJSON), now, now)
+	return err
+}
+
+func (a *App) loadOAuthToken(userID, identity, provider string) (agent.OAuthToken, error) {
+	var tokenJSON string
+	err := a.db.QueryRow(`
+		SELECT token_json FROM oauth_tokens
+		WHERE user_id = ? AND identity = ? AND provider = ?
+	`, userID, identity, provider).Scan(&tokenJSON)
+	if err != nil {
+		return agent.OAuthToken{}, err
+	}
+	var token agent.OAuthToken
+	if err := json.Unmarshal([]byte(tokenJSON), &token); err != nil {
+		return agent.OAuthToken{}, fmt.Errorf("unmarshal oauth token: %w", err)
+	}
+	return token, nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

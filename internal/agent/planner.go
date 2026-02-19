@@ -223,11 +223,16 @@ type openAIChatCompletionResponse struct {
 }
 
 var knownTools = map[string]bool{
-	"web_search":     true,
-	"web_summarize":  true,
-	"web_fetch":      true,
-	"image_describe": true,
-	"run_bash":       true,
+	"web_search":        true,
+	"web_summarize":     true,
+	"web_fetch":         true,
+	"image_describe":    true,
+	"gmail_search":      true,
+	"gmail_read":        true,
+	"gmail_get_thread":  true,
+	"gmail_create_draft": true,
+	"gmail_send_draft":  true,
+	"run_bash":          true,
 }
 
 var plannerTools = []openAITool{
@@ -286,6 +291,82 @@ var plannerTools = []openAITool{
 					"prompt": {"type": "string", "description": "Optional specific question or focus for the analysis"}
 				},
 				"required": ["url"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: openAIToolFunction{
+			Name:        "gmail_search",
+			Description: "Search Gmail messages. Returns message summaries matching the query. Use Gmail search syntax (from:, to:, subject:, is:unread, etc.).",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"query": {"type": "string", "description": "Gmail search query (supports Gmail search operators)"},
+					"max_results": {"type": "integer", "description": "Maximum results to return (default 10, max 20)"}
+				},
+				"required": ["query"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: openAIToolFunction{
+			Name:        "gmail_read",
+			Description: "Read the full content of a specific Gmail message by its ID. Use gmail_search first to find message IDs.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"message_id": {"type": "string", "description": "The Gmail message ID to read"}
+				},
+				"required": ["message_id"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: openAIToolFunction{
+			Name:        "gmail_get_thread",
+			Description: "Get all messages in a Gmail thread. Returns every message in the conversation thread, including replies. Use this to see the full conversation history, check if you replied, or read follow-ups. Use gmail_search first to find thread IDs.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"thread_id": {"type": "string", "description": "The Gmail thread ID"}
+				},
+				"required": ["thread_id"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: openAIToolFunction{
+			Name:        "gmail_create_draft",
+			Description: "Create a draft email in Gmail. The draft is saved but NOT sent — it requires separate approval to send. Use this for composing emails that need review.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"to": {"type": "string", "description": "Recipient email address(es)"},
+					"subject": {"type": "string", "description": "Email subject line"},
+					"body": {"type": "string", "description": "Email body text"},
+					"cc": {"type": "string", "description": "CC email address(es)"},
+					"reply_to": {"type": "string", "description": "Message ID to reply to (for threading)"},
+					"thread_id": {"type": "string", "description": "Gmail thread ID to attach the draft to"}
+				},
+				"required": ["to", "subject", "body"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: openAIToolFunction{
+			Name:        "gmail_send_draft",
+			Description: "Send an existing Gmail draft. This actually delivers the email and requires explicit approval. Only available for bot identity.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"draft_id": {"type": "string", "description": "The draft ID to send (from gmail_create_draft result)"}
+				},
+				"required": ["draft_id"]
 			}`),
 		},
 	},
@@ -503,6 +584,46 @@ func justificationForAction(tool string, args json.RawMessage) string {
 		}
 		if json.Unmarshal(args, &a) == nil && strings.TrimSpace(a.URL) != "" {
 			return fmt.Sprintf("Describe image: %s", strings.TrimSpace(a.URL))
+		}
+	case "gmail_search":
+		var a struct {
+			Query string `json:"query"`
+		}
+		if json.Unmarshal(args, &a) == nil && strings.TrimSpace(a.Query) != "" {
+			return fmt.Sprintf("Search Gmail: %s", strings.TrimSpace(a.Query))
+		}
+	case "gmail_read":
+		var a struct {
+			MessageID string `json:"message_id"`
+		}
+		if json.Unmarshal(args, &a) == nil && strings.TrimSpace(a.MessageID) != "" {
+			return fmt.Sprintf("Read email: %s", strings.TrimSpace(a.MessageID))
+		}
+	case "gmail_get_thread":
+		var a struct {
+			ThreadID string `json:"thread_id"`
+		}
+		if json.Unmarshal(args, &a) == nil && strings.TrimSpace(a.ThreadID) != "" {
+			return fmt.Sprintf("Get thread: %s", strings.TrimSpace(a.ThreadID))
+		}
+	case "gmail_create_draft":
+		var a struct {
+			To      string `json:"to"`
+			Subject string `json:"subject"`
+		}
+		if json.Unmarshal(args, &a) == nil && strings.TrimSpace(a.To) != "" {
+			subj := strings.TrimSpace(a.Subject)
+			if subj == "" {
+				subj = "(no subject)"
+			}
+			return fmt.Sprintf("Draft to %s: %s", strings.TrimSpace(a.To), subj)
+		}
+	case "gmail_send_draft":
+		var a struct {
+			DraftID string `json:"draft_id"`
+		}
+		if json.Unmarshal(args, &a) == nil && strings.TrimSpace(a.DraftID) != "" {
+			return fmt.Sprintf("Send draft: %s", strings.TrimSpace(a.DraftID))
 		}
 	}
 	return "Proposed by planning model."

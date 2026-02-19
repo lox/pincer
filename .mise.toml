@@ -15,11 +15,11 @@ run = "go test ./..."
 
 [tasks.run]
 description = "Run the backend server"
-run = "go run ./cmd/pincer"
+run = "go run ./cmd/pincer serve"
 
 [tasks.dev]
 description = "Run the backend in dev mode with a fixed HMAC key"
-run = "go run ./cmd/pincer"
+run = "go run ./cmd/pincer serve"
 
 [tasks.reset-db]
 description = "Reset local dev database"

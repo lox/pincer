@@ -29,7 +29,7 @@ trap cleanup EXIT
 # --- Start backend in tmux ---------------------------------------------------
 tmux kill-session -t "${SESSION}" 2>/dev/null || true
 tmux new-session -d -s "${SESSION}" \
-  "cd '${ROOT_DIR}' && PINCER_HTTP_ADDR='${HTTP_ADDR}' PINCER_DB_PATH='${DB_PATH}' PINCER_TOKEN_HMAC_KEY='${HMAC_KEY}' '${GO_BIN}' run ./cmd/pincer"
+  "cd '${ROOT_DIR}' && PINCER_HTTP_ADDR='${HTTP_ADDR}' PINCER_DB_PATH='${DB_PATH}' PINCER_TOKEN_HMAC_KEY='${HMAC_KEY}' '${GO_BIN}' run ./cmd/pincer serve"
 
 for _ in $(seq 1 30); do
   code="$(curl -s -o /dev/null -w "%{http_code}" -X POST "${BASE_URL}/pincer.protocol.v1.AuthService/CreatePairingCode" -H "Content-Type: application/json" -d '{}' || true)"

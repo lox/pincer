@@ -61,11 +61,11 @@ Goal:
 
 Steps:
 
-- [ ] Add Google OAuth token storage and encryption for user + bot identities.
-- [ ] Add Gmail read/search/snippet tools.
-- [ ] Add Gmail draft creation tools.
-- [ ] Add bot send tool behind explicit approval.
-- [ ] Keep user mailbox send disabled.
+- [x] Add Google OAuth token storage and encryption for user + bot identities.
+- [x] Add Gmail read/search/snippet tools.
+- [x] Add Gmail draft creation tools.
+- [x] Add bot send tool behind explicit approval.
+- [x] Keep user mailbox send disabled.
 - [ ] Add Calendar read tool.
 - [x] Add web search tool (Kagi Search API) and web summarize tool (Kagi Universal Summarizer API).
 - [x] Add web_fetch raw URL read tool with SSRF and size constraints.
@@ -237,6 +237,8 @@ When memory and long-horizon primitives exist (Phase 4), adopt structured benchm
 - [x] Simplified iOS chat timeline (messages + appended approvals) with full activity state tracking in reducer.
 - [x] `image_describe` multimodal tool via vision model (READ, inline execution, `anthropic/claude-opus-4.6` default).
 - [x] HMAC-signed image proxy (`/proxy/image`) with goldmark AST rewriter: rewrites `![](url)` to proxied URLs, strips raw HTML from assistant messages.
+- [x] Gmail integration: `gmail_search` (READ), `gmail_read` (READ), `gmail_create_draft` (WRITE), `gmail_send_draft` (EXFILTRATION/bot-only).
+- [x] Google OAuth token storage with AES-256-GCM encryption at rest (`oauth_tokens` table, `GOOGLE_OAUTH_ENCRYPTION_KEY` config).
 - [ ] Phase 2 integrations continued.
 
 Next priority:
