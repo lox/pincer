@@ -207,7 +207,15 @@ Test flow: launch app → send chat message → switch to Approvals tab → appr
 
 XCUITests use the accessibility identifiers defined in `ios/Pincer/ContentView.swift` (`A11y` enum).
 
-### 11.6 Environment overrides
+### 11.6 Debugging threads
+
+Use the `thread` subcommand to inspect a thread's messages:
+
+- `go run ./cmd/pincer thread <thread-id>` — render as markdown
+- `go run ./cmd/pincer thread <thread-id> --format=json` — structured JSON
+- `go run ./cmd/pincer thread <thread-id> --all` — include internal messages
+
+### 11.7 Environment overrides
 
 The scripts honor:
 

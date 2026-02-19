@@ -17,8 +17,8 @@ import (
 	charmLog "github.com/charmbracelet/log"
 	"github.com/lox/pincer/internal/agent"
 	"github.com/lox/pincer/internal/server"
-	_ "modernc.org/sqlite"
 	"golang.org/x/oauth2"
+	_ "modernc.org/sqlite"
 	"tailscale.com/tsnet"
 )
 
@@ -27,24 +27,25 @@ type cli struct {
 	LogFormat string `name:"log-format" help:"Log output format." env:"PINCER_LOG_FORMAT" default:"text" enum:"text,json"`
 
 	Serve  serveCmd  `cmd:"" help:"Start the backend server." default:"withargs"`
+	Thread threadCmd `cmd:"" help:"Display a thread's messages."`
 	Google googleCmd `cmd:"" help:"Google integration commands."`
 }
 
 // serveCmd contains all flags for running the server.
 type serveCmd struct {
-	HTTPAddr                 string `name:"http-addr" help:"HTTP listen address." env:"PINCER_HTTP_ADDR" default:":8080"`
-	DBPath                   string `name:"db-path" help:"SQLite database path." env:"PINCER_DB_PATH" default:"./pincer.db"`
-	TokenHMACKey             string `name:"token-hmac-key" help:"HMAC key for bearer token signing." env:"PINCER_TOKEN_HMAC_KEY"`
-	OpenRouterAPIKey         string `name:"openrouter-api-key" help:"OpenRouter API key." env:"OPENROUTER_API_KEY"`
-	OpenRouterBaseURL        string `name:"openrouter-base-url" help:"OpenRouter API base URL." env:"OPENROUTER_BASE_URL"`
-	KagiAPIKey               string `name:"kagi-api-key" help:"Kagi API key for web search and summarization." env:"KAGI_API_KEY"`
-	ModelPrimary             string `name:"model-primary" help:"Primary model ID." env:"PINCER_MODEL_PRIMARY" default:"anthropic/claude-opus-4.6"`
-	ModelFallback            string `name:"model-fallback" help:"Fallback model ID." env:"PINCER_MODEL_FALLBACK"`
-	GoogleClientID    string `name:"google-client-id" help:"Google OAuth client ID for token refresh." env:"GOOGLE_CLIENT_ID"`
+	HTTPAddr           string `name:"http-addr" help:"HTTP listen address." env:"PINCER_HTTP_ADDR" default:":8080"`
+	DBPath             string `name:"db-path" help:"SQLite database path." env:"PINCER_DB_PATH" default:"./pincer.db"`
+	TokenHMACKey       string `name:"token-hmac-key" help:"HMAC key for bearer token signing." env:"PINCER_TOKEN_HMAC_KEY"`
+	OpenRouterAPIKey   string `name:"openrouter-api-key" help:"OpenRouter API key." env:"OPENROUTER_API_KEY"`
+	OpenRouterBaseURL  string `name:"openrouter-base-url" help:"OpenRouter API base URL." env:"OPENROUTER_BASE_URL"`
+	KagiAPIKey         string `name:"kagi-api-key" help:"Kagi API key for web search and summarization." env:"KAGI_API_KEY"`
+	ModelPrimary       string `name:"model-primary" help:"Primary model ID." env:"PINCER_MODEL_PRIMARY" default:"anthropic/claude-opus-4.6"`
+	ModelFallback      string `name:"model-fallback" help:"Fallback model ID." env:"PINCER_MODEL_FALLBACK"`
+	GoogleClientID     string `name:"google-client-id" help:"Google OAuth client ID for token refresh." env:"GOOGLE_CLIENT_ID"`
 	GoogleClientSecret string `name:"google-client-secret" help:"Google OAuth client secret for token refresh." env:"GOOGLE_CLIENT_SECRET"`
-	TSHostname string `name:"ts-hostname" help:"Tailscale hostname for tsnet." env:"TS_HOSTNAME" default:"pincer"`
-	TSServiceName            string `name:"ts-service-name" help:"Tailscale service name (svc:<name>)." env:"TS_SERVICE_NAME" default:"pincer"`
-	TSStateDir               string `name:"ts-state-dir" help:"Tailscale state directory." env:"TS_STATE_DIR" default:""`
+	TSHostname         string `name:"ts-hostname" help:"Tailscale hostname for tsnet." env:"TS_HOSTNAME" default:"pincer"`
+	TSServiceName      string `name:"ts-service-name" help:"Tailscale service name (svc:<name>)." env:"TS_SERVICE_NAME" default:"pincer"`
+	TSStateDir         string `name:"ts-state-dir" help:"Tailscale state directory." env:"TS_STATE_DIR" default:""`
 }
 
 // googleCmd groups Google integration subcommands.
@@ -65,11 +66,110 @@ type googleLoginCmd struct {
 
 // googleAuthCmd stores a Google OAuth token manually.
 type googleAuthCmd struct {
+	DBPath       string `name:"db-path" help:"SQLite database path." env:"PINCER_DB_PATH" default:"./pincer.db"`
+	Identity     string `name:"identity" help:"Token identity (user or bot)." enum:"user,bot" required:""`
+	AccessToken  string `name:"access-token" help:"Google OAuth access token." required:""`
+	RefreshToken string `name:"refresh-token" help:"Google OAuth refresh token."`
+	ExpiresIn    int    `name:"expires-in" help:"Token expiry in seconds from now." default:"3600"`
+}
+
+// threadCmd displays a thread's messages.
+type threadCmd struct {
+	ThreadID string `arg:"" help:"Thread ID to display."`
 	DBPath   string `name:"db-path" help:"SQLite database path." env:"PINCER_DB_PATH" default:"./pincer.db"`
-	Identity string `name:"identity" help:"Token identity (user or bot)." enum:"user,bot" required:""`
-	AccessToken   string `name:"access-token" help:"Google OAuth access token." required:""`
-	RefreshToken  string `name:"refresh-token" help:"Google OAuth refresh token."`
-	ExpiresIn     int    `name:"expires-in" help:"Token expiry in seconds from now." default:"3600"`
+	Format   string `name:"format" help:"Output format." enum:"markdown,json" default:"markdown"`
+	All      bool   `name:"all" help:"Include internal messages." default:"false"`
+}
+
+func (cmd *threadCmd) Run(globals *cli) error {
+	db, err := sql.Open("sqlite", cmd.DBPath)
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+
+	// Load thread metadata.
+	var channel, createdAt, title string
+	err = db.QueryRow(`SELECT channel, created_at, COALESCE(title, '') FROM threads WHERE thread_id = ?`, cmd.ThreadID).
+		Scan(&channel, &createdAt, &title)
+	if err == sql.ErrNoRows {
+		return fmt.Errorf("thread %q not found", cmd.ThreadID)
+	}
+	if err != nil {
+		return fmt.Errorf("query thread: %w", err)
+	}
+
+	// Load messages.
+	roleFilter := `AND role != 'internal'`
+	if cmd.All {
+		roleFilter = ""
+	}
+	rows, err := db.Query(fmt.Sprintf(`
+		SELECT message_id, role, content, created_at
+		FROM messages
+		WHERE thread_id = ? %s
+		ORDER BY created_at ASC
+	`, roleFilter), cmd.ThreadID)
+	if err != nil {
+		return fmt.Errorf("query messages: %w", err)
+	}
+	defer rows.Close()
+
+	type message struct {
+		MessageID string `json:"message_id"`
+		Role      string `json:"role"`
+		Content   string `json:"content"`
+		CreatedAt string `json:"created_at"`
+	}
+
+	var messages []message
+	for rows.Next() {
+		var m message
+		if err := rows.Scan(&m.MessageID, &m.Role, &m.Content, &m.CreatedAt); err != nil {
+			return fmt.Errorf("scan message: %w", err)
+		}
+		messages = append(messages, m)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate messages: %w", err)
+	}
+
+	if cmd.Format == "json" {
+		out := struct {
+			ThreadID  string    `json:"thread_id"`
+			Title     string    `json:"title,omitempty"`
+			Channel   string    `json:"channel"`
+			CreatedAt string    `json:"created_at"`
+			Messages  []message `json:"messages"`
+		}{
+			ThreadID:  cmd.ThreadID,
+			Title:     title,
+			Channel:   channel,
+			CreatedAt: createdAt,
+			Messages:  messages,
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(out)
+	}
+
+	// Markdown output.
+	if title != "" {
+		fmt.Printf("# %s\n\n", title)
+	} else {
+		fmt.Printf("# Thread %s\n\n", cmd.ThreadID)
+	}
+	fmt.Printf("**Channel:** %s · **Created:** %s · **Messages:** %d\n\n---\n\n", channel, createdAt, len(messages))
+
+	for _, m := range messages {
+		roleLabel := strings.ToUpper(m.Role[:1]) + m.Role[1:]
+		fmt.Printf("### %s\n", roleLabel)
+		fmt.Printf("_%s_\n\n", m.CreatedAt)
+		fmt.Printf("%s\n\n---\n\n", m.Content)
+	}
+
+	return nil
 }
 
 func (cmd *serveCmd) Run(globals *cli) error {
@@ -84,16 +184,16 @@ func (cmd *serveCmd) Run(globals *cli) error {
 	cmd.OpenRouterBaseURL = firstNonEmpty(cmd.OpenRouterBaseURL, envFirst("PINCER_OPENROUTER_BASE_URL"))
 
 	app, err := server.New(server.AppConfig{
-		DBPath:                   cmd.DBPath,
-		TokenHMACKey:             cmd.TokenHMACKey,
-		OpenRouterAPIKey:         cmd.OpenRouterAPIKey,
-		OpenRouterBaseURL:        cmd.OpenRouterBaseURL,
-		KagiAPIKey:               cmd.KagiAPIKey,
-		GoogleClientID:          cmd.GoogleClientID,
-		GoogleClientSecret:      cmd.GoogleClientSecret,
-		ModelPrimary:             cmd.ModelPrimary,
-		ModelFallback:            cmd.ModelFallback,
-		Logger: logger.With("component", "server"),
+		DBPath:             cmd.DBPath,
+		TokenHMACKey:       cmd.TokenHMACKey,
+		OpenRouterAPIKey:   cmd.OpenRouterAPIKey,
+		OpenRouterBaseURL:  cmd.OpenRouterBaseURL,
+		KagiAPIKey:         cmd.KagiAPIKey,
+		GoogleClientID:     cmd.GoogleClientID,
+		GoogleClientSecret: cmd.GoogleClientSecret,
+		ModelPrimary:       cmd.ModelPrimary,
+		ModelFallback:      cmd.ModelFallback,
+		Logger:             logger.With("component", "server"),
 	})
 	if err != nil {
 		return fmt.Errorf("init app: %w", err)
