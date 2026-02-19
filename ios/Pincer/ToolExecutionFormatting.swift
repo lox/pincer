@@ -57,6 +57,7 @@ private func humanToolName(_ name: String) -> String {
     switch name {
     case "gmail_search": return "Search Gmail"
     case "gmail_read": return "Read email"
+    case "gmail_get_thread": return "Read thread"
     case "gmail_create_draft": return "Create draft"
     case "gmail_send_draft": return "Send draft"
     case "web_search": return "Web search"
