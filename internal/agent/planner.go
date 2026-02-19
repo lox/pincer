@@ -119,7 +119,12 @@ func NewOpenAIPlanner(cfg OpenAIPlannerConfig) (*OpenAIPlanner, error) {
 		return nil, errors.New("primary model is required")
 	}
 	if cfg.HTTPClient == nil {
-		cfg.HTTPClient = &http.Client{Timeout: 45 * time.Second}
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.ResponseHeaderTimeout = 60 * time.Second
+		cfg.HTTPClient = &http.Client{
+			Transport: transport,
+			Timeout:   120 * time.Second,
+		}
 	}
 
 	baseURL := strings.TrimSpace(cfg.BaseURL)

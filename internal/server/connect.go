@@ -1099,12 +1099,9 @@ func (a *App) executeInlineReadTool(ctx context.Context, action agent.ProposedAc
 		if err := json.Unmarshal(action.Args, &args); err != nil {
 			return fmt.Sprintf("invalid gmail_search args: %v", err), err
 		}
-		oauthToken, err := a.loadOAuthToken(a.ownerID, "user", "google")
+		oauthToken, err := a.loadOrRefreshOAuthToken(a.ownerID, "user", "google")
 		if err != nil {
-			return "gmail_search unavailable: no Google OAuth token configured", fmt.Errorf("load oauth token: %w", err)
-		}
-		if oauthToken.IsExpired() {
-			return "gmail_search unavailable: Google OAuth token expired", fmt.Errorf("oauth token expired")
+			return fmt.Sprintf("gmail_search unavailable: %v", err), fmt.Errorf("load oauth token: %w", err)
 		}
 		results, err := a.gmailClient.Search(ctx, oauthToken.AccessToken, args)
 		if err != nil {
@@ -1121,12 +1118,9 @@ func (a *App) executeInlineReadTool(ctx context.Context, action agent.ProposedAc
 		if err := json.Unmarshal(action.Args, &args); err != nil {
 			return fmt.Sprintf("invalid gmail_get_thread args: %v", err), err
 		}
-		oauthToken, err := a.loadOAuthToken(a.ownerID, "user", "google")
+		oauthToken, err := a.loadOrRefreshOAuthToken(a.ownerID, "user", "google")
 		if err != nil {
-			return "gmail_get_thread unavailable: no Google OAuth token configured", fmt.Errorf("load oauth token: %w", err)
-		}
-		if oauthToken.IsExpired() {
-			return "gmail_get_thread unavailable: Google OAuth token expired", fmt.Errorf("oauth token expired")
+			return fmt.Sprintf("gmail_get_thread unavailable: %v", err), fmt.Errorf("load oauth token: %w", err)
 		}
 		result, err := a.gmailClient.GetThread(ctx, oauthToken.AccessToken, args)
 		if err != nil {
@@ -1162,12 +1156,9 @@ func (a *App) executeInlineReadTool(ctx context.Context, action agent.ProposedAc
 		if err := json.Unmarshal(action.Args, &args); err != nil {
 			return fmt.Sprintf("invalid gmail_read args: %v", err), err
 		}
-		oauthToken, err := a.loadOAuthToken(a.ownerID, "user", "google")
+		oauthToken, err := a.loadOrRefreshOAuthToken(a.ownerID, "user", "google")
 		if err != nil {
-			return "gmail_read unavailable: no Google OAuth token configured", fmt.Errorf("load oauth token: %w", err)
-		}
-		if oauthToken.IsExpired() {
-			return "gmail_read unavailable: Google OAuth token expired", fmt.Errorf("oauth token expired")
+			return fmt.Sprintf("gmail_read unavailable: %v", err), fmt.Errorf("load oauth token: %w", err)
 		}
 		result, err := a.gmailClient.Read(ctx, oauthToken.AccessToken, args)
 		if err != nil {

@@ -17,6 +17,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -58,6 +59,8 @@ type AppConfig struct {
 	OpenRouterAPIKey        string
 	OpenRouterBaseURL       string
 	KagiAPIKey              string
+	GoogleClientID          string
+	GoogleClientSecret      string
 	ModelPrimary            string
 	ModelFallback           string
 	Logger                  *charmLog.Logger
@@ -77,8 +80,10 @@ type App struct {
 	webFetcher             *agent.WebFetcher
 	imageDescriber         *agent.ImageDescriber
 	imageProxyRewriter     *agent.ImageProxyRewriter
-	gmailClient *agent.GmailClient
-	ownerID     string
+	gmailClient        *agent.GmailClient
+	googleClientID     string
+	googleClientSecret string
+	ownerID            string
 	llmConfigured            bool
 	stopCh                 chan struct{}
 	doneCh                 chan struct{}
@@ -288,6 +293,8 @@ func New(cfg AppConfig) (*App, error) {
 		imageDescriber:     imageDescriber,
 		imageProxyRewriter: imageProxyRewriter,
 		gmailClient:        gmailClient,
+		googleClientID:     cfg.GoogleClientID,
+		googleClientSecret: cfg.GoogleClientSecret,
 		ownerID:            defaultOwnerID,
 		llmConfigured:          cfg.OpenRouterAPIKey != "" || cfg.Planner != nil,
 		stopCh:                 make(chan struct{}),
@@ -439,9 +446,9 @@ func (a *App) handleGmailAttachmentProxy(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	oauthToken, err := a.loadOAuthToken(a.ownerID, "user", "google")
+	oauthToken, err := a.loadOrRefreshOAuthToken(a.ownerID, "user", "google")
 	if err != nil {
-		a.logger.Warn("gmail attachment proxy: no oauth token", "error", err)
+		a.logger.Warn("gmail attachment proxy: oauth token unavailable", "error", err)
 		http.Error(w, "oauth token not available", http.StatusUnauthorized)
 		return
 	}
@@ -896,11 +903,9 @@ func (a *App) executeApprovedAction(actionID string) error {
 		if a.gmailClient != nil {
 			var args agent.GmailCreateDraftArgs
 			if err := json.Unmarshal([]byte(item.ArgsJSON), &args); err == nil {
-				oauthToken, tokenErr := a.loadOAuthToken(item.UserID, "user", "google")
+				oauthToken, tokenErr := a.loadOrRefreshOAuthToken(item.UserID, "user", "google")
 				if tokenErr != nil {
-					executionSystemMsg = fmt.Sprintf("[gmail_create_draft] error: no OAuth token: %v", tokenErr)
-				} else if oauthToken.IsExpired() {
-					executionSystemMsg = "[gmail_create_draft] error: OAuth token expired"
+					executionSystemMsg = fmt.Sprintf("[gmail_create_draft] error: %v", tokenErr)
 				} else {
 					result, draftErr := a.gmailClient.CreateDraft(streamCtx, oauthToken.AccessToken, args)
 					if draftErr != nil {
@@ -917,11 +922,9 @@ func (a *App) executeApprovedAction(actionID string) error {
 			var args agent.GmailSendDraftArgs
 			if err := json.Unmarshal([]byte(item.ArgsJSON), &args); err == nil {
 				// Send draft uses bot identity per spec.
-				oauthToken, tokenErr := a.loadOAuthToken(item.UserID, "bot", "google")
+				oauthToken, tokenErr := a.loadOrRefreshOAuthToken(item.UserID, "bot", "google")
 				if tokenErr != nil {
-					executionSystemMsg = fmt.Sprintf("[gmail_send_draft] error: no bot OAuth token: %v", tokenErr)
-				} else if oauthToken.IsExpired() {
-					executionSystemMsg = "[gmail_send_draft] error: bot OAuth token expired"
+					executionSystemMsg = fmt.Sprintf("[gmail_send_draft] error: %v", tokenErr)
 				} else {
 					result, sendErr := a.gmailClient.SendDraft(streamCtx, oauthToken.AccessToken, args)
 					if sendErr != nil {
@@ -1996,6 +1999,85 @@ func (a *App) loadOAuthToken(userID, identity, provider string) (agent.OAuthToke
 		return agent.OAuthToken{}, fmt.Errorf("unmarshal oauth token: %w", err)
 	}
 	return token, nil
+}
+
+// loadOrRefreshOAuthToken loads a token and, if expired, attempts to refresh it
+// using the stored refresh token and Google OAuth client credentials.
+func (a *App) loadOrRefreshOAuthToken(userID, identity, provider string) (agent.OAuthToken, error) {
+	token, err := a.loadOAuthToken(userID, identity, provider)
+	if err != nil {
+		return agent.OAuthToken{}, err
+	}
+	if !token.IsExpired() {
+		return token, nil
+	}
+	if token.RefreshToken == "" {
+		return agent.OAuthToken{}, fmt.Errorf("oauth token expired and no refresh token available")
+	}
+	if a.googleClientID == "" || a.googleClientSecret == "" {
+		return agent.OAuthToken{}, fmt.Errorf("oauth token expired and google client credentials not configured")
+	}
+
+	refreshed, err := refreshGoogleToken(a.googleClientID, a.googleClientSecret, token.RefreshToken)
+	if err != nil {
+		return agent.OAuthToken{}, fmt.Errorf("refresh oauth token: %w", err)
+	}
+
+	token.AccessToken = refreshed.AccessToken
+	token.Expiry = refreshed.Expiry
+	if refreshed.RefreshToken != "" {
+		token.RefreshToken = refreshed.RefreshToken
+	}
+
+	if err := a.storeOAuthToken(userID, identity, provider, token); err != nil {
+		a.logger.Warn("failed to persist refreshed oauth token", "error", err)
+	} else {
+		a.logger.Info("oauth token refreshed", "identity", identity, "provider", provider, "expiry", token.Expiry.Format(time.RFC3339))
+	}
+
+	return token, nil
+}
+
+type googleTokenRefreshResponse struct {
+	AccessToken  string `json:"access_token"`
+	ExpiresIn    int    `json:"expires_in"`
+	RefreshToken string `json:"refresh_token,omitempty"`
+	TokenType    string `json:"token_type"`
+}
+
+func refreshGoogleToken(clientID, clientSecret, refreshToken string) (agent.OAuthToken, error) {
+	data := url.Values{
+		"client_id":     {clientID},
+		"client_secret": {clientSecret},
+		"refresh_token": {refreshToken},
+		"grant_type":    {"refresh_token"},
+	}
+
+	resp, err := http.Post("https://oauth2.googleapis.com/token", "application/x-www-form-urlencoded", strings.NewReader(data.Encode()))
+	if err != nil {
+		return agent.OAuthToken{}, fmt.Errorf("token refresh request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return agent.OAuthToken{}, fmt.Errorf("read refresh response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return agent.OAuthToken{}, fmt.Errorf("token refresh failed (status %d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var tokenResp googleTokenRefreshResponse
+	if err := json.Unmarshal(body, &tokenResp); err != nil {
+		return agent.OAuthToken{}, fmt.Errorf("decode refresh response: %w", err)
+	}
+
+	expiry := time.Now().UTC().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
+	return agent.OAuthToken{
+		AccessToken:  tokenResp.AccessToken,
+		RefreshToken: tokenResp.RefreshToken,
+		Expiry:       expiry,
+	}, nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

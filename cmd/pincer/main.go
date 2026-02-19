@@ -40,6 +40,8 @@ type serveCmd struct {
 	KagiAPIKey               string `name:"kagi-api-key" help:"Kagi API key for web search and summarization." env:"KAGI_API_KEY"`
 	ModelPrimary             string `name:"model-primary" help:"Primary model ID." env:"PINCER_MODEL_PRIMARY" default:"anthropic/claude-opus-4.6"`
 	ModelFallback            string `name:"model-fallback" help:"Fallback model ID." env:"PINCER_MODEL_FALLBACK"`
+	GoogleClientID    string `name:"google-client-id" help:"Google OAuth client ID for token refresh." env:"GOOGLE_CLIENT_ID"`
+	GoogleClientSecret string `name:"google-client-secret" help:"Google OAuth client secret for token refresh." env:"GOOGLE_CLIENT_SECRET"`
 	TSHostname string `name:"ts-hostname" help:"Tailscale hostname for tsnet." env:"TS_HOSTNAME" default:"pincer"`
 	TSServiceName            string `name:"ts-service-name" help:"Tailscale service name (svc:<name>)." env:"TS_SERVICE_NAME" default:"pincer"`
 	TSStateDir               string `name:"ts-state-dir" help:"Tailscale state directory." env:"TS_STATE_DIR" default:""`
@@ -87,6 +89,8 @@ func (cmd *serveCmd) Run(globals *cli) error {
 		OpenRouterAPIKey:         cmd.OpenRouterAPIKey,
 		OpenRouterBaseURL:        cmd.OpenRouterBaseURL,
 		KagiAPIKey:               cmd.KagiAPIKey,
+		GoogleClientID:          cmd.GoogleClientID,
+		GoogleClientSecret:      cmd.GoogleClientSecret,
 		ModelPrimary:             cmd.ModelPrimary,
 		ModelFallback:            cmd.ModelFallback,
 		Logger: logger.With("component", "server"),
