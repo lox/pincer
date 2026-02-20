@@ -285,84 +285,80 @@ private struct ChatDetailView: View {
     private let chatBottomAnchorID = "chat_bottom_anchor"
 
     var body: some View {
-        ZStack {
-            PincerPageBackground()
-
-            VStack(spacing: 10) {
-                ScrollViewReader { reader in
-                    ScrollView(showsIndicators: false) {
-                        VStack(alignment: .leading, spacing: 10) {
-                            if model.timelineItems.isEmpty {
-                                EmptyChatCard()
-                            }
-
-                            ForEach(model.timelineItems) { item in
-                                switch item {
-                                case .message(let message):
-                                    ChatMessageRow(message: message)
-                                        .id(item.id)
-                                case .approval(let approval):
-                                    InlineApprovalRow(
-                                        approval: approval,
-                                        isApproving: model.approvingActionIDs.contains(approval.actionID),
-                                        onApprove: {
-                                            Task { await model.approveInline(approval.actionID) }
-                                        }
-                                    )
-                                    .id(item.id)
-                                }
-                            }
-
-                            if model.inlineApprovals.count > 1 {
-                                Button(action: {
-                                    Task { await model.approveAllInline() }
-                                }) {
-                                    Text("Approve All (\(model.inlineApprovals.count))")
-                                        .font(.system(.caption, design: .rounded).weight(.semibold))
-                                        .foregroundStyle(PincerPalette.accent)
-                                        .padding(.horizontal, 12)
-                                        .padding(.vertical, 6)
-                                        .background(PincerPalette.accentSoft)
-                                        .clipShape(Capsule())
-                                }
-                                .frame(maxWidth: .infinity, alignment: .trailing)
-                            }
-
-                            if model.isAwaitingAssistantProgress {
-                                AssistantProcessingRow()
-                                    .id("assistant_processing_row")
-                            }
-
-                            Color.clear
-                                .frame(height: 1)
-                                .id(chatBottomAnchorID)
+        VStack(spacing: 10) {
+            ScrollViewReader { reader in
+                ScrollView(showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        if model.timelineItems.isEmpty {
+                            EmptyChatCard()
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.top, 10)
-                        .padding(.bottom, 6)
+
+                        ForEach(model.timelineItems) { item in
+                            switch item {
+                            case .message(let message):
+                                ChatMessageRow(message: message)
+                                    .id(item.id)
+                            case .approval(let approval):
+                                InlineApprovalRow(
+                                    approval: approval,
+                                    isApproving: model.approvingActionIDs.contains(approval.actionID),
+                                    onApprove: {
+                                        Task { await model.approveInline(approval.actionID) }
+                                    }
+                                )
+                                .id(item.id)
+                            }
+                        }
+
+                        if model.inlineApprovals.count > 1 {
+                            Button(action: {
+                                Task { await model.approveAllInline() }
+                            }) {
+                                Text("Approve All (\(model.inlineApprovals.count))")
+                                    .font(.system(.caption, design: .rounded).weight(.semibold))
+                                    .foregroundStyle(PincerPalette.accent)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 6)
+                                    .background(PincerPalette.accentSoft)
+                                    .clipShape(Capsule())
+                            }
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                        }
+
+                        if model.isAwaitingAssistantProgress {
+                            AssistantProcessingRow()
+                                .id("assistant_processing_row")
+                        }
+
+                        Color.clear
+                            .frame(height: 1)
+                            .id(chatBottomAnchorID)
                     }
-                    .scrollDismissesKeyboard(.interactively)
-                    .onChange(of: model.timelineItems.count) { _, _ in
+                    .padding(.horizontal, 16)
+                    .padding(.top, 10)
+                    .padding(.bottom, 6)
+                }
+                .scrollDismissesKeyboard(.interactively)
+                .onChange(of: model.timelineItems.count) { _, _ in
+                    scrollToBottom(reader)
+                }
+                .onChange(of: model.isAwaitingAssistantProgress) { _, isAwaiting in
+                    if isAwaiting {
                         scrollToBottom(reader)
                     }
-                    .onChange(of: model.isAwaitingAssistantProgress) { _, isAwaiting in
-                        if isAwaiting {
-                            scrollToBottom(reader)
-                        }
-                    }
                 }
-
-                ChatComposer(
-                    text: $model.input,
-                    isBusy: model.isBusy,
-                    onSend: { Task { await model.send() } }
-                )
-                .padding(.horizontal, 16)
-                .padding(.bottom, 8)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+
+            ChatComposer(
+                text: $model.input,
+                isBusy: model.isBusy,
+                onSend: { Task { await model.send() } }
+            )
+            .padding(.horizontal, 16)
+            .padding(.bottom, 8)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+        .background(PincerPalette.page)
         .navigationTitle(model.threadTitle.isEmpty ? "Chat" : model.threadTitle)
         .navigationBarTitleDisplayMode(.inline)
 
@@ -458,46 +454,41 @@ private struct ApprovalsView: View {
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                PincerPageBackground()
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Pending Actions")
+                        .font(.system(.title3, design: .rounded).weight(.semibold))
+                        .foregroundStyle(PincerPalette.textPrimary)
+                        .padding(.horizontal, 16)
+                        .padding(.top, 8)
+                        .accessibilityIdentifier(A11y.approvalsHeading)
 
-                ScrollView(showsIndicators: false) {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Pending Actions")
-                            .font(.system(.title3, design: .rounded).weight(.semibold))
-                            .foregroundStyle(PincerPalette.textPrimary)
+                    if model.approvals.isEmpty {
+                        EmptyApprovalsCard()
                             .padding(.horizontal, 16)
-                            .padding(.top, 8)
-                            .accessibilityIdentifier(A11y.approvalsHeading)
-
-                        if model.approvals.isEmpty {
-                            EmptyApprovalsCard()
-                                .padding(.horizontal, 16)
-                        } else {
-                            ForEach(Array(model.approvals.enumerated()), id: \.element.id) { index, item in
-                                ApprovalCard(
-                                    item: item,
-                                    isBusy: model.isBusy,
-                                    approveIdentifier: index == 0 ? A11y.approvalsApproveFirst : "approval_approve_\(item.actionID)",
-                                    onApprove: {
-                                        Task {
-                                            await model.approve(item.actionID, onSuccess: onApproveSuccess)
-                                        }
+                    } else {
+                        ForEach(Array(model.approvals.enumerated()), id: \.element.id) { index, item in
+                            ApprovalCard(
+                                item: item,
+                                isBusy: model.isBusy,
+                                approveIdentifier: index == 0 ? A11y.approvalsApproveFirst : "approval_approve_\(item.actionID)",
+                                onApprove: {
+                                    Task {
+                                        await model.approve(item.actionID, onSuccess: onApproveSuccess)
                                     }
-                                )
-                                .padding(.horizontal, 16)
-                            }
+                                }
+                            )
+                            .padding(.horizontal, 16)
                         }
                     }
-                    .padding(.bottom, 16)
                 }
-                .scrollDismissesKeyboard(.interactively)
+                .padding(.bottom, 16)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .scrollDismissesKeyboard(.interactively)
+            .background(PincerPalette.page)
             .navigationTitle("Approvals")
             .navigationBarTitleDisplayMode(.large)
-            .toolbarBackground(.visible, for: .navigationBar)
-            .toolbarBackground(PincerPalette.page, for: .navigationBar)
+
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Image(systemName: "ellipsis")
@@ -538,25 +529,20 @@ private struct ScheduleView: View {
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                PincerPageBackground()
-
-                ScrollView(showsIndicators: false) {
-                    VStack(spacing: 12) {
-                        ForEach(items) { item in
-                            ScheduleCard(item: item)
-                        }
+            ScrollView(showsIndicators: false) {
+                VStack(spacing: 12) {
+                    ForEach(items) { item in
+                        ScheduleCard(item: item)
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.top, 10)
-                    .padding(.bottom, 16)
                 }
+                .padding(.horizontal, 16)
+                .padding(.top, 10)
+                .padding(.bottom, 16)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .background(PincerPalette.page)
             .navigationTitle("Schedule")
             .navigationBarTitleDisplayMode(.large)
-            .toolbarBackground(.visible, for: .navigationBar)
-            .toolbarBackground(PincerPalette.page, for: .navigationBar)
+
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Image(systemName: "plus")
@@ -587,25 +573,20 @@ private struct JobsView: View {
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                PincerPageBackground()
-
-                ScrollView(showsIndicators: false) {
-                    VStack(spacing: 12) {
-                        ForEach(items) { item in
-                            JobCard(item: item)
-                        }
+            ScrollView(showsIndicators: false) {
+                VStack(spacing: 12) {
+                    ForEach(items) { item in
+                        JobCard(item: item)
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.top, 10)
-                    .padding(.bottom, 16)
                 }
+                .padding(.horizontal, 16)
+                .padding(.top, 10)
+                .padding(.bottom, 16)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .background(PincerPalette.page)
             .navigationTitle("Jobs")
             .navigationBarTitleDisplayMode(.large)
-            .toolbarBackground(.visible, for: .navigationBar)
-            .toolbarBackground(PincerPalette.page, for: .navigationBar)
+
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Image(systemName: "ellipsis")
@@ -1191,14 +1172,7 @@ private struct SettingsView: View {
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                PincerPageBackground()
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        dismissKeyboard()
-                    }
-
-                ScrollView(showsIndicators: false) {
+            ScrollView(showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("Backend")
                             .font(.system(.title3, design: .rounded).weight(.semibold))
@@ -1257,12 +1231,10 @@ private struct SettingsView: View {
                     .padding(.bottom, 16)
                 }
                 .scrollDismissesKeyboard(.interactively)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .background(PincerPalette.page)
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.large)
-            .toolbarBackground(.visible, for: .navigationBar)
-            .toolbarBackground(PincerPalette.page, for: .navigationBar)
+
             .task {
                 await model.refresh()
             }
