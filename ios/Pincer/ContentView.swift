@@ -987,11 +987,16 @@ private struct MarkdownMessageText: View {
     private var backendBaseURL: URL { AppConfig.baseURL }
 
     var body: some View {
-        StructuredText(markdown: Self.escapeLeadingListMarkers(text), baseURL: backendBaseURL)
-            .font(font)
-            .foregroundStyle(foregroundColor)
-            .textual.textSelection(.enabled)
-            .textual.imageAttachmentLoader(.image(relativeTo: backendBaseURL))
+        VStack(alignment: .leading, spacing: 8) {
+            StructuredText(markdown: Self.stripImages(text), baseURL: backendBaseURL)
+                .font(font)
+                .foregroundStyle(foregroundColor)
+                .textual.textSelection(.enabled)
+
+            ForEach(Self.extractImageURLs(text), id: \.absoluteString) { url in
+                MarkdownImageView(url: url)
+            }
+        }
     }
 
     /// Escape leading ordered list markers so CommonMark doesn't
@@ -1001,6 +1006,51 @@ private struct MarkdownMessageText: View {
             /(?m)^(\d{1,9})([.)])/
         ) { match in
             "\(match.1)\\\(match.2)"
+        }
+    }
+
+    private static let imagePattern = /!\[([^\]]*)\]\(([^)]+)\)/
+
+    /// Strip markdown images from text so StructuredText doesn't try to render them inline.
+    private static func stripImages(_ input: String) -> String {
+        escapeLeadingListMarkers(
+            input.replacing(imagePattern, with: { _ in "" })
+        )
+    }
+
+    /// Extract image URLs from markdown image syntax.
+    private static func extractImageURLs(_ input: String) -> [URL] {
+        input.matches(of: imagePattern).compactMap { match in
+            URL(string: String(match.2))
+        }
+    }
+}
+
+private struct MarkdownImageView: View {
+    let url: URL
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        AsyncImage(url: url) { phase in
+            switch phase {
+            case .success(let image):
+                image
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxHeight: 240)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            case .failure:
+                Button { openURL(url) } label: {
+                    Label("Open image", systemImage: "photo")
+                        .font(.system(.caption, design: .rounded))
+                        .foregroundStyle(PincerPalette.accent)
+                }
+            case .empty:
+                ProgressView()
+                    .frame(height: 60)
+            @unknown default:
+                EmptyView()
+            }
         }
     }
 }

@@ -405,7 +405,7 @@ func (g *GmailClient) doGetLimit(ctx context.Context, accessToken, reqURL string
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
-	req.Header.Set("User-Agent", "Pincer/0.1 (gmail)")
+	req.Header.Set("User-Agent", BrowserUserAgent)
 
 	resp, err := g.httpClient.Do(req)
 	if err != nil {
@@ -432,7 +432,7 @@ func (g *GmailClient) doPost(ctx context.Context, accessToken, reqURL string, pa
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "Pincer/0.1 (gmail)")
+	req.Header.Set("User-Agent", BrowserUserAgent)
 
 	resp, err := g.httpClient.Do(req)
 	if err != nil {

@@ -104,7 +104,7 @@ func (d *ImageDescriber) Describe(ctx context.Context, args ImageDescribeArgs) (
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+d.apiKey)
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("User-Agent", "Pincer/0.1 (image_describe)")
+	httpReq.Header.Set("User-Agent", BrowserUserAgent)
 
 	resp, err := d.httpClient.Do(httpReq)
 	if err != nil {

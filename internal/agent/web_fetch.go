@@ -21,6 +21,10 @@ const (
 	maxFetchResponseBytes  = 1024 * 1024 // 1 MB
 	maxFetchRedirects      = 5
 	maxFetchContentTypeLen = 512
+
+	// BrowserUserAgent is a generic browser user-agent to avoid being blocked
+	// by sites that reject non-browser clients (e.g. Wikimedia 429s).
+	BrowserUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15"
 )
 
 var (
@@ -129,7 +133,7 @@ func (f *WebFetcher) Fetch(ctx context.Context, args FetchArgs) (FetchResult, er
 	if err != nil {
 		return FetchResult{}, err
 	}
-	req.Header.Set("User-Agent", "Pincer/0.1 (web_fetch)")
+	req.Header.Set("User-Agent", BrowserUserAgent)
 	// Prefer markdown (Cloudflare Markdown for Agents), fall back to HTML/JSON/text.
 	req.Header.Set("Accept", "text/markdown, text/html;q=0.9, application/json;q=0.8, text/plain;q=0.7, */*;q=0.5")
 
@@ -246,7 +250,7 @@ func (f *WebFetcher) FetchRawImage(ctx context.Context, rawURL string, maxBytes 
 	if reqErr != nil {
 		return nil, "", 0, reqErr
 	}
-	req.Header.Set("User-Agent", "Pincer/0.1 (image_proxy; +https://github.com/lox/pincer)")
+	req.Header.Set("User-Agent", BrowserUserAgent)
 	req.Header.Set("Accept", "image/*")
 
 	resp, doErr := f.httpClient.Do(req)
