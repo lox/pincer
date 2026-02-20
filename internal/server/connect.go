@@ -86,8 +86,6 @@ func (a *App) isPublicPath(path string) bool {
 	case protocolv1connect.AuthServiceCreatePairingCodeProcedure,
 		protocolv1connect.AuthServiceBindPairingCodeProcedure:
 		return true
-	case "/proxy/image":
-		return true // HMAC signature provides authentication
 	default:
 		return false
 	}
@@ -1226,14 +1224,6 @@ func (a *App) finalizeTurn(ctx context.Context, threadID, turnID, assistantMessa
 	}
 	defer tx.Rollback()
 
-	// Rewrite image URLs in the assistant message to proxied versions
-	// and strip raw HTML to prevent exfiltration via untrusted model output.
-	assistantMessage = a.imageProxyRewriter.Rewrite(assistantMessage)
-
-	// Eagerly download and cache images so the proxy can serve them
-	// even if the upstream CDN blocks direct server-side fetching later.
-	a.prefetchImages(ctx, assistantMessage)
-
 	// Always persist the assistant message so the user sees the LLM's narrative.
 	result.AssistantMessage = assistantMessage
 	if _, err := tx.ExecContext(ctx, `
@@ -1350,33 +1340,6 @@ func (a *App) finalizeTurn(ctx context.Context, threadID, turnID, assistantMessa
 	}
 
 	return result, nil
-}
-
-func (a *App) prefetchImages(ctx context.Context, rewrittenMarkdown string) {
-	images := agent.ExtractProxiedURLs("/proxy/image", rewrittenMarkdown)
-	if len(images) == 0 {
-		return
-	}
-
-	fetchCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-
-	for _, img := range images {
-		body, ct, statusCode, err := a.webFetcher.FetchRawImage(fetchCtx, img.OriginalURL, maxProxyImageBytes)
-		if err != nil {
-			a.logger.Debug("image prefetch failed", "url", img.OriginalURL, "error", err)
-			continue
-		}
-		if statusCode < 200 || statusCode >= 300 {
-			a.logger.Debug("image prefetch upstream error", "url", img.OriginalURL, "status", statusCode)
-			continue
-		}
-		if !isAllowedImageMIME(ct) {
-			continue
-		}
-		a.cacheImage(img.Sig, img.OriginalURL, ct, body)
-		a.logger.Debug("image prefetched", "url", img.OriginalURL, "size", len(body))
-	}
 }
 
 func (a *App) loadThreadMessages(ctx context.Context, threadID string, offset int) ([]*protocolv1.ThreadMessage, error) {

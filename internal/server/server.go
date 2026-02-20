@@ -80,7 +80,6 @@ type App struct {
 	kagiAPIKey             string
 	webFetcher             *agent.WebFetcher
 	imageDescriber         *agent.ImageDescriber
-	imageProxyRewriter     *agent.ImageProxyRewriter
 	gmailClient            *agent.GmailClient
 	googleClientID         string
 	googleClientSecret     string
@@ -280,8 +279,6 @@ func New(cfg AppConfig) (*App, error) {
 		imageDescriber = agent.NewImageDescriber(cfg.OpenRouterAPIKey, cfg.OpenRouterBaseURL)
 	}
 
-	imageProxyRewriter := agent.NewImageProxyRewriter([]byte(tokenHMACKey), "/proxy/image")
-
 	gmailClient := agent.NewGmailClient()
 
 	app := &App{
@@ -292,7 +289,6 @@ func New(cfg AppConfig) (*App, error) {
 		kagiAPIKey:             strings.TrimSpace(cfg.KagiAPIKey),
 		webFetcher:             webFetcher,
 		imageDescriber:         imageDescriber,
-		imageProxyRewriter:     imageProxyRewriter,
 		gmailClient:            gmailClient,
 		googleClientID:         cfg.GoogleClientID,
 		googleClientSecret:     cfg.GoogleClientSecret,
@@ -326,110 +322,8 @@ func (a *App) Close() error {
 func (a *App) Handler() http.Handler {
 	mux := http.NewServeMux()
 	a.registerConnectHandlers(mux)
-	mux.HandleFunc("/proxy/image", a.handleImageProxy)
 	mux.HandleFunc("/proxy/gmail/attachment", a.handleGmailAttachmentProxy)
 	return a.loggingMiddleware(a.authMiddleware(mux))
-}
-
-const (
-	maxProxyImageBytes = 10 * 1024 * 1024 // 10 MB
-	proxyImageTimeout  = 30 * time.Second
-	maxProxyContentLen = 512
-)
-
-func (a *App) handleImageProxy(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	rawURL := r.URL.Query().Get("url")
-	sig := r.URL.Query().Get("sig")
-	if rawURL == "" || sig == "" {
-		http.Error(w, "missing url or sig parameter", http.StatusBadRequest)
-		return
-	}
-
-	if !agent.VerifyURL(a.tokenHMACKey, rawURL, sig) {
-		http.Error(w, "invalid signature", http.StatusForbidden)
-		return
-	}
-
-	// Try serving from cache first.
-	if a.serveCachedImage(w, sig) {
-		return
-	}
-
-	// Cache miss — fetch from upstream.
-	ctx, cancel := context.WithTimeout(r.Context(), proxyImageTimeout)
-	defer cancel()
-
-	body, ct, statusCode, err := a.webFetcher.FetchRawImage(ctx, rawURL, maxProxyImageBytes)
-	if err != nil {
-		a.logger.Warn("image proxy fetch failed", "url", rawURL, "error", err)
-		http.Error(w, "fetch failed", http.StatusBadGateway)
-		return
-	}
-
-	if statusCode < 200 || statusCode >= 300 {
-		http.Error(w, fmt.Sprintf("upstream status %d", statusCode), http.StatusBadGateway)
-		return
-	}
-
-	if !isAllowedImageMIME(ct) {
-		a.logger.Warn("image proxy blocked disallowed MIME type", "url", rawURL, "content_type", ct)
-		http.Error(w, "disallowed content type", http.StatusForbidden)
-		return
-	}
-
-	// Cache for future requests.
-	a.cacheImage(sig, rawURL, ct, body)
-
-	a.serveImageBytes(w, ct, body)
-}
-
-func (a *App) serveCachedImage(w http.ResponseWriter, urlHash string) bool {
-	var ct string
-	var data []byte
-	err := a.db.QueryRow(`SELECT content_type, data FROM cached_images WHERE url_hash = ?`, urlHash).Scan(&ct, &data)
-	if err != nil {
-		return false
-	}
-	a.serveImageBytes(w, ct, data)
-	return true
-}
-
-func (a *App) cacheImage(urlHash, originalURL, contentType string, data []byte) {
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err := a.db.Exec(`
-		INSERT OR IGNORE INTO cached_images(url_hash, original_url, content_type, data, created_at)
-		VALUES(?, ?, ?, ?, ?)
-	`, urlHash, originalURL, contentType, data, now)
-	if err != nil {
-		a.logger.Warn("failed to cache image", "url", originalURL, "error", err)
-	}
-}
-
-func (a *App) serveImageBytes(w http.ResponseWriter, ct string, data []byte) {
-	w.Header().Set("Content-Type", ct)
-	w.Header().Set("Cache-Control", "public, max-age=86400")
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; img-src 'self'; style-src 'none'; script-src 'none'")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(data)
-}
-
-func isAllowedImageMIME(ct string) bool {
-	ct = strings.ToLower(strings.TrimSpace(ct))
-	if i := strings.IndexByte(ct, ';'); i >= 0 {
-		ct = strings.TrimSpace(ct[:i])
-	}
-	switch ct {
-	case "image/png", "image/jpeg", "image/gif", "image/webp", "image/avif":
-		return true
-	default:
-		return false
-	}
 }
 
 const maxGmailAttachmentBytes = 25 * 1024 * 1024 // 25 MB
