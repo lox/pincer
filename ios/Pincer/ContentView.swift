@@ -179,9 +179,7 @@ private struct ThreadListView: View {
     let onRefresh: () async -> Void
 
     var body: some View {
-        ZStack {
-            PincerPageBackground()
-
+        Group {
             if threads.isEmpty && !isLoading {
                 VStack(spacing: 12) {
                     Image(systemName: "message")
@@ -196,6 +194,7 @@ private struct ThreadListView: View {
                             .foregroundStyle(PincerPalette.accent)
                     }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView(showsIndicators: false) {
                     VStack(spacing: 10) {
@@ -221,11 +220,9 @@ private struct ThreadListView: View {
                 }
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(PincerPalette.page)
         .navigationTitle("Chat")
         .navigationBarTitleDisplayMode(.large)
-        .toolbarBackground(.visible, for: .navigationBar)
-        .toolbarBackground(PincerPalette.page, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button(action: onNewChat) {
@@ -368,8 +365,7 @@ private struct ChatDetailView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .navigationTitle(model.threadTitle.isEmpty ? "Chat" : model.threadTitle)
         .navigationBarTitleDisplayMode(.inline)
-        .toolbarBackground(.visible, for: .navigationBar)
-        .toolbarBackground(PincerPalette.page, for: .navigationBar)
+
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {

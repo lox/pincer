@@ -6,4 +6,4 @@ pincer.db-wal
 xcuserdata/
 *.xcuserstate
 decode_events
-pincer
+/pincer
