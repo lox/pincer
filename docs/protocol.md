@@ -78,7 +78,7 @@ Connect-only scope:
 
 1. `AuthService`: pairing code issuance, pairing bind/token issuance, token rotation.
 2. `DevicesService`: list paired devices, revoke device.
-3. `ThreadsService`: create thread, fetch snapshot/history, list messages.
+3. `ThreadsService`: create thread, list threads, fetch snapshot/history, list messages, delete thread.
 4. `TurnsService`: submit a turn via unary (`SendTurn`) and/or stream turn-scoped events (`StartTurn`).
 5. `EventsService`: live/replay stream of thread/system events.
 6. `ApprovalsService`: list pending/executed/rejected approvals and mutate approval state.
@@ -237,8 +237,10 @@ service DevicesService {
 
 service ThreadsService {
   rpc CreateThread(CreateThreadRequest) returns (CreateThreadResponse);
+  rpc ListThreads(ListThreadsRequest) returns (ListThreadsResponse);
   rpc GetThreadSnapshot(GetThreadSnapshotRequest) returns (GetThreadSnapshotResponse);
   rpc ListThreadMessages(ListThreadMessagesRequest) returns (ListThreadMessagesResponse);
+  rpc DeleteThread(DeleteThreadRequest) returns (DeleteThreadResponse);
 }
 
 service TurnsService {
@@ -938,7 +940,7 @@ Approvals:
 1. `ProposedActionCreated` updates pending badge/queue.
 2. `ListApprovals` + status change events keep queue synchronized.
 3. Deterministic summary + preview fields back approval detail UX.
-4. Approval UI can require biometric confirmation before mutate RPCs.
+4. Approval UI confirms actions via explicit approve/reject controls.
 
 Work and Schedules:
 

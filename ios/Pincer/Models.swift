@@ -1,5 +1,19 @@
 import Foundation
 
+struct ThreadSummary: Identifiable {
+    let threadID: String
+    let title: String
+    let createdAt: String
+    let updatedAt: String
+    let messageCount: Int
+
+    var id: String { threadID }
+
+    var displayTitle: String {
+        title.isEmpty ? "New conversation" : title
+    }
+}
+
 struct Message: Codable, Identifiable {
     let messageID: String
     let threadID: String

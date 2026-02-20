@@ -81,11 +81,11 @@ type App struct {
 	webFetcher             *agent.WebFetcher
 	imageDescriber         *agent.ImageDescriber
 	imageProxyRewriter     *agent.ImageProxyRewriter
-	gmailClient        *agent.GmailClient
-	googleClientID     string
-	googleClientSecret string
-	ownerID            string
-	llmConfigured            bool
+	gmailClient            *agent.GmailClient
+	googleClientID         string
+	googleClientSecret     string
+	ownerID                string
+	llmConfigured          bool
 	stopCh                 chan struct{}
 	doneCh                 chan struct{}
 	closeOnce              sync.Once
@@ -285,18 +285,18 @@ func New(cfg AppConfig) (*App, error) {
 	gmailClient := agent.NewGmailClient()
 
 	app := &App{
-		db:                 db,
-		tokenHMACKey:       []byte(tokenHMACKey),
-		logger:             logger,
-		planner:            planner,
-		kagiAPIKey:         strings.TrimSpace(cfg.KagiAPIKey),
-		webFetcher:         webFetcher,
-		imageDescriber:     imageDescriber,
-		imageProxyRewriter: imageProxyRewriter,
-		gmailClient:        gmailClient,
-		googleClientID:     cfg.GoogleClientID,
-		googleClientSecret: cfg.GoogleClientSecret,
-		ownerID:            defaultOwnerID,
+		db:                     db,
+		tokenHMACKey:           []byte(tokenHMACKey),
+		logger:                 logger,
+		planner:                planner,
+		kagiAPIKey:             strings.TrimSpace(cfg.KagiAPIKey),
+		webFetcher:             webFetcher,
+		imageDescriber:         imageDescriber,
+		imageProxyRewriter:     imageProxyRewriter,
+		gmailClient:            gmailClient,
+		googleClientID:         cfg.GoogleClientID,
+		googleClientSecret:     cfg.GoogleClientSecret,
+		ownerID:                defaultOwnerID,
 		llmConfigured:          cfg.OpenRouterAPIKey != "" || cfg.Planner != nil,
 		stopCh:                 make(chan struct{}),
 		doneCh:                 make(chan struct{}),
@@ -332,9 +332,9 @@ func (a *App) Handler() http.Handler {
 }
 
 const (
-	maxProxyImageBytes   = 10 * 1024 * 1024 // 10 MB
-	proxyImageTimeout    = 30 * time.Second
-	maxProxyContentLen   = 512
+	maxProxyImageBytes = 10 * 1024 * 1024 // 10 MB
+	proxyImageTimeout  = 30 * time.Second
+	maxProxyContentLen = 512
 )
 
 func (a *App) handleImageProxy(w http.ResponseWriter, r *http.Request) {
@@ -1066,7 +1066,7 @@ func (a *App) maybeResumeTurn(actionID string) {
 			TurnId:       turnID,
 			Source:       protocolv1.EventSource_SYSTEM,
 			ContentTrust: protocolv1.ContentTrust_TRUSTED_SYSTEM,
-			Payload: &protocolv1.ThreadEvent_TurnCompleted{TurnCompleted: &protocolv1.TurnCompleted{}},
+			Payload:      &protocolv1.ThreadEvent_TurnCompleted{TurnCompleted: &protocolv1.TurnCompleted{}},
 		})
 		a.resumingTurns.Delete(turnID)
 		return
@@ -1976,6 +1976,8 @@ func migrate(db *sql.DB) error {
 	// Additive column migrations for existing databases.
 	addColumns := []struct{ table, column, colDef string }{
 		{"proposed_actions", "turn_id", "TEXT NOT NULL DEFAULT ''"},
+		{"threads", "title", "TEXT NOT NULL DEFAULT ''"},
+		{"threads", "updated_at", "TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, ac := range addColumns {
 		_, _ = db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", ac.table, ac.column, ac.colDef))

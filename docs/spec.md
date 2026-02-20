@@ -365,8 +365,7 @@ Approval UX requirements:
 
 - deterministic backend-rendered approval summaries,
 - clear risk and target display,
-- explicit approve/reject actions,
-- biometric confirmation where enabled.
+- explicit approve/reject actions.
 
 Notifications include intervention and proactive reach-out events with rate limits.
 

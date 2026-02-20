@@ -94,10 +94,16 @@ public protocol Pincer_Protocol_V1_ThreadsServiceClientInterface: Sendable {
     func `createThread`(request: Pincer_Protocol_V1_CreateThreadRequest, headers: Connect.Headers) async -> ResponseMessage<Pincer_Protocol_V1_CreateThreadResponse>
 
     @available(iOS 13, *)
+    func `listThreads`(request: Pincer_Protocol_V1_ListThreadsRequest, headers: Connect.Headers) async -> ResponseMessage<Pincer_Protocol_V1_ListThreadsResponse>
+
+    @available(iOS 13, *)
     func `getThreadSnapshot`(request: Pincer_Protocol_V1_GetThreadSnapshotRequest, headers: Connect.Headers) async -> ResponseMessage<Pincer_Protocol_V1_GetThreadSnapshotResponse>
 
     @available(iOS 13, *)
     func `listThreadMessages`(request: Pincer_Protocol_V1_ListThreadMessagesRequest, headers: Connect.Headers) async -> ResponseMessage<Pincer_Protocol_V1_ListThreadMessagesResponse>
+
+    @available(iOS 13, *)
+    func `deleteThread`(request: Pincer_Protocol_V1_DeleteThreadRequest, headers: Connect.Headers) async -> ResponseMessage<Pincer_Protocol_V1_DeleteThreadResponse>
 }
 
 /// Concrete implementation of `Pincer_Protocol_V1_ThreadsServiceClientInterface`.
@@ -114,6 +120,11 @@ public final class Pincer_Protocol_V1_ThreadsServiceClient: Pincer_Protocol_V1_T
     }
 
     @available(iOS 13, *)
+    public func `listThreads`(request: Pincer_Protocol_V1_ListThreadsRequest, headers: Connect.Headers = [:]) async -> ResponseMessage<Pincer_Protocol_V1_ListThreadsResponse> {
+        return await self.client.unary(path: "/pincer.protocol.v1.ThreadsService/ListThreads", idempotencyLevel: .unknown, request: request, headers: headers)
+    }
+
+    @available(iOS 13, *)
     public func `getThreadSnapshot`(request: Pincer_Protocol_V1_GetThreadSnapshotRequest, headers: Connect.Headers = [:]) async -> ResponseMessage<Pincer_Protocol_V1_GetThreadSnapshotResponse> {
         return await self.client.unary(path: "/pincer.protocol.v1.ThreadsService/GetThreadSnapshot", idempotencyLevel: .unknown, request: request, headers: headers)
     }
@@ -123,11 +134,18 @@ public final class Pincer_Protocol_V1_ThreadsServiceClient: Pincer_Protocol_V1_T
         return await self.client.unary(path: "/pincer.protocol.v1.ThreadsService/ListThreadMessages", idempotencyLevel: .unknown, request: request, headers: headers)
     }
 
+    @available(iOS 13, *)
+    public func `deleteThread`(request: Pincer_Protocol_V1_DeleteThreadRequest, headers: Connect.Headers = [:]) async -> ResponseMessage<Pincer_Protocol_V1_DeleteThreadResponse> {
+        return await self.client.unary(path: "/pincer.protocol.v1.ThreadsService/DeleteThread", idempotencyLevel: .unknown, request: request, headers: headers)
+    }
+
     public enum Metadata {
         public enum Methods {
             public static let createThread = Connect.MethodSpec(name: "CreateThread", service: "pincer.protocol.v1.ThreadsService", type: .unary)
+            public static let listThreads = Connect.MethodSpec(name: "ListThreads", service: "pincer.protocol.v1.ThreadsService", type: .unary)
             public static let getThreadSnapshot = Connect.MethodSpec(name: "GetThreadSnapshot", service: "pincer.protocol.v1.ThreadsService", type: .unary)
             public static let listThreadMessages = Connect.MethodSpec(name: "ListThreadMessages", service: "pincer.protocol.v1.ThreadsService", type: .unary)
+            public static let deleteThread = Connect.MethodSpec(name: "DeleteThread", service: "pincer.protocol.v1.ThreadsService", type: .unary)
         }
     }
 }

@@ -232,16 +232,16 @@ type openAIChatCompletionResponse struct {
 }
 
 var knownTools = map[string]bool{
-	"web_search":        true,
-	"web_summarize":     true,
-	"web_fetch":         true,
-	"image_describe":    true,
-	"gmail_search":      true,
-	"gmail_read":        true,
-	"gmail_get_thread":  true,
+	"web_search":         true,
+	"web_summarize":      true,
+	"web_fetch":          true,
+	"image_describe":     true,
+	"gmail_search":       true,
+	"gmail_read":         true,
+	"gmail_get_thread":   true,
 	"gmail_create_draft": true,
-	"gmail_send_draft":  true,
-	"run_bash":          true,
+	"gmail_send_draft":   true,
+	"run_bash":           true,
 }
 
 var plannerTools = []openAITool{

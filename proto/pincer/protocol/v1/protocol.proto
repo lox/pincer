@@ -121,8 +121,10 @@ service DevicesService {
 
 service ThreadsService {
   rpc CreateThread(CreateThreadRequest) returns (CreateThreadResponse);
+  rpc ListThreads(ListThreadsRequest) returns (ListThreadsResponse);
   rpc GetThreadSnapshot(GetThreadSnapshotRequest) returns (GetThreadSnapshotResponse);
   rpc ListThreadMessages(ListThreadMessagesRequest) returns (ListThreadMessagesResponse);
+  rpc DeleteThread(DeleteThreadRequest) returns (DeleteThreadResponse);
 }
 
 service TurnsService {
@@ -215,6 +217,32 @@ message CreateThreadRequest {}
 message CreateThreadResponse {
   string thread_id = 1;
   uint64 last_sequence = 2;
+}
+
+message ThreadSummary {
+  string thread_id = 1;
+  string title = 2;
+  google.protobuf.Timestamp created_at = 3;
+  google.protobuf.Timestamp updated_at = 4;
+  uint32 message_count = 5;
+}
+
+message ListThreadsRequest {
+  uint32 page_size = 1;
+  string page_token = 2;
+}
+
+message ListThreadsResponse {
+  repeated ThreadSummary items = 1;
+  string next_page_token = 2;
+}
+
+message DeleteThreadRequest {
+  string thread_id = 1;
+}
+
+message DeleteThreadResponse {
+  string thread_id = 1;
 }
 
 message TurnBudget {

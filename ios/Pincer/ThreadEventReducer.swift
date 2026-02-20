@@ -431,13 +431,22 @@ enum ThreadEventReducer {
     ) {
         if let index = messageIndex(for: existingID, in: state.messages) {
             let existing = state.messages[index]
-            state.messages[index] = Message(
-                messageID: finalMessageID,
-                threadID: existing.threadID,
-                role: role,
-                content: content,
-                createdAt: existing.createdAt.isEmpty ? createdAt : existing.createdAt
-            )
+            // When renaming to a different ID, remove any pre-existing message
+            // with finalMessageID first to avoid duplicates (e.g. snapshot message
+            // superseded by event-reconstructed version).
+            if existingID != finalMessageID {
+                state.messages.removeAll { $0.messageID == finalMessageID }
+            }
+            // Re-locate after removal since indices may have shifted.
+            if let updatedIndex = messageIndex(for: existingID, in: state.messages) {
+                state.messages[updatedIndex] = Message(
+                    messageID: finalMessageID,
+                    threadID: existing.threadID,
+                    role: role,
+                    content: content,
+                    createdAt: existing.createdAt.isEmpty ? createdAt : existing.createdAt
+                )
+            }
             return
         }
 

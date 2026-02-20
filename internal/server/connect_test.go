@@ -273,6 +273,289 @@ func TestWatchThreadStreamsBashOutputAndExecutionStatus(t *testing.T) {
 	}
 }
 
+func TestListThreadsReturnsThreadsOrderedByUpdatedAt(t *testing.T) {
+	t.Parallel()
+
+	app := newTestApp(t)
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
+
+	token := bootstrapConnectToken(t, srv.URL)
+	httpClient := newAuthorizedHTTPClient(token)
+
+	threadsClient := protocolv1connect.NewThreadsServiceClient(httpClient, srv.URL)
+	turnsClient := protocolv1connect.NewTurnsServiceClient(httpClient, srv.URL)
+
+	// Create two threads.
+	create1, err := threadsClient.CreateThread(context.Background(), connect.NewRequest(&protocolv1.CreateThreadRequest{}))
+	if err != nil {
+		t.Fatalf("create thread 1: %v", err)
+	}
+	thread1 := create1.Msg.GetThreadId()
+
+	create2, err := threadsClient.CreateThread(context.Background(), connect.NewRequest(&protocolv1.CreateThreadRequest{}))
+	if err != nil {
+		t.Fatalf("create thread 2: %v", err)
+	}
+	thread2 := create2.Msg.GetThreadId()
+
+	// Send a message to thread1 to give it a title and update its updated_at.
+	_, err = turnsClient.SendTurn(context.Background(), connect.NewRequest(&protocolv1.SendTurnRequest{
+		ThreadId:    thread1,
+		UserText:    "Hello from thread one",
+		TriggerType: protocolv1.TriggerType_CHAT_MESSAGE,
+	}))
+	if err != nil {
+		t.Fatalf("send turn to thread1: %v", err)
+	}
+
+	// List threads — thread1 should come first (most recently updated).
+	listResp, err := threadsClient.ListThreads(context.Background(), connect.NewRequest(&protocolv1.ListThreadsRequest{}))
+	if err != nil {
+		t.Fatalf("list threads: %v", err)
+	}
+
+	items := listResp.Msg.GetItems()
+	if len(items) < 2 {
+		t.Fatalf("expected at least 2 threads, got %d", len(items))
+	}
+
+	// First item should be thread1 (most recently updated via message).
+	if items[0].GetThreadId() != thread1 {
+		t.Fatalf("expected first thread to be %s (most recently updated), got %s", thread1, items[0].GetThreadId())
+	}
+
+	// Thread1 should have a title derived from the user message.
+	if items[0].GetTitle() == "" {
+		t.Fatalf("expected thread1 to have a title from the first user message")
+	}
+	if items[0].GetTitle() != "Hello from thread one" {
+		t.Fatalf("expected title %q, got %q", "Hello from thread one", items[0].GetTitle())
+	}
+
+	// Thread1 should have a message count > 0.
+	if items[0].GetMessageCount() == 0 {
+		t.Fatalf("expected thread1 to have message_count > 0")
+	}
+
+	// Thread2 should have no title (no messages sent).
+	found := false
+	for _, item := range items {
+		if item.GetThreadId() == thread2 {
+			found = true
+			if item.GetTitle() != "" {
+				t.Fatalf("expected thread2 to have empty title, got %q", item.GetTitle())
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected to find thread2 in list")
+	}
+}
+
+func TestDeleteThreadRemovesThreadAndMessages(t *testing.T) {
+	t.Parallel()
+
+	app := newTestApp(t)
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
+
+	token := bootstrapConnectToken(t, srv.URL)
+	httpClient := newAuthorizedHTTPClient(token)
+
+	threadsClient := protocolv1connect.NewThreadsServiceClient(httpClient, srv.URL)
+	turnsClient := protocolv1connect.NewTurnsServiceClient(httpClient, srv.URL)
+
+	// Create a thread and send a message.
+	createResp, err := threadsClient.CreateThread(context.Background(), connect.NewRequest(&protocolv1.CreateThreadRequest{}))
+	if err != nil {
+		t.Fatalf("create thread: %v", err)
+	}
+	threadID := createResp.Msg.GetThreadId()
+
+	_, err = turnsClient.SendTurn(context.Background(), connect.NewRequest(&protocolv1.SendTurnRequest{
+		ThreadId:    threadID,
+		UserText:    "hello",
+		TriggerType: protocolv1.TriggerType_CHAT_MESSAGE,
+	}))
+	if err != nil {
+		t.Fatalf("send turn: %v", err)
+	}
+
+	// Verify it appears in ListThreads.
+	listResp, err := threadsClient.ListThreads(context.Background(), connect.NewRequest(&protocolv1.ListThreadsRequest{}))
+	if err != nil {
+		t.Fatalf("list threads: %v", err)
+	}
+	foundBefore := false
+	for _, item := range listResp.Msg.GetItems() {
+		if item.GetThreadId() == threadID {
+			foundBefore = true
+		}
+	}
+	if !foundBefore {
+		t.Fatalf("expected thread to appear in list before deletion")
+	}
+
+	// Delete the thread.
+	_, err = threadsClient.DeleteThread(context.Background(), connect.NewRequest(&protocolv1.DeleteThreadRequest{
+		ThreadId: threadID,
+	}))
+	if err != nil {
+		t.Fatalf("delete thread: %v", err)
+	}
+
+	// Thread should no longer appear in ListThreads.
+	listResp2, err := threadsClient.ListThreads(context.Background(), connect.NewRequest(&protocolv1.ListThreadsRequest{}))
+	if err != nil {
+		t.Fatalf("list threads after delete: %v", err)
+	}
+	for _, item := range listResp2.Msg.GetItems() {
+		if item.GetThreadId() == threadID {
+			t.Fatalf("expected thread to be gone after deletion, but found it in list")
+		}
+	}
+
+	// GetThreadSnapshot should return NOT_FOUND.
+	_, err = threadsClient.GetThreadSnapshot(context.Background(), connect.NewRequest(&protocolv1.GetThreadSnapshotRequest{
+		ThreadId: threadID,
+	}))
+	if err == nil {
+		t.Fatalf("expected error when getting deleted thread snapshot")
+	}
+	if connect.CodeOf(err) != connect.CodeNotFound {
+		t.Fatalf("expected NOT_FOUND error, got %v", err)
+	}
+}
+
+func TestDeleteThreadNotFoundReturnsError(t *testing.T) {
+	t.Parallel()
+
+	app := newTestApp(t)
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
+
+	token := bootstrapConnectToken(t, srv.URL)
+	httpClient := newAuthorizedHTTPClient(token)
+
+	threadsClient := protocolv1connect.NewThreadsServiceClient(httpClient, srv.URL)
+
+	_, err := threadsClient.DeleteThread(context.Background(), connect.NewRequest(&protocolv1.DeleteThreadRequest{
+		ThreadId: "thr_nonexistent",
+	}))
+	if err == nil {
+		t.Fatalf("expected error when deleting nonexistent thread")
+	}
+	if connect.CodeOf(err) != connect.CodeNotFound {
+		t.Fatalf("expected NOT_FOUND error, got %v", err)
+	}
+}
+
+func TestThreadTitleTruncatesLongMessages(t *testing.T) {
+	t.Parallel()
+
+	app := newTestApp(t)
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
+
+	token := bootstrapConnectToken(t, srv.URL)
+	httpClient := newAuthorizedHTTPClient(token)
+
+	threadsClient := protocolv1connect.NewThreadsServiceClient(httpClient, srv.URL)
+	turnsClient := protocolv1connect.NewTurnsServiceClient(httpClient, srv.URL)
+
+	createResp, err := threadsClient.CreateThread(context.Background(), connect.NewRequest(&protocolv1.CreateThreadRequest{}))
+	if err != nil {
+		t.Fatalf("create thread: %v", err)
+	}
+	threadID := createResp.Msg.GetThreadId()
+
+	// Send a message longer than 80 characters.
+	longMessage := "This is a very long message that should be truncated when used as a thread title because it exceeds the maximum allowed length for titles"
+	_, err = turnsClient.SendTurn(context.Background(), connect.NewRequest(&protocolv1.SendTurnRequest{
+		ThreadId:    threadID,
+		UserText:    longMessage,
+		TriggerType: protocolv1.TriggerType_CHAT_MESSAGE,
+	}))
+	if err != nil {
+		t.Fatalf("send turn: %v", err)
+	}
+
+	listResp, err := threadsClient.ListThreads(context.Background(), connect.NewRequest(&protocolv1.ListThreadsRequest{}))
+	if err != nil {
+		t.Fatalf("list threads: %v", err)
+	}
+
+	for _, item := range listResp.Msg.GetItems() {
+		if item.GetThreadId() == threadID {
+			title := item.GetTitle()
+			if len(title) > 84 { // 80 + room for "…" (3 bytes UTF-8)
+				t.Fatalf("expected title to be truncated, got %d chars: %q", len(title), title)
+			}
+			if title == longMessage {
+				t.Fatalf("expected title to be truncated, got full message")
+			}
+			return
+		}
+	}
+	t.Fatalf("expected to find thread in list")
+}
+
+func TestThreadTitleNotOverwrittenBySecondMessage(t *testing.T) {
+	t.Parallel()
+
+	app := newTestApp(t)
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
+
+	token := bootstrapConnectToken(t, srv.URL)
+	httpClient := newAuthorizedHTTPClient(token)
+
+	threadsClient := protocolv1connect.NewThreadsServiceClient(httpClient, srv.URL)
+	turnsClient := protocolv1connect.NewTurnsServiceClient(httpClient, srv.URL)
+
+	createResp, err := threadsClient.CreateThread(context.Background(), connect.NewRequest(&protocolv1.CreateThreadRequest{}))
+	if err != nil {
+		t.Fatalf("create thread: %v", err)
+	}
+	threadID := createResp.Msg.GetThreadId()
+
+	// Send first message.
+	_, err = turnsClient.SendTurn(context.Background(), connect.NewRequest(&protocolv1.SendTurnRequest{
+		ThreadId:    threadID,
+		UserText:    "first message title",
+		TriggerType: protocolv1.TriggerType_CHAT_MESSAGE,
+	}))
+	if err != nil {
+		t.Fatalf("send turn 1: %v", err)
+	}
+
+	// Send second message.
+	_, err = turnsClient.SendTurn(context.Background(), connect.NewRequest(&protocolv1.SendTurnRequest{
+		ThreadId:    threadID,
+		UserText:    "second message should not overwrite",
+		TriggerType: protocolv1.TriggerType_CHAT_MESSAGE,
+	}))
+	if err != nil {
+		t.Fatalf("send turn 2: %v", err)
+	}
+
+	listResp, err := threadsClient.ListThreads(context.Background(), connect.NewRequest(&protocolv1.ListThreadsRequest{}))
+	if err != nil {
+		t.Fatalf("list threads: %v", err)
+	}
+
+	for _, item := range listResp.Msg.GetItems() {
+		if item.GetThreadId() == threadID {
+			if item.GetTitle() != "first message title" {
+				t.Fatalf("expected title to remain %q, got %q", "first message title", item.GetTitle())
+			}
+			return
+		}
+	}
+	t.Fatalf("expected to find thread in list")
+}
+
 func bootstrapConnectToken(t *testing.T, baseURL string) string {
 	t.Helper()
 

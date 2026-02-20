@@ -13,11 +13,11 @@ import (
 )
 
 const (
-	gmailAPIBase        = "https://gmail.googleapis.com/gmail/v1"
-	defaultGmailTimeout      = 30 * time.Second
-	maxGmailResults          = 20
-	maxGmailBodyBytes        = 32 * 1024
-	maxGmailAttachmentBytes  = 25 * 1024 * 1024 // 25 MB (Gmail's attachment limit)
+	gmailAPIBase            = "https://gmail.googleapis.com/gmail/v1"
+	defaultGmailTimeout     = 30 * time.Second
+	maxGmailResults         = 20
+	maxGmailBodyBytes       = 32 * 1024
+	maxGmailAttachmentBytes = 25 * 1024 * 1024 // 25 MB (Gmail's attachment limit)
 )
 
 // OAuthToken represents a stored OAuth token.
@@ -92,7 +92,7 @@ type GmailGetThreadArgs struct {
 
 // GmailGetThreadResult contains all messages in a thread.
 type GmailGetThreadResult struct {
-	ThreadID string              `json:"thread_id"`
+	ThreadID string               `json:"thread_id"`
 	Messages []GmailThreadMessage `json:"messages"`
 }
 

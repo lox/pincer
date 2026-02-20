@@ -113,6 +113,37 @@ actor APIClient {
         }
     }
 
+    func listThreads() async throws -> [ThreadSummary] {
+        try await withAuthorizedRetry {
+            let response = await threadsClient.listThreads(
+                request: .init(),
+                headers: authHeaders()
+            )
+            let message = try responseMessage(response)
+            return message.items.map { item in
+                ThreadSummary(
+                    threadID: item.threadID,
+                    title: item.title,
+                    createdAt: timestampString(item.createdAt, hasValue: item.hasCreatedAt),
+                    updatedAt: timestampString(item.updatedAt, hasValue: item.hasUpdatedAt),
+                    messageCount: Int(item.messageCount)
+                )
+            }
+        }
+    }
+
+    func deleteThread(threadID: String) async throws {
+        try await withAuthorizedRetry {
+            var request = Pincer_Protocol_V1_DeleteThreadRequest()
+            request.threadID = threadID
+            let response = await threadsClient.deleteThread(
+                request: request,
+                headers: authHeaders()
+            )
+            _ = try responseMessage(response) as Pincer_Protocol_V1_DeleteThreadResponse
+        }
+    }
+
     func fetchMessages(threadID: String) async throws -> [Message] {
         let snapshot = try await fetchMessagesSnapshot(threadID: threadID)
         return snapshot.messages

@@ -4,6 +4,7 @@ import Combine
 @MainActor
 final class ChatViewModel: ObservableObject {
     @Published var threadID: String?
+    @Published var threadTitle: String = ""
     @Published var messages: [Message] = []
     @Published var timelineItems: [ChatTimelineItem] = []
     @Published private(set) var inlineApprovals: [Approval] = []
@@ -42,6 +43,12 @@ final class ChatViewModel: ObservableObject {
             return
         }
 
+        await startNewThread()
+    }
+
+    func startNewThread() async {
+        resetState()
+
         isBusy = true
         defer { isBusy = false }
 
@@ -56,13 +63,49 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
+    func loadThread(_ id: String, title: String = "") async {
+        resetState()
+        threadID = id
+        threadTitle = title
+
+        isBusy = true
+        defer { isBusy = false }
+
+        do {
+            try await refresh()
+            syncInlineApprovals()
+            startWatchThreadIfNeeded(for: id)
+        } catch {
+            errorText = userFacingErrorMessage(error, fallback: "Failed to load thread.")
+        }
+    }
+
+    private func resetState() {
+        watchThreadTask?.cancel()
+        watchingThreadID = nil
+        threadID = nil
+        threadTitle = ""
+        messages = []
+        timelineItems = []
+        inlineApprovals = []
+        approvingActionIDs = []
+        threadEventState = ThreadEventReducerState()
+        input = ""
+        errorText = nil
+        isBusy = false
+        isAwaitingAssistantProgress = false
+    }
+
     func refresh() async throws {
         guard let threadID else { return }
 
         let snapshot = try await client.fetchMessagesSnapshot(threadID: threadID)
+        // Initialize with lastSequence: 0 so the watch loop replays all persisted
+        // thread events from the beginning, reconstructing tool call activities
+        // and streaming output that aren't stored as messages.
         threadEventState = ThreadEventReducerState(
             messages: snapshot.messages,
-            lastSequence: snapshot.lastSequence
+            lastSequence: 0
         )
         rebuildTimeline()
 

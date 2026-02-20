@@ -32,8 +32,10 @@ struct ContentView: View {
     @StateObject private var chatModel: ChatViewModel
     @StateObject private var approvalsModel: ApprovalsViewModel
     @StateObject private var settingsModel: SettingsViewModel
+    private let client: APIClient
 
     init(client: APIClient) {
+        self.client = client
         let approvalsStore = ApprovalsStore(client: client)
         _approvalsStore = StateObject(wrappedValue: approvalsStore)
         _chatModel = StateObject(wrappedValue: ChatViewModel(client: client, approvalsStore: approvalsStore))
@@ -43,7 +45,7 @@ struct ContentView: View {
 
     var body: some View {
         TabView {
-            ChatView(model: chatModel)
+            ChatNavigationView(client: client, model: chatModel)
                 .accessibilityIdentifier(A11y.screenChat)
                 .tabItem {
                     Label("Chat", systemImage: "message")
@@ -90,126 +92,323 @@ struct ContentView: View {
     }
 }
 
-private struct ChatView: View {
+private struct ChatNavigationView: View {
+    let client: APIClient
     @ObservedObject var model: ChatViewModel
+    @State private var threads: [ThreadSummary] = []
+    @State private var isLoadingThreads = false
+    @State private var threadListError: String?
+    @State private var path = NavigationPath()
+
+    var body: some View {
+        NavigationStack(path: $path) {
+            ThreadListView(
+                threads: threads,
+                isLoading: isLoadingThreads,
+                errorText: threadListError,
+                onDismissError: { threadListError = nil },
+                onSelect: { thread in
+                    Task {
+                        await model.loadThread(thread.threadID, title: thread.displayTitle)
+                        path.append("chat")
+                    }
+                },
+                onNewChat: {
+                    Task {
+                        await model.startNewThread()
+                        path.append("chat")
+                    }
+                },
+                onDelete: { thread in
+                    Task { await deleteThread(thread.threadID) }
+                },
+                onRefresh: { await loadThreads() }
+            )
+            .navigationDestination(for: String.self) { _ in
+                ChatDetailView(
+                    model: model,
+                    onNewChat: {
+                        Task {
+                            await model.startNewThread()
+                        }
+                    },
+                    onDelete: {
+                        guard let tid = model.threadID else { return }
+                        path.removeLast(path.count)
+                        Task { await deleteThread(tid) }
+                    }
+                )
+            }
+            .onChange(of: path.count) { oldCount, newCount in
+                if newCount == 0 && oldCount > 0 {
+                    Task { await loadThreads() }
+                }
+            }
+        }
+    }
+
+    private func loadThreads() async {
+        isLoadingThreads = true
+        defer { isLoadingThreads = false }
+        do {
+            threads = try await client.listThreads()
+            threadListError = nil
+        } catch {
+            threadListError = userFacingErrorMessage(error, fallback: "Failed to load threads.")
+        }
+    }
+
+    private func deleteThread(_ threadID: String) async {
+        do {
+            try await client.deleteThread(threadID: threadID)
+            threads.removeAll { $0.threadID == threadID }
+        } catch {
+            threadListError = userFacingErrorMessage(error, fallback: "Failed to delete thread.")
+        }
+    }
+}
+
+private struct ThreadListView: View {
+    let threads: [ThreadSummary]
+    let isLoading: Bool
+    let errorText: String?
+    let onDismissError: () -> Void
+    let onSelect: (ThreadSummary) -> Void
+    let onNewChat: () -> Void
+    let onDelete: (ThreadSummary) -> Void
+    let onRefresh: () async -> Void
+
+    var body: some View {
+        ZStack {
+            PincerPageBackground()
+
+            if threads.isEmpty && !isLoading {
+                VStack(spacing: 12) {
+                    Image(systemName: "message")
+                        .font(.system(size: 36))
+                        .foregroundStyle(PincerPalette.textTertiary)
+                    Text("No conversations yet")
+                        .font(.system(.body, design: .rounded))
+                        .foregroundStyle(PincerPalette.textSecondary)
+                    Button(action: onNewChat) {
+                        Text("Start a conversation")
+                            .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                            .foregroundStyle(PincerPalette.accent)
+                    }
+                }
+            } else {
+                ScrollView(showsIndicators: false) {
+                    VStack(spacing: 10) {
+                        ForEach(threads) { thread in
+                            ThreadRow(thread: thread, onTap: { onSelect(thread) })
+                                .contextMenu {
+                                    Button(role: .destructive) {
+                                        onDelete(thread)
+                                    } label: {
+                                        Label("Delete", systemImage: "trash")
+                                    }
+                                    Button {
+                                        UIPasteboard.general.string = thread.threadID
+                                    } label: {
+                                        Label("Copy Thread ID", systemImage: "doc.on.doc")
+                                    }
+                                }
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 10)
+                    .padding(.bottom, 16)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .navigationTitle("Chat")
+        .navigationBarTitleDisplayMode(.large)
+        .toolbarBackground(.visible, for: .navigationBar)
+        .toolbarBackground(PincerPalette.page, for: .navigationBar)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button(action: onNewChat) {
+                    Image(systemName: "square.and.pencil")
+                        .foregroundStyle(PincerPalette.accent)
+                }
+            }
+        }
+        .task { await onRefresh() }
+        .refreshable { await onRefresh() }
+        .alert("Error", isPresented: Binding(
+            get: { errorText != nil },
+            set: { if !$0 { onDismissError() } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(errorText ?? "Unknown error")
+        }
+    }
+}
+
+private struct ThreadRow: View {
+    let thread: ThreadSummary
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(thread.displayTitle)
+                    .font(.system(.body, design: .rounded).weight(.medium))
+                    .foregroundStyle(PincerPalette.textPrimary)
+                    .lineLimit(2)
+
+                HStack(spacing: 8) {
+                    if thread.messageCount > 0 {
+                        Text("\(thread.messageCount) messages")
+                            .font(.system(.caption, design: .rounded))
+                            .foregroundStyle(PincerPalette.textTertiary)
+                    }
+                    if !thread.updatedAt.isEmpty {
+                        Text(relativeTimestamp(from: thread.updatedAt))
+                            .font(.system(.caption, design: .rounded))
+                            .foregroundStyle(PincerPalette.textTertiary)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .cardSurface()
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct ChatDetailView: View {
+    @ObservedObject var model: ChatViewModel
+    let onNewChat: () -> Void
+    let onDelete: () -> Void
     @State private var previewURL: URL?
     @State private var isDownloadingAttachment = false
     private let chatBottomAnchorID = "chat_bottom_anchor"
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                PincerPageBackground()
+        ZStack {
+            PincerPageBackground()
 
-                VStack(spacing: 10) {
-                    ScrollViewReader { reader in
-                        ScrollView(showsIndicators: false) {
-                            VStack(alignment: .leading, spacing: 10) {
-                                if model.timelineItems.isEmpty {
-                                    EmptyChatCard()
-                                }
-
-                                ForEach(model.timelineItems) { item in
-                                    switch item {
-                                    case .message(let message):
-                                        ChatMessageRow(message: message)
-                                            .id(item.id)
-                                    case .approval(let approval):
-                                        InlineApprovalRow(
-                                            approval: approval,
-                                            isApproving: model.approvingActionIDs.contains(approval.actionID),
-                                            onApprove: {
-                                                Task { await model.approveInline(approval.actionID) }
-                                            }
-                                        )
-                                        .id(item.id)
-                                    }
-                                }
-
-                                if model.inlineApprovals.count > 1 {
-                                    Button(action: {
-                                        Task { await model.approveAllInline() }
-                                    }) {
-                                        Text("Approve All (\(model.inlineApprovals.count))")
-                                            .font(.system(.caption, design: .rounded).weight(.semibold))
-                                            .foregroundStyle(PincerPalette.accent)
-                                            .padding(.horizontal, 12)
-                                            .padding(.vertical, 6)
-                                            .background(PincerPalette.accentSoft)
-                                            .clipShape(Capsule())
-                                    }
-                                    .frame(maxWidth: .infinity, alignment: .trailing)
-                                }
-
-                                if model.isAwaitingAssistantProgress {
-                                    AssistantProcessingRow()
-                                        .id("assistant_processing_row")
-                                }
-
-                                Color.clear
-                                    .frame(height: 1)
-                                    .id(chatBottomAnchorID)
+            VStack(spacing: 10) {
+                ScrollViewReader { reader in
+                    ScrollView(showsIndicators: false) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            if model.timelineItems.isEmpty {
+                                EmptyChatCard()
                             }
-                            .padding(.horizontal, 16)
-                            .padding(.top, 10)
-                            .padding(.bottom, 6)
+
+                            ForEach(model.timelineItems) { item in
+                                switch item {
+                                case .message(let message):
+                                    ChatMessageRow(message: message)
+                                        .id(item.id)
+                                case .approval(let approval):
+                                    InlineApprovalRow(
+                                        approval: approval,
+                                        isApproving: model.approvingActionIDs.contains(approval.actionID),
+                                        onApprove: {
+                                            Task { await model.approveInline(approval.actionID) }
+                                        }
+                                    )
+                                    .id(item.id)
+                                }
+                            }
+
+                            if model.inlineApprovals.count > 1 {
+                                Button(action: {
+                                    Task { await model.approveAllInline() }
+                                }) {
+                                    Text("Approve All (\(model.inlineApprovals.count))")
+                                        .font(.system(.caption, design: .rounded).weight(.semibold))
+                                        .foregroundStyle(PincerPalette.accent)
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 6)
+                                        .background(PincerPalette.accentSoft)
+                                        .clipShape(Capsule())
+                                }
+                                .frame(maxWidth: .infinity, alignment: .trailing)
+                            }
+
+                            if model.isAwaitingAssistantProgress {
+                                AssistantProcessingRow()
+                                    .id("assistant_processing_row")
+                            }
+
+                            Color.clear
+                                .frame(height: 1)
+                                .id(chatBottomAnchorID)
                         }
-                        .scrollDismissesKeyboard(.interactively)
-                        .onChange(of: model.timelineItems.count) { _, _ in
+                        .padding(.horizontal, 16)
+                        .padding(.top, 10)
+                        .padding(.bottom, 6)
+                    }
+                    .scrollDismissesKeyboard(.interactively)
+                    .onChange(of: model.timelineItems.count) { _, _ in
+                        scrollToBottom(reader)
+                    }
+                    .onChange(of: model.isAwaitingAssistantProgress) { _, isAwaiting in
+                        if isAwaiting {
                             scrollToBottom(reader)
                         }
-                        .onChange(of: model.isAwaitingAssistantProgress) { _, isAwaiting in
-                            if isAwaiting {
-                                scrollToBottom(reader)
-                            }
-                        }
                     }
+                }
 
-                    ChatComposer(
-                        text: $model.input,
-                        isBusy: model.isBusy,
-                        onSend: { Task { await model.send() } }
-                    )
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 8)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                ChatComposer(
+                    text: $model.input,
+                    isBusy: model.isBusy,
+                    onSend: { Task { await model.send() } }
+                )
+                .padding(.horizontal, 16)
+                .padding(.bottom, 8)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .navigationTitle("Chat")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbarBackground(.visible, for: .navigationBar)
-            .toolbarBackground(PincerPalette.page, for: .navigationBar)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Image(systemName: "chevron.left")
-                        .foregroundStyle(PincerPalette.textPrimary)
-                }
-                ToolbarItem(placement: .topBarTrailing) {
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .navigationTitle(model.threadTitle.isEmpty ? "Chat" : model.threadTitle)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(.visible, for: .navigationBar)
+        .toolbarBackground(PincerPalette.page, for: .navigationBar)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button(action: onNewChat) {
+                        Label("New Chat", systemImage: "square.and.pencil")
+                    }
+                    Button {
+                        if let tid = model.threadID {
+                            UIPasteboard.general.string = tid
+                        }
+                    } label: {
+                        Label("Copy Thread ID", systemImage: "doc.on.doc")
+                    }
+                    Divider()
+                    Button(role: .destructive, action: onDelete) {
+                        Label("Delete Thread", systemImage: "trash")
+                    }
+                } label: {
                     Image(systemName: "ellipsis")
                         .foregroundStyle(PincerPalette.textPrimary)
                 }
             }
-            .task {
-                await model.bootstrapIfNeeded()
-            }
-            .alert("Error", isPresented: Binding(
-                get: { model.errorText != nil },
-                set: { if !$0 { model.errorText = nil } }
-            )) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text(model.errorText ?? "Unknown error")
-            }
-            .environment(\.openURL, OpenURLAction { url in
-                if url.path == "/proxy/gmail/attachment" || url.path.hasPrefix("/proxy/gmail/attachment") {
-                    Task { await downloadAndPreviewAttachment(url) }
-                    return .handled
-                }
-                return .systemAction
-            })
-            .quickLookPreview($previewURL)
         }
+        .alert("Error", isPresented: Binding(
+            get: { model.errorText != nil },
+            set: { if !$0 { model.errorText = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(model.errorText ?? "Unknown error")
+        }
+        .environment(\.openURL, OpenURLAction { url in
+            if url.path == "/proxy/gmail/attachment" || url.path.hasPrefix("/proxy/gmail/attachment") {
+                Task { await downloadAndPreviewAttachment(url) }
+                return .handled
+            }
+            return .systemAction
+        })
+        .quickLookPreview($previewURL)
     }
 
     private func downloadAndPreviewAttachment(_ url: URL) async {
@@ -1501,4 +1700,19 @@ private func shortTimestamp(from iso: String) -> String {
     let out = DateFormatter()
     out.dateFormat = "h:mm a"
     return out.string(from: date)
+}
+
+private func relativeTimestamp(from iso: String) -> String {
+    let parserWithFraction = ISO8601DateFormatter()
+    parserWithFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+
+    let parser = ISO8601DateFormatter()
+
+    guard let date = parserWithFraction.date(from: iso) ?? parser.date(from: iso) else {
+        return iso
+    }
+
+    let formatter = RelativeDateTimeFormatter()
+    formatter.unitsStyle = .abbreviated
+    return formatter.localizedString(for: date, relativeTo: Date())
 }

@@ -73,6 +73,9 @@ Steps:
 - [x] Add safe image rendering in iOS chat with HMAC-signed image proxy to prevent exfiltration (goldmark AST rewriter + HTML stripping).
 - [ ] Add structured inline citations for web content summaries (source markers in text + sources array in planner output, rendered as tappable chips in iOS with domain/title/link).
 - [ ] Add deterministic approval-card rendering for each tool type.
+- [ ] Add APNs push notifications for pending approvals, expiring approvals, job completion/failure, and proactive reach-out events.
+- [ ] Add Background App Refresh (`BGTaskScheduler`) to poll for pending approvals and job state changes when app is backgrounded.
+- [ ] Add App Intents / Siri Shortcuts for common actions (ask Pincer, check pending approvals, start a new thread).
 
 Exit criteria:
 
@@ -98,6 +101,7 @@ Steps:
 - [ ] Connect scheduler wakeups to job/turn execution.
 - [ ] Emit job progress to thread messages and artifacts.
 - [ ] Enforce that background jobs cannot directly execute external writes.
+- [ ] Add Live Activities / Dynamic Island for active turn execution progress and pending approval count.
 - [ ] Add internal event/bus abstraction for subagent callback delivery.
 
 Exit criteria:
@@ -239,6 +243,7 @@ When memory and long-horizon primitives exist (Phase 4), adopt structured benchm
 - [x] HMAC-signed image proxy (`/proxy/image`) with goldmark AST rewriter: rewrites `![](url)` to proxied URLs, strips raw HTML from assistant messages.
 - [x] Gmail integration: `gmail_search` (READ), `gmail_read` (READ), `gmail_create_draft` (WRITE), `gmail_send_draft` (EXFILTRATION/bot-only).
 - [x] Google OAuth token storage with AES-256-GCM encryption at rest (`oauth_tokens` table, `GOOGLE_OAUTH_ENCRYPTION_KEY` config).
+- [x] Thread list navigation with `ListThreads`/`DeleteThread` RPCs, auto-generated thread titles, and `...` context menu (New Chat, Copy Thread ID, Delete Thread).
 - [ ] Phase 2 integrations continued.
 
 Next priority:

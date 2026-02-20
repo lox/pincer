@@ -350,9 +350,9 @@ func (a *App) CreateThread(ctx context.Context, req *connect.Request[protocolv1.
 	threadID := newID("thr")
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if _, err := a.db.ExecContext(ctx, `
-		INSERT INTO threads(thread_id, user_id, channel, created_at)
-		VALUES(?, ?, 'ios', ?)
-	`, threadID, a.ownerID, now); err != nil {
+		INSERT INTO threads(thread_id, user_id, channel, created_at, title, updated_at)
+		VALUES(?, ?, 'ios', ?, '', ?)
+	`, threadID, a.ownerID, now, now); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("create thread: %w", err))
 	}
 
@@ -818,6 +818,9 @@ func (a *App) executeTurnFromStep(ctx context.Context, threadID, userText, turnI
 			return nil, fmt.Errorf("insert user message: %w", err)
 		}
 
+		// Auto-set thread title from the first user message.
+		a.maybeSetThreadTitle(ctx, threadID, userText, nowStr)
+
 		_, _ = a.appendThreadEvent(ctx, &protocolv1.ThreadEvent{
 			ThreadId:     threadID,
 			TurnId:       turnID,
@@ -883,11 +886,11 @@ func (a *App) executeTurnFromStep(ctx context.Context, threadID, userText, turnI
 
 		// Execute READ tools concurrently and persist results in order.
 		type readResult struct {
-			executionID string
+			executionID  string
 			displayLabel string
-			output      string
-			err         error
-			duration    time.Duration
+			output       string
+			err          error
+			duration     time.Duration
 		}
 		results := make([]readResult, len(readCalls))
 		for i, tc := range readCalls {
@@ -1482,6 +1485,123 @@ func timestampOrNil(raw string) *timestamppb.Timestamp {
 		return nil
 	}
 	return timestamppb.New(parsed)
+}
+
+// maybeSetThreadTitle sets the thread title from the first user message if it hasn't been set yet.
+// It also updates updated_at on every call.
+func (a *App) maybeSetThreadTitle(ctx context.Context, threadID, userText, nowStr string) {
+	// Always update updated_at.
+	_, _ = a.db.ExecContext(ctx, `UPDATE threads SET updated_at = ? WHERE thread_id = ?`, nowStr, threadID)
+
+	// Only set title if it's currently empty (first message).
+	title := userText
+	runes := []rune(title)
+	if len(runes) > 80 {
+		// Truncate at a word boundary if possible.
+		prefix := string(runes[:80])
+		cut := strings.LastIndex(prefix, " ")
+		if cut < 40 {
+			cut = len(prefix)
+		}
+		title = prefix[:cut] + "…"
+	}
+	_, _ = a.db.ExecContext(ctx, `UPDATE threads SET title = ? WHERE thread_id = ? AND title = ''`, title, threadID)
+}
+
+func (a *App) ListThreads(ctx context.Context, req *connect.Request[protocolv1.ListThreadsRequest]) (*connect.Response[protocolv1.ListThreadsResponse], error) {
+	pageSize := int(req.Msg.GetPageSize())
+	if pageSize <= 0 || pageSize > 100 {
+		pageSize = 50
+	}
+
+	offset := 0
+	if token := strings.TrimSpace(req.Msg.GetPageToken()); token != "" {
+		parsed, err := strconv.Atoi(token)
+		if err != nil || parsed < 0 {
+			return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("invalid page_token"))
+		}
+		offset = parsed
+	}
+
+	rows, err := a.db.QueryContext(ctx, `
+		SELECT t.thread_id, t.title, t.created_at, t.updated_at,
+			(SELECT COUNT(*) FROM messages m WHERE m.thread_id = t.thread_id AND m.role IN ('user', 'assistant')) AS message_count
+		FROM threads t
+		WHERE t.user_id = ?
+		ORDER BY t.updated_at DESC
+		LIMIT ? OFFSET ?
+	`, a.ownerID, pageSize, offset)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("list threads: %w", err))
+	}
+	defer rows.Close()
+
+	var items []*protocolv1.ThreadSummary
+	for rows.Next() {
+		var threadID, title, createdAt, updatedAt string
+		var messageCount int
+		if err := rows.Scan(&threadID, &title, &createdAt, &updatedAt, &messageCount); err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("scan thread: %w", err))
+		}
+		summary := &protocolv1.ThreadSummary{
+			ThreadId:     threadID,
+			Title:        title,
+			MessageCount: uint32(messageCount),
+		}
+		if t, err := parseTimestamp(createdAt); err == nil {
+			summary.CreatedAt = timestamppb.New(t)
+		}
+		if updatedAt != "" {
+			if t, err := parseTimestamp(updatedAt); err == nil {
+				summary.UpdatedAt = timestamppb.New(t)
+			}
+		}
+		items = append(items, summary)
+	}
+
+	nextPageToken := ""
+	if len(items) == pageSize {
+		nextPageToken = strconv.Itoa(offset + pageSize)
+	}
+
+	return connect.NewResponse(&protocolv1.ListThreadsResponse{
+		Items:         items,
+		NextPageToken: nextPageToken,
+	}), nil
+}
+
+func (a *App) DeleteThread(ctx context.Context, req *connect.Request[protocolv1.DeleteThreadRequest]) (*connect.Response[protocolv1.DeleteThreadResponse], error) {
+	threadID := strings.TrimSpace(req.Msg.GetThreadId())
+	if threadID == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("thread_id is required"))
+	}
+	if !a.threadExists(threadID) {
+		return nil, connect.NewError(connect.CodeNotFound, errors.New("thread not found"))
+	}
+
+	tx, err := a.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("begin tx: %w", err))
+	}
+	defer tx.Rollback()
+
+	for _, stmt := range []string{
+		`DELETE FROM messages WHERE thread_id = ?`,
+		`DELETE FROM thread_events WHERE thread_id = ?`,
+		`DELETE FROM domain_grants WHERE thread_id = ?`,
+		`DELETE FROM proposed_actions WHERE source = 'chat' AND source_id = ?`,
+		`DELETE FROM threads WHERE thread_id = ?`,
+	} {
+		if _, err := tx.ExecContext(ctx, stmt, threadID); err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("delete thread data: %w", err))
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("commit delete: %w", err))
+	}
+
+	return connect.NewResponse(&protocolv1.DeleteThreadResponse{ThreadId: threadID}), nil
 }
 
 func jsonRawToStruct(raw json.RawMessage) *structpb.Struct {

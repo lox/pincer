@@ -66,12 +66,18 @@ const (
 	// ThreadsServiceCreateThreadProcedure is the fully-qualified name of the ThreadsService's
 	// CreateThread RPC.
 	ThreadsServiceCreateThreadProcedure = "/pincer.protocol.v1.ThreadsService/CreateThread"
+	// ThreadsServiceListThreadsProcedure is the fully-qualified name of the ThreadsService's
+	// ListThreads RPC.
+	ThreadsServiceListThreadsProcedure = "/pincer.protocol.v1.ThreadsService/ListThreads"
 	// ThreadsServiceGetThreadSnapshotProcedure is the fully-qualified name of the ThreadsService's
 	// GetThreadSnapshot RPC.
 	ThreadsServiceGetThreadSnapshotProcedure = "/pincer.protocol.v1.ThreadsService/GetThreadSnapshot"
 	// ThreadsServiceListThreadMessagesProcedure is the fully-qualified name of the ThreadsService's
 	// ListThreadMessages RPC.
 	ThreadsServiceListThreadMessagesProcedure = "/pincer.protocol.v1.ThreadsService/ListThreadMessages"
+	// ThreadsServiceDeleteThreadProcedure is the fully-qualified name of the ThreadsService's
+	// DeleteThread RPC.
+	ThreadsServiceDeleteThreadProcedure = "/pincer.protocol.v1.ThreadsService/DeleteThread"
 	// TurnsServiceSendTurnProcedure is the fully-qualified name of the TurnsService's SendTurn RPC.
 	TurnsServiceSendTurnProcedure = "/pincer.protocol.v1.TurnsService/SendTurn"
 	// TurnsServiceStartTurnProcedure is the fully-qualified name of the TurnsService's StartTurn RPC.
@@ -339,8 +345,10 @@ func (UnimplementedDevicesServiceHandler) RevokeDevice(context.Context, *connect
 // ThreadsServiceClient is a client for the pincer.protocol.v1.ThreadsService service.
 type ThreadsServiceClient interface {
 	CreateThread(context.Context, *connect.Request[v1.CreateThreadRequest]) (*connect.Response[v1.CreateThreadResponse], error)
+	ListThreads(context.Context, *connect.Request[v1.ListThreadsRequest]) (*connect.Response[v1.ListThreadsResponse], error)
 	GetThreadSnapshot(context.Context, *connect.Request[v1.GetThreadSnapshotRequest]) (*connect.Response[v1.GetThreadSnapshotResponse], error)
 	ListThreadMessages(context.Context, *connect.Request[v1.ListThreadMessagesRequest]) (*connect.Response[v1.ListThreadMessagesResponse], error)
+	DeleteThread(context.Context, *connect.Request[v1.DeleteThreadRequest]) (*connect.Response[v1.DeleteThreadResponse], error)
 }
 
 // NewThreadsServiceClient constructs a client for the pincer.protocol.v1.ThreadsService service. By
@@ -360,6 +368,12 @@ func NewThreadsServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(threadsServiceMethods.ByName("CreateThread")),
 			connect.WithClientOptions(opts...),
 		),
+		listThreads: connect.NewClient[v1.ListThreadsRequest, v1.ListThreadsResponse](
+			httpClient,
+			baseURL+ThreadsServiceListThreadsProcedure,
+			connect.WithSchema(threadsServiceMethods.ByName("ListThreads")),
+			connect.WithClientOptions(opts...),
+		),
 		getThreadSnapshot: connect.NewClient[v1.GetThreadSnapshotRequest, v1.GetThreadSnapshotResponse](
 			httpClient,
 			baseURL+ThreadsServiceGetThreadSnapshotProcedure,
@@ -372,19 +386,32 @@ func NewThreadsServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(threadsServiceMethods.ByName("ListThreadMessages")),
 			connect.WithClientOptions(opts...),
 		),
+		deleteThread: connect.NewClient[v1.DeleteThreadRequest, v1.DeleteThreadResponse](
+			httpClient,
+			baseURL+ThreadsServiceDeleteThreadProcedure,
+			connect.WithSchema(threadsServiceMethods.ByName("DeleteThread")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
 // threadsServiceClient implements ThreadsServiceClient.
 type threadsServiceClient struct {
 	createThread       *connect.Client[v1.CreateThreadRequest, v1.CreateThreadResponse]
+	listThreads        *connect.Client[v1.ListThreadsRequest, v1.ListThreadsResponse]
 	getThreadSnapshot  *connect.Client[v1.GetThreadSnapshotRequest, v1.GetThreadSnapshotResponse]
 	listThreadMessages *connect.Client[v1.ListThreadMessagesRequest, v1.ListThreadMessagesResponse]
+	deleteThread       *connect.Client[v1.DeleteThreadRequest, v1.DeleteThreadResponse]
 }
 
 // CreateThread calls pincer.protocol.v1.ThreadsService.CreateThread.
 func (c *threadsServiceClient) CreateThread(ctx context.Context, req *connect.Request[v1.CreateThreadRequest]) (*connect.Response[v1.CreateThreadResponse], error) {
 	return c.createThread.CallUnary(ctx, req)
+}
+
+// ListThreads calls pincer.protocol.v1.ThreadsService.ListThreads.
+func (c *threadsServiceClient) ListThreads(ctx context.Context, req *connect.Request[v1.ListThreadsRequest]) (*connect.Response[v1.ListThreadsResponse], error) {
+	return c.listThreads.CallUnary(ctx, req)
 }
 
 // GetThreadSnapshot calls pincer.protocol.v1.ThreadsService.GetThreadSnapshot.
@@ -397,11 +424,18 @@ func (c *threadsServiceClient) ListThreadMessages(ctx context.Context, req *conn
 	return c.listThreadMessages.CallUnary(ctx, req)
 }
 
+// DeleteThread calls pincer.protocol.v1.ThreadsService.DeleteThread.
+func (c *threadsServiceClient) DeleteThread(ctx context.Context, req *connect.Request[v1.DeleteThreadRequest]) (*connect.Response[v1.DeleteThreadResponse], error) {
+	return c.deleteThread.CallUnary(ctx, req)
+}
+
 // ThreadsServiceHandler is an implementation of the pincer.protocol.v1.ThreadsService service.
 type ThreadsServiceHandler interface {
 	CreateThread(context.Context, *connect.Request[v1.CreateThreadRequest]) (*connect.Response[v1.CreateThreadResponse], error)
+	ListThreads(context.Context, *connect.Request[v1.ListThreadsRequest]) (*connect.Response[v1.ListThreadsResponse], error)
 	GetThreadSnapshot(context.Context, *connect.Request[v1.GetThreadSnapshotRequest]) (*connect.Response[v1.GetThreadSnapshotResponse], error)
 	ListThreadMessages(context.Context, *connect.Request[v1.ListThreadMessagesRequest]) (*connect.Response[v1.ListThreadMessagesResponse], error)
+	DeleteThread(context.Context, *connect.Request[v1.DeleteThreadRequest]) (*connect.Response[v1.DeleteThreadResponse], error)
 }
 
 // NewThreadsServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -417,6 +451,12 @@ func NewThreadsServiceHandler(svc ThreadsServiceHandler, opts ...connect.Handler
 		connect.WithSchema(threadsServiceMethods.ByName("CreateThread")),
 		connect.WithHandlerOptions(opts...),
 	)
+	threadsServiceListThreadsHandler := connect.NewUnaryHandler(
+		ThreadsServiceListThreadsProcedure,
+		svc.ListThreads,
+		connect.WithSchema(threadsServiceMethods.ByName("ListThreads")),
+		connect.WithHandlerOptions(opts...),
+	)
 	threadsServiceGetThreadSnapshotHandler := connect.NewUnaryHandler(
 		ThreadsServiceGetThreadSnapshotProcedure,
 		svc.GetThreadSnapshot,
@@ -429,14 +469,24 @@ func NewThreadsServiceHandler(svc ThreadsServiceHandler, opts ...connect.Handler
 		connect.WithSchema(threadsServiceMethods.ByName("ListThreadMessages")),
 		connect.WithHandlerOptions(opts...),
 	)
+	threadsServiceDeleteThreadHandler := connect.NewUnaryHandler(
+		ThreadsServiceDeleteThreadProcedure,
+		svc.DeleteThread,
+		connect.WithSchema(threadsServiceMethods.ByName("DeleteThread")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/pincer.protocol.v1.ThreadsService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case ThreadsServiceCreateThreadProcedure:
 			threadsServiceCreateThreadHandler.ServeHTTP(w, r)
+		case ThreadsServiceListThreadsProcedure:
+			threadsServiceListThreadsHandler.ServeHTTP(w, r)
 		case ThreadsServiceGetThreadSnapshotProcedure:
 			threadsServiceGetThreadSnapshotHandler.ServeHTTP(w, r)
 		case ThreadsServiceListThreadMessagesProcedure:
 			threadsServiceListThreadMessagesHandler.ServeHTTP(w, r)
+		case ThreadsServiceDeleteThreadProcedure:
+			threadsServiceDeleteThreadHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -450,12 +500,20 @@ func (UnimplementedThreadsServiceHandler) CreateThread(context.Context, *connect
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("pincer.protocol.v1.ThreadsService.CreateThread is not implemented"))
 }
 
+func (UnimplementedThreadsServiceHandler) ListThreads(context.Context, *connect.Request[v1.ListThreadsRequest]) (*connect.Response[v1.ListThreadsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("pincer.protocol.v1.ThreadsService.ListThreads is not implemented"))
+}
+
 func (UnimplementedThreadsServiceHandler) GetThreadSnapshot(context.Context, *connect.Request[v1.GetThreadSnapshotRequest]) (*connect.Response[v1.GetThreadSnapshotResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("pincer.protocol.v1.ThreadsService.GetThreadSnapshot is not implemented"))
 }
 
 func (UnimplementedThreadsServiceHandler) ListThreadMessages(context.Context, *connect.Request[v1.ListThreadMessagesRequest]) (*connect.Response[v1.ListThreadMessagesResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("pincer.protocol.v1.ThreadsService.ListThreadMessages is not implemented"))
+}
+
+func (UnimplementedThreadsServiceHandler) DeleteThread(context.Context, *connect.Request[v1.DeleteThreadRequest]) (*connect.Response[v1.DeleteThreadResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("pincer.protocol.v1.ThreadsService.DeleteThread is not implemented"))
 }
 
 // TurnsServiceClient is a client for the pincer.protocol.v1.TurnsService service.

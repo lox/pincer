@@ -77,7 +77,6 @@ Approval detail:
 - Deterministic backend-rendered summary.
 - Diff/preview block (email draft body, recipient, calendar change, domain target).
 - Actions: `Approve` and `Reject`.
-- Approval requires biometric confirmation.
 
 Expiry behavior:
 
@@ -129,7 +128,7 @@ Sections:
 ## 5. Safety-first interaction patterns
 
 - Any external side effect is represented as a ProposedAction object before execution.
-- Approvals are explicit, biometric-protected, and auditable.
+- Approvals are explicit and auditable.
 - UI language must distinguish "proposed" vs "executed".
 - System messages should explain why an action is blocked (policy, budget, expiry).
 
@@ -178,7 +177,7 @@ Slice A: shell and nav
 
 Slice B: approvals vertical
 
-- Approvals list + detail + biometric confirmation.
+- Approvals list + detail + approve/reject controls.
 
 Slice C: chat vertical
 
