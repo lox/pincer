@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -600,6 +601,279 @@ func TestThreadTitleNotOverwrittenBySecondMessage(t *testing.T) {
 		}
 	}
 	t.Fatalf("expected to find thread in list")
+}
+
+func TestSpawnToolCreatesBackgroundJobAndPostsCompletionSummary(t *testing.T) {
+	t.Parallel()
+
+	planner := &staticPlannerFunc{fn: func(_ context.Context, req agent.PlanRequest) (agent.PlanResult, error) {
+		switch req.UserMessage {
+		case "start background research":
+			for _, msg := range req.History {
+				if strings.Contains(msg.Content, "[tool_result:spawn]") {
+					return agent.PlanResult{AssistantMessage: "Background job started."}, nil
+				}
+			}
+			return agent.PlanResult{
+				AssistantMessage: "Starting background work.",
+				ProposedActions: []agent.ProposedAction{{
+					Tool:          "spawn",
+					Args:          []byte(`{"goal":"collect release notes","max_tool_steps":4}`),
+					Justification: "Run the longer task in background.",
+					RiskClass:     "READ",
+				}},
+			}, nil
+		case "collect release notes":
+			return agent.PlanResult{AssistantMessage: "Background summary: all release notes collected."}, nil
+		default:
+			return agent.PlanResult{AssistantMessage: "ok"}, nil
+		}
+	}}
+
+	app := newTestAppWithPlanner(t, planner)
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
+
+	token := bootstrapConnectToken(t, srv.URL)
+	httpClient := newAuthorizedHTTPClient(token)
+
+	threadsClient := protocolv1connect.NewThreadsServiceClient(httpClient, srv.URL)
+	turnsClient := protocolv1connect.NewTurnsServiceClient(httpClient, srv.URL)
+	jobsClient := protocolv1connect.NewJobsServiceClient(httpClient, srv.URL)
+
+	createResp, err := threadsClient.CreateThread(context.Background(), connect.NewRequest(&protocolv1.CreateThreadRequest{}))
+	if err != nil {
+		t.Fatalf("create thread: %v", err)
+	}
+	threadID := createResp.Msg.GetThreadId()
+
+	if _, err := turnsClient.SendTurn(context.Background(), connect.NewRequest(&protocolv1.SendTurnRequest{
+		ThreadId:    threadID,
+		UserText:    "start background research",
+		TriggerType: protocolv1.TriggerType_CHAT_MESSAGE,
+	})); err != nil {
+		t.Fatalf("send turn: %v", err)
+	}
+
+	waitForCondition(t, 5*time.Second, func() bool {
+		jobsResp, err := jobsClient.ListJobs(context.Background(), connect.NewRequest(&protocolv1.ListJobsRequest{}))
+		if err != nil || len(jobsResp.Msg.GetItems()) == 0 {
+			return false
+		}
+		return jobsResp.Msg.GetItems()[0].GetStatus() == protocolv1.JobStatus_JOB_COMPLETED
+	}, "spawned job completion")
+
+	messagesResp, err := threadsClient.ListThreadMessages(context.Background(), connect.NewRequest(&protocolv1.ListThreadMessagesRequest{ThreadId: threadID}))
+	if err != nil {
+		t.Fatalf("list thread messages: %v", err)
+	}
+
+	foundSummary := false
+	for _, item := range messagesResp.Msg.GetItems() {
+		if item.GetRole() == "system" && strings.Contains(item.GetContent(), "Background job") && strings.Contains(item.GetContent(), "release notes") {
+			foundSummary = true
+			break
+		}
+	}
+	if !foundSummary {
+		t.Fatalf("expected background job completion summary in originating thread")
+	}
+}
+
+func TestJobsServiceCreateListGetAndCancel(t *testing.T) {
+	t.Parallel()
+
+	planner := &staticPlannerFunc{fn: func(_ context.Context, req agent.PlanRequest) (agent.PlanResult, error) {
+		if req.UserMessage == "job requires approval" {
+			return agent.PlanResult{
+				AssistantMessage: "Need approval for command.",
+				ProposedActions: []agent.ProposedAction{{
+					Tool:          "run_bash",
+					Args:          []byte(`{"command":"echo hello"}`),
+					Justification: "Needs shell command.",
+					RiskClass:     "HIGH",
+				}},
+			}, nil
+		}
+		return agent.PlanResult{AssistantMessage: "ok"}, nil
+	}}
+
+	app := newTestAppWithPlanner(t, planner)
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
+
+	token := bootstrapConnectToken(t, srv.URL)
+	httpClient := newAuthorizedHTTPClient(token)
+
+	jobsClient := protocolv1connect.NewJobsServiceClient(httpClient, srv.URL)
+	approvalsClient := protocolv1connect.NewApprovalsServiceClient(httpClient, srv.URL)
+
+	createResp, err := jobsClient.CreateJob(context.Background(), connect.NewRequest(&protocolv1.CreateJobRequest{Goal: "job requires approval"}))
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	jobID := createResp.Msg.GetItem().GetJobId()
+	if jobID == "" {
+		t.Fatalf("expected create job response to include job_id")
+	}
+
+	waitForCondition(t, 5*time.Second, func() bool {
+		resp, err := jobsClient.GetJob(context.Background(), connect.NewRequest(&protocolv1.GetJobRequest{JobId: jobID}))
+		if err != nil {
+			return false
+		}
+		return resp.Msg.GetItem().GetStatus() == protocolv1.JobStatus_JOB_WAITING_APPROVAL
+	}, "job waiting approval")
+
+	pendingResp, err := approvalsClient.ListApprovals(context.Background(), connect.NewRequest(&protocolv1.ListApprovalsRequest{Status: protocolv1.ActionStatus_PENDING}))
+	if err != nil {
+		t.Fatalf("list pending approvals: %v", err)
+	}
+	if len(pendingResp.Msg.GetItems()) == 0 {
+		t.Fatalf("expected pending approval for waiting job")
+	}
+
+	if _, err := jobsClient.ListJobs(context.Background(), connect.NewRequest(&protocolv1.ListJobsRequest{})); err != nil {
+		t.Fatalf("list jobs: %v", err)
+	}
+
+	cancelResp, err := jobsClient.CancelJob(context.Background(), connect.NewRequest(&protocolv1.CancelJobRequest{JobId: jobID}))
+	if err != nil {
+		t.Fatalf("cancel job: %v", err)
+	}
+	if cancelResp.Msg.GetStatus() != protocolv1.JobStatus_JOB_CANCELLED {
+		t.Fatalf("expected cancel status %v, got %v", protocolv1.JobStatus_JOB_CANCELLED, cancelResp.Msg.GetStatus())
+	}
+
+	jobResp, err := jobsClient.GetJob(context.Background(), connect.NewRequest(&protocolv1.GetJobRequest{JobId: jobID}))
+	if err != nil {
+		t.Fatalf("get job: %v", err)
+	}
+	if jobResp.Msg.GetItem().GetStatus() != protocolv1.JobStatus_JOB_CANCELLED {
+		t.Fatalf("expected cancelled job, got %v", jobResp.Msg.GetItem().GetStatus())
+	}
+
+	pendingAfterCancel, err := approvalsClient.ListApprovals(context.Background(), connect.NewRequest(&protocolv1.ListApprovalsRequest{Status: protocolv1.ActionStatus_PENDING}))
+	if err != nil {
+		t.Fatalf("list approvals after cancel: %v", err)
+	}
+	if len(pendingAfterCancel.Msg.GetItems()) != 0 {
+		t.Fatalf("expected no pending approvals after job cancellation, got %d", len(pendingAfterCancel.Msg.GetItems()))
+	}
+}
+
+func TestJobProposalsResumeAfterApprovalAndComplete(t *testing.T) {
+	t.Parallel()
+
+	planner := &staticPlannerFunc{fn: func(_ context.Context, req agent.PlanRequest) (agent.PlanResult, error) {
+		switch req.UserMessage {
+		case "request background action":
+			for _, msg := range req.History {
+				if strings.Contains(msg.Content, "[tool_result:spawn]") {
+					return agent.PlanResult{AssistantMessage: "Spawned background job."}, nil
+				}
+			}
+			return agent.PlanResult{
+				AssistantMessage: "Spawning a background job.",
+				ProposedActions: []agent.ProposedAction{{
+					Tool:          "spawn",
+					Args:          []byte(`{"goal":"job needs approval","max_tool_steps":6}`),
+					Justification: "Run asynchronously.",
+					RiskClass:     "READ",
+				}},
+			}, nil
+		case "job needs approval":
+			for _, msg := range req.History {
+				if strings.Contains(msg.Content, "[tool_result:run_bash]") {
+					return agent.PlanResult{AssistantMessage: "Job finished after approval."}, nil
+				}
+			}
+			return agent.PlanResult{
+				AssistantMessage: "Need approval from job.",
+				ProposedActions: []agent.ProposedAction{{
+					Tool:          "run_bash",
+					Args:          []byte(`{"command":"echo from job"}`),
+					Justification: "Needs shell command.",
+					RiskClass:     "HIGH",
+				}},
+			}, nil
+		default:
+			return agent.PlanResult{AssistantMessage: "ok"}, nil
+		}
+	}}
+
+	app := newTestAppWithPlanner(t, planner)
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
+
+	token := bootstrapConnectToken(t, srv.URL)
+	httpClient := newAuthorizedHTTPClient(token)
+
+	threadsClient := protocolv1connect.NewThreadsServiceClient(httpClient, srv.URL)
+	turnsClient := protocolv1connect.NewTurnsServiceClient(httpClient, srv.URL)
+	jobsClient := protocolv1connect.NewJobsServiceClient(httpClient, srv.URL)
+	approvalsClient := protocolv1connect.NewApprovalsServiceClient(httpClient, srv.URL)
+
+	createResp, err := threadsClient.CreateThread(context.Background(), connect.NewRequest(&protocolv1.CreateThreadRequest{}))
+	if err != nil {
+		t.Fatalf("create thread: %v", err)
+	}
+	originThreadID := createResp.Msg.GetThreadId()
+
+	if _, err := turnsClient.SendTurn(context.Background(), connect.NewRequest(&protocolv1.SendTurnRequest{
+		ThreadId:    originThreadID,
+		UserText:    "request background action",
+		TriggerType: protocolv1.TriggerType_CHAT_MESSAGE,
+	})); err != nil {
+		t.Fatalf("send turn: %v", err)
+	}
+
+	var jobID string
+	waitForCondition(t, 5*time.Second, func() bool {
+		jobsResp, err := jobsClient.ListJobs(context.Background(), connect.NewRequest(&protocolv1.ListJobsRequest{}))
+		if err != nil || len(jobsResp.Msg.GetItems()) == 0 {
+			return false
+		}
+		jobID = jobsResp.Msg.GetItems()[0].GetJobId()
+		return jobsResp.Msg.GetItems()[0].GetStatus() == protocolv1.JobStatus_JOB_WAITING_APPROVAL
+	}, "job waiting approval")
+
+	pendingResp, err := approvalsClient.ListApprovals(context.Background(), connect.NewRequest(&protocolv1.ListApprovalsRequest{Status: protocolv1.ActionStatus_PENDING}))
+	if err != nil {
+		t.Fatalf("list pending approvals: %v", err)
+	}
+	if len(pendingResp.Msg.GetItems()) == 0 {
+		t.Fatalf("expected pending approval from job turn")
+	}
+	actionID := pendingResp.Msg.GetItems()[0].GetActionId()
+
+	if _, err := approvalsClient.ApproveAction(context.Background(), connect.NewRequest(&protocolv1.ApproveActionRequest{ActionId: actionID})); err != nil {
+		t.Fatalf("approve action: %v", err)
+	}
+
+	waitForCondition(t, 8*time.Second, func() bool {
+		jobResp, err := jobsClient.GetJob(context.Background(), connect.NewRequest(&protocolv1.GetJobRequest{JobId: jobID}))
+		if err != nil {
+			return false
+		}
+		return jobResp.Msg.GetItem().GetStatus() == protocolv1.JobStatus_JOB_COMPLETED
+	}, "job completion after approval")
+
+	messagesResp, err := threadsClient.ListThreadMessages(context.Background(), connect.NewRequest(&protocolv1.ListThreadMessagesRequest{ThreadId: originThreadID}))
+	if err != nil {
+		t.Fatalf("list origin thread messages: %v", err)
+	}
+
+	foundCompletion := false
+	for _, item := range messagesResp.Msg.GetItems() {
+		if item.GetRole() == "system" && strings.Contains(item.GetContent(), "Job finished after approval") {
+			foundCompletion = true
+			break
+		}
+	}
+	if !foundCompletion {
+		t.Fatalf("expected job completion summary in originating thread")
+	}
 }
 
 func bootstrapConnectToken(t *testing.T, baseURL string) string {

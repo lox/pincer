@@ -1,6 +1,6 @@
 # Pincer Autonomy Mechanisms
 
-Status: Partially implemented (workspace + memory + heartbeat backend complete; jobs/scheduler pending)
+Status: Partially implemented (workspace + memory + heartbeat + jobs backend complete; scheduler + iOS autonomy surfaces pending)
 Date: 2026-02-26
 References: `docs/spec.md` §11, `docs/ios-ui-plan.md`, `PLAN.md`
 
@@ -182,10 +182,11 @@ The spawn tool is READ-classified because it creates internal work — no extern
 ### 5.2 Job lifecycle
 
 ```
-CREATED → RUNNING → COMPLETED
-                  → FAILED
-                  → WAITING_APPROVAL (job's turn hit a non-READ tool)
-                  → PAUSED_BUDGET (budget exceeded)
+RUNNING → COMPLETED
+        → FAILED
+        → WAITING_APPROVAL (job's turn hit a non-READ tool)
+        → PAUSED_BUDGET (budget exceeded)
+        → CANCELLED
 ```
 
 On process restart, any job in `RUNNING` state is marked `FAILED_RESTART` with an audit event. The user or agent can re-spawn it.
@@ -193,7 +194,7 @@ On process restart, any job in `RUNNING` state is marked `FAILED_RESTART` with a
 ### 5.3 How spawn works
 
 1. Agent calls `spawn(goal: "Research competing products in the CRM space", budget: { max_steps: 20, timeout_minutes: 30 })`.
-2. Backend creates a `jobs` row with state `CREATED`, a dedicated thread, and the goal as the initial user message.
+2. Backend creates a `jobs` row with state `RUNNING` and a dedicated system thread for the job.
 3. A background goroutine picks up the job and runs `executeTurnFromStep` against the job's thread.
 4. The job runs through the normal planner-tool loop. READ tools execute inline. Non-READ tools create proposals and pause the job (same TurnPaused mechanism).
 5. On completion, the job's final assistant message is posted to the **originating thread** as a system message, so the user sees the result in their conversation.

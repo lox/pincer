@@ -275,6 +275,7 @@ var knownTools = map[string]bool{
 	"write_file":         true,
 	"append_file":        true,
 	"list_dir":           true,
+	"spawn":              true,
 	"image_describe":     true,
 	"gmail_search":       true,
 	"gmail_read":         true,
@@ -382,6 +383,22 @@ var plannerTools = []openAITool{
 				"properties": {
 					"path": {"type": "string", "description": "Workspace-relative directory path", "default": "."}
 				}
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: openAIToolFunction{
+			Name:        "spawn",
+			Description: "Create a background job for longer-running work and return immediately with a job ID.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"goal": {"type": "string", "description": "Goal/instructions for the background job"},
+					"max_tool_steps": {"type": "integer", "description": "Optional max tool rounds for the job"},
+					"max_wall_time_ms": {"type": "integer", "description": "Optional max wall time for the job in milliseconds"}
+				},
+				"required": ["goal"]
 			}`),
 		},
 	},
@@ -747,6 +764,17 @@ func justificationForAction(tool string, args json.RawMessage) string {
 				path = "."
 			}
 			return fmt.Sprintf("List directory: %s", path)
+		}
+	case "spawn":
+		var a struct {
+			Goal string `json:"goal"`
+		}
+		if json.Unmarshal(args, &a) == nil && strings.TrimSpace(a.Goal) != "" {
+			goal := strings.TrimSpace(a.Goal)
+			if len(goal) > 120 {
+				goal = goal[:120] + "…"
+			}
+			return fmt.Sprintf("Spawn background job: %s", goal)
 		}
 	case "image_describe":
 		var a struct {

@@ -905,7 +905,7 @@ func TestWorkspaceFileTools(t *testing.T) {
 		if err != nil {
 			t.Fatalf("marshal args for %s: %v", tool, err)
 		}
-		return app.executeInlineReadTool(ctx, agent.ProposedAction{
+		return app.executeInlineReadTool(ctx, "thr_test", agent.ProposedAction{
 			Tool: tool,
 			Args: payload,
 		})
@@ -982,7 +982,7 @@ func TestWorkspaceFileToolsRejectSymlinkEscape(t *testing.T) {
 		if err != nil {
 			t.Fatalf("marshal args for %s: %v", tool, err)
 		}
-		return app.executeInlineReadTool(ctx, agent.ProposedAction{Tool: tool, Args: payload})
+		return app.executeInlineReadTool(ctx, "thr_test", agent.ProposedAction{Tool: tool, Args: payload})
 	}
 
 	outsidePath := filepath.Join(t.TempDir(), "secret.txt")
@@ -2023,6 +2023,85 @@ func TestHeartbeatRiskyActionsStayApprovalGated(t *testing.T) {
 	}
 	if executed != 0 {
 		t.Fatalf("expected zero executed heartbeat actions without approval, got %d", executed)
+	}
+}
+
+func TestRunningJobsAreFailedOnStartup(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "pincer-test.db")
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+
+	app, err := New(AppConfig{
+		DBPath:                  dbPath,
+		WorkspaceRoot:           workspaceRoot,
+		DisableBackgroundWorker: true,
+	})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	jobID := "job_restart_case"
+	threadID := "thr_restart_case"
+	if _, err := app.db.Exec(`
+		INSERT INTO threads(thread_id, user_id, channel, created_at, title, updated_at)
+		VALUES(?, ?, 'system', ?, 'Job: restart test', ?)
+	`, threadID, defaultOwnerID, now, now); err != nil {
+		t.Fatalf("insert thread: %v", err)
+	}
+	if _, err := app.db.Exec(`
+		INSERT INTO jobs(
+			job_id, user_id, goal, status, thread_id, origin_thread_id,
+			trigger_type, trigger_source_id, max_tool_steps, max_wall_time_ms,
+			current_turn_id, started_at, last_error, created_at, updated_at
+		) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, jobID, defaultOwnerID, "restart me", jobStatusRunning, threadID, threadID,
+		protocolv1.TriggerType_JOB_WAKEUP.String(), "test", defaultJobMaxToolSteps,
+		uint64(defaultJobMaxWallTime/time.Millisecond), "turn_restart", now, "", now, now); err != nil {
+		t.Fatalf("insert running job: %v", err)
+	}
+
+	if err := app.Close(); err != nil {
+		t.Fatalf("close app: %v", err)
+	}
+
+	appRestarted, err := New(AppConfig{
+		DBPath:                  dbPath,
+		WorkspaceRoot:           workspaceRoot,
+		DisableBackgroundWorker: true,
+	})
+	if err != nil {
+		t.Fatalf("new app restarted: %v", err)
+	}
+	t.Cleanup(func() { _ = appRestarted.Close() })
+
+	var status string
+	var lastError string
+	if err := appRestarted.db.QueryRow(`
+		SELECT status, last_error
+		FROM jobs
+		WHERE job_id = ?
+	`, jobID).Scan(&status, &lastError); err != nil {
+		t.Fatalf("query restarted job: %v", err)
+	}
+	if status != jobStatusFailed {
+		t.Fatalf("expected restarted running job to be %q, got %q", jobStatusFailed, status)
+	}
+	if lastError != "failed_restart" {
+		t.Fatalf("expected restarted job last_error to be %q, got %q", "failed_restart", lastError)
+	}
+
+	var auditCount int
+	if err := appRestarted.db.QueryRow(`
+		SELECT COUNT(*)
+		FROM audit_log
+		WHERE event_type = 'job_failed_restart' AND entity_id = ?
+	`, jobID).Scan(&auditCount); err != nil {
+		t.Fatalf("query restart audit: %v", err)
+	}
+	if auditCount != 1 {
+		t.Fatalf("expected 1 job_failed_restart audit event, got %d", auditCount)
 	}
 }
 

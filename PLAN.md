@@ -101,8 +101,9 @@ Steps:
 - [x] Inject memory context into planner system prompt on every call (mtime-cached).
 - [x] Update SOUL.md with memory instructions.
 - [x] Implement heartbeat service: goroutine ticker, reads HEARTBEAT.md, runs turn in system thread.
-- [ ] Implement `spawn` tool and background job runner (goroutine per job, job-scoped budgets).
-- [ ] Post job results to originating chat thread on completion.
+- [x] Implement `spawn` tool and background job runner (goroutine per job, job-scoped budgets).
+- [x] Post job results to originating chat thread on completion.
+- [x] Mark in-flight `RUNNING` jobs as `FAILED` with `job_failed_restart` audit on startup.
 - [ ] Implement `schedule_create`, `schedule_list`, `schedule_delete` tools.
 - [ ] Implement scheduler service with `cron`/`interval`/`at` triggers and wakeup deduplication.
 - [ ] Connect scheduler wakeups to job creation.
@@ -116,7 +117,7 @@ Exit criteria:
 
 - [x] Agent remembers facts across sessions via file-based memory.
 - [x] Heartbeat fires periodically and the agent can proactively report findings.
-- [ ] Agent can spawn background jobs that run the full planner-tool loop.
+- [x] Agent can spawn background jobs that run the full planner-tool loop.
 - [ ] Agent can create its own scheduled triggers.
 - [ ] All autonomy triggers use the same approval pipeline for external side effects.
 
@@ -279,11 +280,12 @@ When memory and long-horizon primitives exist (Phase 4), adopt structured benchm
 - [x] Google OAuth token storage with AES-256-GCM encryption at rest (`oauth_tokens` table, `GOOGLE_OAUTH_ENCRYPTION_KEY` config).
 - [x] Thread list navigation with `ListThreads`/`DeleteThread` RPCs, auto-generated thread titles, and `...` context menu (New Chat, Copy Thread ID, Delete Thread).
 - [x] Heartbeat service: configurable background ticker (`PINCER_HEARTBEAT_ENABLED`, `PINCER_HEARTBEAT_INTERVAL`), dedicated `thread_heartbeat`, and `HEARTBEAT_OK` no-op suppression.
+- [x] Spawn/jobs backend vertical slice: `spawn` READ tool, `JobsService` CRUD, background job runner with WAITING_APPROVAL/COMPLETED/CANCELLED/PAUSED_BUDGET transitions, approval-safe resume, and completion summaries posted to origin threads.
 - [ ] Phase 2 integrations continued.
 
 Next priority:
 
-- [ ] Phase 2.5: Spawn/jobs + scheduler + unified work queue + iOS autonomy surfaces (see `docs/autonomy.md`).
+- [ ] Phase 2.5: Scheduler + unified work queue + iOS autonomy surfaces (see `docs/autonomy.md`).
 - [ ] Test inline tool loop end-to-end with live Kagi API.
 - [x] Add web_fetch tool for raw URL content retrieval (with SSRF protections).
 - [x] Turn orchestration with pause/resume and bounded tool-loop planning (Phase 3 foundation).

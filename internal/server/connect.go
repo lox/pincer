@@ -687,20 +687,88 @@ func (a *App) RejectAction(ctx context.Context, req *connect.Request[protocolv1.
 	return connect.NewResponse(&protocolv1.RejectActionResponse{ActionId: actionID, Status: protocolv1.ActionStatus_REJECTED}), nil
 }
 
-func (a *App) ListJobs(context.Context, *connect.Request[protocolv1.ListJobsRequest]) (*connect.Response[protocolv1.ListJobsResponse], error) {
-	return connect.NewResponse(&protocolv1.ListJobsResponse{}), nil
+func (a *App) ListJobs(ctx context.Context, _ *connect.Request[protocolv1.ListJobsRequest]) (*connect.Response[protocolv1.ListJobsResponse], error) {
+	items, err := a.listJobs(ctx)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("list jobs: %w", err))
+	}
+
+	result := make([]*protocolv1.Job, 0, len(items))
+	for _, item := range items {
+		result = append(result, a.jobToProto(item))
+	}
+
+	return connect.NewResponse(&protocolv1.ListJobsResponse{Items: result}), nil
 }
 
-func (a *App) CreateJob(context.Context, *connect.Request[protocolv1.CreateJobRequest]) (*connect.Response[protocolv1.CreateJobResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("create job is not implemented"))
+func (a *App) CreateJob(ctx context.Context, req *connect.Request[protocolv1.CreateJobRequest]) (*connect.Response[protocolv1.CreateJobResponse], error) {
+	msg := req.Msg
+	goal := strings.TrimSpace(msg.GetGoal())
+	if goal == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("goal is required"))
+	}
+
+	var maxToolSteps uint32
+	if budget := msg.GetBudget(); budget != nil {
+		maxToolSteps = budget.GetMaxToolSteps()
+	}
+
+	job, err := a.createJob(ctx, createJobInput{
+		Goal:          goal,
+		TriggerType:   protocolv1.TriggerType_JOB_WAKEUP,
+		TriggerSource: "api",
+		MaxToolSteps:  maxToolSteps,
+		MaxWallTimeMS: msg.GetMaxWallTimeMs(),
+	})
+	if err != nil {
+		if strings.Contains(err.Error(), "goal is required") {
+			return nil, connect.NewError(connect.CodeInvalidArgument, err)
+		}
+		if strings.Contains(err.Error(), "planner is not configured") {
+			return nil, connect.NewError(connect.CodeFailedPrecondition, err)
+		}
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("create job: %w", err))
+	}
+
+	return connect.NewResponse(&protocolv1.CreateJobResponse{Item: a.jobToProto(job)}), nil
 }
 
-func (a *App) GetJob(context.Context, *connect.Request[protocolv1.GetJobRequest]) (*connect.Response[protocolv1.GetJobResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("get job is not implemented"))
+func (a *App) GetJob(ctx context.Context, req *connect.Request[protocolv1.GetJobRequest]) (*connect.Response[protocolv1.GetJobResponse], error) {
+	jobID := strings.TrimSpace(req.Msg.GetJobId())
+	if jobID == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("job_id is required"))
+	}
+
+	job, err := a.getJobByID(ctx, jobID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, connect.NewError(connect.CodeNotFound, errors.New("job not found"))
+		}
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("get job: %w", err))
+	}
+
+	return connect.NewResponse(&protocolv1.GetJobResponse{Item: a.jobToProto(job)}), nil
 }
 
-func (a *App) CancelJob(context.Context, *connect.Request[protocolv1.CancelJobRequest]) (*connect.Response[protocolv1.CancelJobResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("cancel job is not implemented"))
+func (a *App) CancelJob(ctx context.Context, req *connect.Request[protocolv1.CancelJobRequest]) (*connect.Response[protocolv1.CancelJobResponse], error) {
+	jobID := strings.TrimSpace(req.Msg.GetJobId())
+	if jobID == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("job_id is required"))
+	}
+
+	job, err := a.cancelJob(ctx, jobID)
+	if err != nil {
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			return nil, connect.NewError(connect.CodeNotFound, errors.New("job not found"))
+		case errors.Is(err, errJobTerminal):
+			return nil, connect.NewError(connect.CodeFailedPrecondition, err)
+		default:
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("cancel job: %w", err))
+		}
+	}
+
+	return connect.NewResponse(&protocolv1.CancelJobResponse{JobId: job.JobID, Status: dbJobStatusToProto(job.Status)}), nil
 }
 
 func (a *App) ListSchedules(context.Context, *connect.Request[protocolv1.ListSchedulesRequest]) (*connect.Response[protocolv1.ListSchedulesResponse], error) {
@@ -788,6 +856,25 @@ type turnExecutionResult struct {
 	Paused           bool
 }
 
+type turnExecutionSettings struct {
+	maxSteps         int
+	proposalSource   string
+	proposalSourceID string
+}
+
+func (s turnExecutionSettings) normalized(threadID string) turnExecutionSettings {
+	if s.maxSteps <= 0 {
+		s.maxSteps = maxInlineToolSteps
+	}
+	if strings.TrimSpace(s.proposalSource) == "" {
+		s.proposalSource = "chat"
+	}
+	if strings.TrimSpace(s.proposalSourceID) == "" {
+		s.proposalSourceID = threadID
+	}
+	return s
+}
+
 type finalizeTurnInput struct {
 	threadID         string
 	turnID           string
@@ -795,17 +882,30 @@ type finalizeTurnInput struct {
 	thinking         string
 	proposedCalls    []plannedToolCall
 	stepsUsed        int
+	maxSteps         int
 	triggerType      protocolv1.TriggerType
 	inputMessageID   string
+	proposalSource   string
+	proposalSourceID string
 }
 
 func (a *App) executeTurn(ctx context.Context, threadID, userText, turnID string, triggerType protocolv1.TriggerType) (*turnExecutionResult, error) {
-	return a.executeTurnFromStep(ctx, threadID, userText, turnID, triggerType, 0, "", false)
+	return a.executeTurnFromStep(ctx, threadID, userText, turnID, triggerType, 0, "", false, maxInlineToolSteps, "chat", threadID)
 }
 
-func (a *App) executeTurnFromStep(ctx context.Context, threadID, userText, turnID string, triggerType protocolv1.TriggerType, startStep int, inputMessageID string, isContinuation bool) (*turnExecutionResult, error) {
+func (a *App) executeTurnFromStep(ctx context.Context, threadID, userText, turnID string, triggerType protocolv1.TriggerType, startStep int, inputMessageID string, isContinuation bool, maxSteps int, proposalSource, proposalSourceID string) (*turnExecutionResult, error) {
 	result := &turnExecutionResult{}
 	currentInputMessageID := strings.TrimSpace(inputMessageID)
+	settings := (turnExecutionSettings{
+		maxSteps:         maxSteps,
+		proposalSource:   proposalSource,
+		proposalSourceID: proposalSourceID,
+	}).normalized(threadID)
+
+	stepsRemaining := settings.maxSteps - startStep
+	if stepsRemaining < 0 {
+		stepsRemaining = 0
+	}
 
 	if !isContinuation {
 		if userText == "" {
@@ -862,7 +962,7 @@ func (a *App) executeTurnFromStep(ctx context.Context, threadID, userText, turnI
 			ContentTrust: protocolv1.ContentTrust_TRUSTED_SYSTEM,
 			Payload: &protocolv1.ThreadEvent_TurnResumed{TurnResumed: &protocolv1.TurnResumed{
 				ResumedReason:  "all_actions_resolved",
-				StepsRemaining: uint32(maxInlineToolSteps - startStep),
+				StepsRemaining: uint32(stepsRemaining),
 			}},
 		})
 	}
@@ -870,8 +970,8 @@ func (a *App) executeTurnFromStep(ctx context.Context, threadID, userText, turnI
 	// Bounded inline READ tool loop.
 	// Each iteration: plan → split READ vs non-READ → execute READs inline → re-plan.
 	// Loop terminates when plan has no READ tools, or limits are hit.
-	for step := startStep; step < maxInlineToolSteps; step++ {
-		plan, err := a.planTurn(ctx, threadID, userText, step, maxInlineToolSteps, currentInputMessageID)
+	for step := startStep; step < settings.maxSteps; step++ {
+		plan, err := a.planTurn(ctx, threadID, userText, step, settings.maxSteps, currentInputMessageID)
 		if err != nil {
 			_, _ = a.appendThreadEvent(ctx, &protocolv1.ThreadEvent{
 				ThreadId:     threadID,
@@ -908,8 +1008,11 @@ func (a *App) executeTurnFromStep(ctx context.Context, threadID, userText, turnI
 				thinking:         plan.Thinking,
 				proposedCalls:    nonReadCalls,
 				stepsUsed:        step,
+				maxSteps:         settings.maxSteps,
 				triggerType:      triggerType,
 				inputMessageID:   currentInputMessageID,
+				proposalSource:   settings.proposalSource,
+				proposalSourceID: settings.proposalSourceID,
 			}, result)
 		}
 
@@ -941,7 +1044,7 @@ func (a *App) executeTurnFromStep(ctx context.Context, threadID, userText, turnI
 			go func(idx int, action agent.ProposedAction) {
 				defer wg.Done()
 				start := time.Now()
-				output, err := a.executeInlineReadTool(ctx, action)
+				output, err := a.executeInlineReadTool(ctx, threadID, action)
 				results[idx].output = output
 				results[idx].err = err
 				results[idx].duration = time.Since(start)
@@ -995,8 +1098,11 @@ func (a *App) executeTurnFromStep(ctx context.Context, threadID, userText, turnI
 				thinking:         plan.Thinking,
 				proposedCalls:    nonReadCalls,
 				stepsUsed:        step,
+				maxSteps:         settings.maxSteps,
 				triggerType:      triggerType,
 				inputMessageID:   currentInputMessageID,
+				proposalSource:   settings.proposalSource,
+				proposalSourceID: settings.proposalSourceID,
 			}, result)
 		}
 
@@ -1004,7 +1110,7 @@ func (a *App) executeTurnFromStep(ctx context.Context, threadID, userText, turnI
 	}
 
 	// If we hit the step limit, finalize with whatever the last plan said.
-	plan, err := a.planTurn(ctx, threadID, userText, maxInlineToolSteps, maxInlineToolSteps, currentInputMessageID)
+	plan, err := a.planTurn(ctx, threadID, userText, settings.maxSteps, settings.maxSteps, currentInputMessageID)
 	if err != nil {
 		return nil, fmt.Errorf("final plan after tool limit: %w", err)
 	}
@@ -1016,9 +1122,12 @@ func (a *App) executeTurnFromStep(ctx context.Context, threadID, userText, turnI
 		assistantMessage: plan.AssistantMessage,
 		thinking:         plan.Thinking,
 		proposedCalls:    nonReadCalls,
-		stepsUsed:        maxInlineToolSteps,
+		stepsUsed:        settings.maxSteps,
+		maxSteps:         settings.maxSteps,
 		triggerType:      triggerType,
 		inputMessageID:   currentInputMessageID,
+		proposalSource:   settings.proposalSource,
+		proposalSourceID: settings.proposalSourceID,
 	}, result)
 }
 
@@ -1079,7 +1188,13 @@ func extractToolURL(action agent.ProposedAction) string {
 	return ""
 }
 
-func (a *App) executeInlineReadTool(ctx context.Context, action agent.ProposedAction) (string, error) {
+type spawnToolArgs struct {
+	Goal          string `json:"goal"`
+	MaxToolSteps  uint32 `json:"max_tool_steps,omitempty"`
+	MaxWallTimeMS uint64 `json:"max_wall_time_ms,omitempty"`
+}
+
+func (a *App) executeInlineReadTool(ctx context.Context, originThreadID string, action agent.ProposedAction) (string, error) {
 	tool := strings.ToLower(strings.TrimSpace(action.Tool))
 
 	switch {
@@ -1290,6 +1405,29 @@ func (a *App) executeInlineReadTool(ctx context.Context, action agent.ProposedAc
 		}
 		return listing, nil
 
+	case tool == "spawn":
+		var args spawnToolArgs
+		if err := json.Unmarshal(action.Args, &args); err != nil {
+			return fmt.Sprintf("invalid spawn args: %v", err), err
+		}
+		goal := strings.TrimSpace(args.Goal)
+		if goal == "" {
+			return "spawn error: goal is required", errors.New("goal is required")
+		}
+		triggerType, triggerSourceID := a.inferJobTriggerFromThread(originThreadID)
+		job, err := a.createJob(ctx, createJobInput{
+			Goal:           goal,
+			OriginThreadID: originThreadID,
+			TriggerType:    triggerType,
+			TriggerSource:  triggerSourceID,
+			MaxToolSteps:   args.MaxToolSteps,
+			MaxWallTimeMS:  args.MaxWallTimeMS,
+		})
+		if err != nil {
+			return fmt.Sprintf("spawn error: %v", err), err
+		}
+		return fmt.Sprintf("spawned job %s (thread %s) for goal: %s", job.JobID, job.ThreadID, job.Goal), nil
+
 	default:
 		return fmt.Sprintf("unknown inline read tool: %s", action.Tool), fmt.Errorf("unknown inline read tool: %s", action.Tool)
 	}
@@ -1316,6 +1454,18 @@ func (a *App) finalizeTurn(ctx context.Context, input finalizeTurnInput, result 
 	nowStr := now.Format(time.RFC3339Nano)
 	expiresAt := now.Add(defaultActionExpiry).Format(time.RFC3339Nano)
 	assistantMessageID := ""
+	proposalSource := strings.TrimSpace(input.proposalSource)
+	if proposalSource == "" {
+		proposalSource = "chat"
+	}
+	proposalSourceID := strings.TrimSpace(input.proposalSourceID)
+	if proposalSourceID == "" {
+		proposalSourceID = input.threadID
+	}
+	maxSteps := input.maxSteps
+	if maxSteps <= 0 {
+		maxSteps = maxInlineToolSteps
+	}
 	suppressAssistantOutput := input.triggerType == protocolv1.TriggerType_HEARTBEAT && len(input.proposedCalls) == 0 && strings.EqualFold(strings.TrimSpace(input.assistantMessage), heartbeatSilentMarker)
 
 	tx, err := a.db.BeginTx(ctx, nil)
@@ -1344,8 +1494,8 @@ func (a *App) finalizeTurn(ctx context.Context, input finalizeTurnInput, result 
 			INSERT INTO proposed_actions(
 				action_id, user_id, source, source_id, tool, args_json, risk_class,
 				justification, idempotency_key, status, rejection_reason, expires_at, created_at, turn_id
-			) VALUES(?, ?, 'chat', ?, ?, ?, ?, ?, ?, 'PENDING', '', ?, ?, ?)
-		`, actionID, a.ownerID, input.threadID, tc.action.Tool, argsJSON, tc.action.RiskClass, tc.action.Justification, idempotencyKey, expiresAt, nowStr, input.turnID); err != nil {
+			) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', '', ?, ?, ?)
+		`, actionID, a.ownerID, proposalSource, proposalSourceID, tc.action.Tool, argsJSON, tc.action.RiskClass, tc.action.Justification, idempotencyKey, expiresAt, nowStr, input.turnID); err != nil {
 			return nil, fmt.Errorf("insert proposed action: %w", err)
 		}
 		if err := insertAuditTx(tx, "action_proposed", actionID, argsJSON, nowStr); err != nil {
@@ -1407,6 +1557,10 @@ func (a *App) finalizeTurn(ctx context.Context, input finalizeTurnInput, result 
 	}
 
 	if len(actions) > 0 {
+		stepsRemaining := maxSteps - input.stepsUsed
+		if stepsRemaining < 0 {
+			stepsRemaining = 0
+		}
 		for _, action := range actions {
 			_, _ = a.appendThreadEvent(ctx, &protocolv1.ThreadEvent{
 				ThreadId:     input.threadID,
@@ -1438,7 +1592,7 @@ func (a *App) finalizeTurn(ctx context.Context, input finalizeTurnInput, result 
 			Payload: &protocolv1.ThreadEvent_TurnPaused{TurnPaused: &protocolv1.TurnPaused{
 				PendingActionCount: uint32(len(actions)),
 				StepsUsed:          uint32(input.stepsUsed),
-				StepsRemaining:     uint32(maxInlineToolSteps - input.stepsUsed),
+				StepsRemaining:     uint32(stepsRemaining),
 			}},
 		})
 	} else {

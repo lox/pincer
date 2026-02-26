@@ -13,7 +13,7 @@ It targets full coverage of the canonical system contract in `docs/spec.md`.
 2. Turn/thread streaming is implemented for `TurnsService.StartTurn` and `EventsService.WatchThread`, including incremental command output events.
 3. iOS uses generated Connect Swift unary clients for current chat/approvals/settings surfaces.
 4. Proto/Go/Swift generation is wired through `buf` and checked into the repo.
-5. Remaining work includes stream-first iOS chat consumption and completion of currently unimplemented Jobs/Schedules RPC methods.
+5. Remaining work includes stream-first iOS chat consumption and completion of Schedules RPC methods and iOS scheduler/job surfaces.
 
 ## 1. Goals
 

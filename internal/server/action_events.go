@@ -9,7 +9,10 @@ import (
 )
 
 func (a *App) emitActionStatusEvent(ctx context.Context, source, sourceID, turnID, actionID string, status protocolv1.ActionStatus, reason string) {
-	if source != "chat" || sourceID == "" {
+	if sourceID == "" {
+		return
+	}
+	if source != "chat" && source != "job" {
 		return
 	}
 	_, _ = a.appendThreadEvent(ctx, &protocolv1.ThreadEvent{

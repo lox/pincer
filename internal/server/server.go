@@ -51,6 +51,13 @@ const (
 	maxBashSystemMessageChars         = 4 * 1024
 	maxToolResultMessageChars         = 4 * 1024
 	maxInlineToolSteps                = 10
+	defaultJobRunnerPollInterval      = 500 * time.Millisecond
+	defaultJobMaxToolSteps            = 20
+	maxJobMaxToolSteps                = 100
+	defaultJobMaxWallTime             = 30 * time.Minute
+	minJobMaxWallTime                 = time.Minute
+	maxJobMaxWallTime                 = 24 * time.Hour
+	maxConcurrentJobs                 = 5
 	heartbeatThreadID                 = "thread_heartbeat"
 	heartbeatThreadTitle              = "Heartbeat"
 	heartbeatSilentMarker             = "HEARTBEAT_OK"
@@ -107,6 +114,10 @@ type App struct {
 	workspaceTotalBytes    int64
 	workspaceLockShards    [workspaceLockShardCount]sync.Mutex
 	resumingTurns          sync.Map // turnID → struct{}: guards against double-resumption
+	runningJobs            sync.Map // jobID -> struct{}: guards against duplicate job runners
+	jobCancels             sync.Map // jobID -> context.CancelFunc
+	jobSem                 chan struct{}
+	jobRunnerInterval      time.Duration
 }
 
 type threadResponse struct {
@@ -334,6 +345,13 @@ func New(cfg AppConfig) (*App, error) {
 		heartbeatInterval:      heartbeatInterval,
 		eventSubs:              make(map[string]map[chan *threadEvent]struct{}),
 		workspaceTotalBytes:    workspaceTotalBytes,
+		jobSem:                 make(chan struct{}, maxConcurrentJobs),
+		jobRunnerInterval:      defaultJobRunnerPollInterval,
+	}
+
+	if err := app.failRunningJobsOnStartup(context.Background()); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("fail running jobs on startup: %w", err)
 	}
 
 	if !cfg.DisableBackgroundWorker {
@@ -711,6 +729,7 @@ func (a *App) executeApprovedAction(actionID string) error {
 
 	argsHash := sha256Hex(item.ArgsJSON)
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+	sourceUsesThread := item.Source == "chat" || item.Source == "job"
 
 	var existingArgsHash string
 	err = preflightTx.QueryRow(`
@@ -764,7 +783,7 @@ func (a *App) executeApprovedAction(actionID string) error {
 			}
 
 			executionID := newID("exec")
-			if item.Source == "chat" {
+			if sourceUsesThread {
 				a.emitToolExecutionStarted(streamCtx, item.SourceID, "", executionID, item.ActionID, item.Tool, args.URL)
 			}
 
@@ -787,12 +806,12 @@ func (a *App) executeApprovedAction(actionID string) error {
 				executionSystemMsg = b.String()
 				fetchTruncated = result.Truncated
 
-				if item.Source == "chat" {
+				if sourceUsesThread {
 					a.emitToolExecutionOutputDelta(streamCtx, item.SourceID, "", executionID, protocolv1.OutputStream_STDOUT, []byte(executionSystemMsg), 0)
 				}
 			}
 
-			if item.Source == "chat" {
+			if sourceUsesThread {
 				a.emitToolExecutionFinished(streamCtx, item.SourceID, "", executionID, toolExecutionResult{
 					ExitCode:  fetchExitCode,
 					Duration:  fetchDuration,
@@ -809,17 +828,17 @@ func (a *App) executeApprovedAction(actionID string) error {
 		if err := json.Unmarshal([]byte(item.ArgsJSON), &parsedArgs); err == nil && strings.TrimSpace(parsedArgs.Command) != "" {
 			displayCommand = strings.TrimSpace(parsedArgs.Command)
 		}
-		if item.Source == "chat" {
+		if sourceUsesThread {
 			a.emitToolExecutionStarted(streamCtx, item.SourceID, "", executionID, item.ActionID, item.Tool, displayCommand)
 		}
 
 		result := executeBashActionStreaming(item.ArgsJSON, func(stream protocolv1.OutputStream, chunk []byte, offset uint64) {
-			if item.Source == "chat" {
+			if sourceUsesThread {
 				a.emitToolExecutionOutputDelta(streamCtx, item.SourceID, "", executionID, stream, chunk, offset)
 			}
 		})
 
-		if item.Source == "chat" {
+		if sourceUsesThread {
 			a.emitToolExecutionFinished(streamCtx, item.SourceID, "", executionID, toolExecutionResult{
 				ExitCode:  result.ExitCode,
 				Duration:  result.Duration,
@@ -887,7 +906,7 @@ func (a *App) executeApprovedAction(actionID string) error {
 		return fmt.Errorf("action is not approved")
 	}
 
-	if item.Source == "chat" {
+	if sourceUsesThread {
 		// Persist as system message for user visibility.
 		if _, err := finalizeTx.Exec(`
 			INSERT INTO messages(message_id, thread_id, role, content, created_at)
@@ -935,7 +954,10 @@ func (a *App) maybeResumeTurn(actionID string) {
 		FROM proposed_actions
 		WHERE action_id = ?
 	`, actionID).Scan(&turnID, &threadID, &source)
-	if err != nil || turnID == "" || source != "chat" {
+	if err != nil || turnID == "" {
+		return
+	}
+	if source != "chat" && source != "job" {
 		return
 	}
 
@@ -953,6 +975,28 @@ func (a *App) maybeResumeTurn(actionID string) {
 	// turn are resolved concurrently.
 	if _, loaded := a.resumingTurns.LoadOrStore(turnID, struct{}{}); loaded {
 		return
+	}
+
+	maxSteps := maxInlineToolSteps
+	proposalSource := "chat"
+	proposalSourceID := threadID
+	var sourceJob *jobRecord
+	if source == "job" {
+		proposalSource = "job"
+		job, jobErr := a.getJobByThreadID(context.Background(), threadID)
+		if jobErr != nil {
+			a.resumingTurns.Delete(turnID)
+			return
+		}
+		if job.Status != jobStatusWaitingApproval && job.Status != jobStatusRunning {
+			a.resumingTurns.Delete(turnID)
+			return
+		}
+		maxSteps = job.MaxToolSteps
+		if maxSteps <= 0 {
+			maxSteps = defaultJobMaxToolSteps
+		}
+		sourceJob = job
 	}
 
 	// Count inline READ tool steps scoped to THIS turn (not the whole thread).
@@ -989,7 +1033,7 @@ func (a *App) maybeResumeTurn(actionID string) {
 	}
 
 	stepsUsed := internalToolMessages + resolvedActions
-	if stepsUsed >= maxInlineToolSteps {
+	if stepsUsed >= maxSteps {
 		// Budget exhausted — complete the turn without re-planning.
 		_, _ = a.appendThreadEvent(context.Background(), &protocolv1.ThreadEvent{
 			ThreadId:     threadID,
@@ -998,6 +1042,10 @@ func (a *App) maybeResumeTurn(actionID string) {
 			ContentTrust: protocolv1.ContentTrust_TRUSTED_SYSTEM,
 			Payload:      &protocolv1.ThreadEvent_TurnCompleted{TurnCompleted: &protocolv1.TurnCompleted{}},
 		})
+		if sourceJob != nil {
+			_ = a.setJobStatus(context.Background(), sourceJob, jobStatusPausedBudget, "max_tool_steps_exhausted", turnID)
+			_ = a.postJobSummaryToOriginThread(context.Background(), sourceJob, jobStatusPausedBudget, "The job exhausted its max_tool_steps budget.")
+		}
 		a.resumingTurns.Delete(turnID)
 		return
 	}
@@ -1006,6 +1054,9 @@ func (a *App) maybeResumeTurn(actionID string) {
 	// Heartbeat turns persist prompts as internal messages to avoid user-visible
 	// prompt noise, so continuation needs a different selector.
 	resumeTriggerType := protocolv1.TriggerType_CHAT_MESSAGE
+	if source == "job" {
+		resumeTriggerType = protocolv1.TriggerType_JOB_WAKEUP
+	}
 	var inputMessageID string
 	var userText string
 	if threadID == heartbeatThreadID {
@@ -1042,11 +1093,54 @@ func (a *App) maybeResumeTurn(actionID string) {
 		}
 	}
 
-	a.logger.Info("resuming turn after approval", "turn_id", turnID, "thread_id", threadID, "steps_used", stepsUsed)
+	if sourceJob != nil {
+		remaining := a.remainingJobWallTime(sourceJob, time.Now().UTC())
+		if remaining <= 0 {
+			_ = a.setJobStatus(context.Background(), sourceJob, jobStatusPausedBudget, "max_wall_time_exceeded", turnID)
+			_ = a.postJobSummaryToOriginThread(context.Background(), sourceJob, jobStatusPausedBudget, "The job reached its wall-time budget before continuation.")
+			a.resumingTurns.Delete(turnID)
+			return
+		}
+		_ = a.setJobStatus(context.Background(), sourceJob, jobStatusRunning, "", turnID)
+	}
+
+	a.logger.Info("resuming turn after approval", "turn_id", turnID, "thread_id", threadID, "steps_used", stepsUsed, "source", source)
 
 	go func() {
 		defer a.resumingTurns.Delete(turnID)
-		_, err := a.executeTurnFromStep(context.Background(), threadID, userText, turnID, resumeTriggerType, stepsUsed, inputMessageID, true)
+		runCtx := context.Background()
+		cancel := context.CancelFunc(func() {})
+		if sourceJob != nil {
+			remaining := a.remainingJobWallTime(sourceJob, time.Now().UTC())
+			runCtx, cancel = context.WithTimeout(context.Background(), remaining)
+			a.jobCancels.Store(sourceJob.JobID, cancel)
+		}
+		defer cancel()
+		if sourceJob != nil {
+			defer a.jobCancels.Delete(sourceJob.JobID)
+		}
+
+		result, err := a.executeTurnFromStep(
+			runCtx,
+			threadID,
+			userText,
+			turnID,
+			resumeTriggerType,
+			stepsUsed,
+			inputMessageID,
+			true,
+			maxSteps,
+			proposalSource,
+			proposalSourceID,
+		)
+		if sourceJob != nil {
+			a.applyJobContinuationResult(sourceJob, turnID, result, err)
+			if err != nil {
+				a.logger.Error("job turn continuation failed", "job_id", sourceJob.JobID, "turn_id", turnID, "thread_id", threadID, "error", err)
+			}
+			return
+		}
+
 		if err != nil {
 			a.logger.Error("turn continuation failed", "turn_id", turnID, "thread_id", threadID, "error", err)
 		}
@@ -1267,7 +1361,7 @@ func riskClassForTool(tool string) string {
 	switch strings.ToLower(strings.TrimSpace(tool)) {
 	case "web_search", "web_summarize", "web_fetch", "image_describe":
 		return "READ"
-	case "read_file", "write_file", "append_file", "list_dir":
+	case "read_file", "write_file", "append_file", "list_dir", "spawn":
 		return "READ"
 	case "gmail_search", "gmail_read", "gmail_get_thread":
 		return "READ"
@@ -1650,6 +1744,12 @@ func (a *App) runBackgroundWorkers() {
 		a.runActionExecutor()
 	}()
 
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		a.runJobRunner()
+	}()
+
 	if a.heartbeatEnabled {
 		wg.Add(1)
 		go func() {
@@ -1689,15 +1789,16 @@ func (a *App) runHeartbeatService() {
 		return
 	}
 
-	ticker := time.NewTicker(a.heartbeatInterval)
-	defer ticker.Stop()
+	timer := time.NewTimer(a.heartbeatInterval)
+	defer timer.Stop()
 
 	for {
 		select {
 		case <-a.stopCh:
 			return
-		case <-ticker.C:
+		case <-timer.C:
 			a.runHeartbeatTurn()
+			timer.Reset(a.heartbeatInterval)
 		}
 	}
 }
@@ -2041,6 +2142,30 @@ func migrate(db *sql.DB) error {
 			event_blob BLOB NOT NULL,
 			UNIQUE(thread_id, sequence)
 		);`,
+		`CREATE TABLE IF NOT EXISTS jobs(
+			job_id TEXT PRIMARY KEY,
+			user_id TEXT NOT NULL,
+			goal TEXT NOT NULL,
+			status TEXT NOT NULL,
+			thread_id TEXT NOT NULL,
+			origin_thread_id TEXT NOT NULL,
+			trigger_type TEXT NOT NULL,
+			trigger_source_id TEXT NOT NULL,
+			max_tool_steps INTEGER NOT NULL,
+			max_wall_time_ms INTEGER NOT NULL,
+			current_turn_id TEXT NOT NULL,
+			started_at TEXT NOT NULL,
+			last_error TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		);`,
+		`CREATE TABLE IF NOT EXISTS job_events(
+			event_id TEXT PRIMARY KEY,
+			job_id TEXT NOT NULL,
+			event_type TEXT NOT NULL,
+			payload_json TEXT NOT NULL,
+			created_at TEXT NOT NULL
+		);`,
 		`CREATE TABLE IF NOT EXISTS domain_grants(
 			domain TEXT NOT NULL,
 			thread_id TEXT NOT NULL,
@@ -2063,6 +2188,8 @@ func migrate(db *sql.DB) error {
 			data BLOB NOT NULL,
 			created_at TEXT NOT NULL
 		);`,
+		`CREATE INDEX IF NOT EXISTS idx_jobs_status_updated_at ON jobs(status, updated_at);`,
+		`CREATE INDEX IF NOT EXISTS idx_job_events_job_created_at ON job_events(job_id, created_at);`,
 	}
 	for _, stmt := range stmts {
 		if _, err := db.Exec(stmt); err != nil {
@@ -2075,6 +2202,15 @@ func migrate(db *sql.DB) error {
 		{"proposed_actions", "turn_id", "TEXT NOT NULL DEFAULT ''"},
 		{"threads", "title", "TEXT NOT NULL DEFAULT ''"},
 		{"threads", "updated_at", "TEXT NOT NULL DEFAULT ''"},
+		{"jobs", "origin_thread_id", "TEXT NOT NULL DEFAULT ''"},
+		{"jobs", "trigger_type", "TEXT NOT NULL DEFAULT ''"},
+		{"jobs", "trigger_source_id", "TEXT NOT NULL DEFAULT ''"},
+		{"jobs", "max_tool_steps", fmt.Sprintf("INTEGER NOT NULL DEFAULT %d", defaultJobMaxToolSteps)},
+		{"jobs", "max_wall_time_ms", fmt.Sprintf("INTEGER NOT NULL DEFAULT %d", defaultJobMaxWallTime/time.Millisecond)},
+		{"jobs", "current_turn_id", "TEXT NOT NULL DEFAULT ''"},
+		{"jobs", "started_at", "TEXT NOT NULL DEFAULT ''"},
+		{"jobs", "last_error", "TEXT NOT NULL DEFAULT ''"},
+		{"jobs", "updated_at", "TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, ac := range addColumns {
 		_, _ = db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", ac.table, ac.column, ac.colDef))
