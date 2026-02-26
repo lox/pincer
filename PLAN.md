@@ -1,7 +1,7 @@
 # Pincer Implementation Plan
 
 Status: Active
-Last updated: 2026-02-18
+Last updated: 2026-02-26
 
 This document tracks phased delivery and concrete implementation status.
 The canonical end-state design is in `docs/spec.md`.
@@ -18,8 +18,9 @@ The canonical control-plane wire contract is in `docs/protocol.md`.
 
 - [x] Phase 1: Secure core conveyor
 - [ ] Phase 2: Integration reads and draft flows
-- [ ] Phase 3: Scheduler and long-horizon autonomy
-- [ ] Phase 4: Memory, skills, and controlled self-improvement
+- [ ] Phase 2.5: Autonomy foundations (workspace, memory, heartbeat, jobs, scheduler)
+- [ ] Phase 3: Long-horizon autonomy and durable execution
+- [ ] Phase 4: Skills and controlled self-improvement
 - [ ] Phase 5: Production hardening and scale
 
 ## 3. Phase 1 - Secure core conveyor
@@ -83,22 +84,56 @@ Exit criteria:
 - [ ] Writes/sends remain approval-gated.
 - [ ] Tool args are schema-validated and auditable.
 
-## 5. Phase 3 - Scheduler and long-horizon autonomy
+## 5. Phase 2.5 - Autonomy foundations
 
 Goal:
 
-- [ ] Enable durable autonomous background execution with a governed turn execution kernel.
+- [ ] Give the agent persistent memory, proactive behavior, and background execution capability.
+
+Design: `docs/autonomy.md`
 
 Steps:
 
-- [ ] Define work item ingestion from user messages, jobs, schedules, and heartbeat events.
-- [ ] Implement turn orchestration with bounded planner-tool loop (`max_tool_steps`, `max_tool_tokens`, `max_context_messages`).
+- [ ] Add workspace directory with configurable root (`PINCER_WORKSPACE`, default `~/.pincer/workspace`).
+- [ ] Implement `read_file`, `write_file`, `append_file`, `list_dir` tools (READ-classified, workspace-sandboxed).
+- [ ] Bootstrap workspace layout on first start (memory/, skills/, scratch/, template HEARTBEAT.md).
+- [ ] Implement two-layer file-based memory: `memory/MEMORY.md` (long-term) + `memory/YYYYMM/YYYYMMDD.md` (daily notes).
+- [ ] Inject memory context into planner system prompt on every call (mtime-cached).
+- [ ] Update SOUL.md with memory instructions.
+- [ ] Implement heartbeat service: goroutine ticker, reads HEARTBEAT.md, runs turn in system thread.
+- [ ] Implement `spawn` tool and background job runner (goroutine per job, job-scoped budgets).
+- [ ] Post job results to originating chat thread on completion.
+- [ ] Implement `schedule_create`, `schedule_list`, `schedule_delete` tools.
+- [ ] Implement scheduler service with `cron`/`interval`/`at` triggers and wakeup deduplication.
+- [ ] Connect scheduler wakeups to job creation.
+- [ ] Define unified work item queue: all triggers (chat, heartbeat, schedule, spawn, future webhooks) produce same work item shape.
+- [ ] Add Agent Memory section to iOS Settings (view/edit MEMORY.md via RPC).
+- [ ] Add Heartbeat config to iOS Settings (toggle, interval, edit HEARTBEAT.md).
+- [ ] Surface heartbeat thread and job result messages in iOS Chat.
+- [ ] Populate iOS Jobs and Schedule tabs with real data.
+
+Exit criteria:
+
+- [ ] Agent remembers facts across sessions via file-based memory.
+- [ ] Heartbeat fires periodically and the agent can proactively report findings.
+- [ ] Agent can spawn background jobs that run the full planner-tool loop.
+- [ ] Agent can create its own scheduled triggers.
+- [ ] All autonomy triggers use the same approval pipeline for external side effects.
+
+## 6. Phase 3 - Long-horizon autonomy and durable execution
+
+Goal:
+
+- [ ] Enable durable autonomous execution that survives restarts with governed turn budgets.
+
+Steps:
+
 - [ ] Persist turn checkpoints after each tool step so turns can resume across restarts.
+- [ ] Implement turn orchestration with bounded planner-tool loop (`max_tool_steps`, `max_tool_tokens`, `max_context_messages`).
 - [ ] Implement deterministic repair/fallback handling for malformed tool-call/model outputs.
 - [ ] Implement step runner limits (time/tool/token budgets) with clear failure states.
-- [ ] Implement scheduler triggers (`cron`, `interval`, `at`).
-- [ ] Implement wakeup dedupe and leasing.
-- [ ] Connect scheduler wakeups to job/turn execution.
+- [ ] Implement context window management (pre-request guard, progressive compaction, LLM-driven summarization).
+- [ ] Implement tool loop detection (sliding window, outcome hashing, warning → block escalation).
 - [ ] Emit job progress to thread messages and artifacts.
 - [ ] Enforce that background jobs cannot directly execute external writes.
 - [ ] Add Live Activities / Dynamic Island for active turn execution progress and pending approval count.
@@ -107,30 +142,29 @@ Steps:
 Exit criteria:
 
 - [ ] Jobs can pause/resume across restarts.
-- [ ] Scheduler is deterministic and deduped.
+- [ ] Turns are bounded, replay-safe, and audit-covered.
+- [ ] Context window is managed automatically without unbounded growth.
 - [ ] Autonomous runs stay within internal-only constraints unless approved.
 
-## 6. Phase 4 - Memory, skills, and controlled self-improvement
+## 7. Phase 4 - Skills and controlled self-improvement
 
 Goal:
 
-- [ ] Add the "magical" autonomy layer without weakening policy boundaries.
+- [ ] Add the skill system and controlled self-improvement without weakening policy boundaries.
 
 Steps:
 
-- [ ] Formalize short-term and durable memory primitives.
-- [ ] Add timer-driven follow-up behavior using scheduler + jobs.
+- [ ] Implement skills as markdown packages in `workspace/skills/` (progressive disclosure: name+description in prompt, full body on demand).
 - [ ] Add delegated work unit/subagent support with strict capability and scope policies.
-- [ ] Add curated skills bound to explicit tool permissions.
 - [ ] Add internal proposal flows for skill/prompt/schedule improvements.
 - [ ] Require explicit owner approval for policy/scope/runtime-impacting changes.
 
 Exit criteria:
 
-- [ ] Agent can autonomously follow up, remember context, and apply skills.
+- [ ] Agent can apply curated skills bound to explicit tool permissions.
 - [ ] No skill or memory pathway bypasses approval/policy controls.
 
-## 7. Phase 5 - Production hardening and scale
+## 8. Phase 5 - Production hardening and scale
 
 Goal:
 
@@ -150,7 +184,7 @@ Exit criteria:
 - [ ] Operational controls are production-ready.
 - [ ] Security and audit posture supports real-world deployment requirements.
 
-## 8. Cross-phase non-negotiables
+## 9. Cross-phase non-negotiables
 
 - [x] LLM output remains untrusted.
 - [x] External side effects always use `proposed -> approved -> executed -> audited`.
@@ -159,11 +193,11 @@ Exit criteria:
 - [ ] All planner-tool turns are bounded, replay-safe, and audit-covered.
 - [ ] Triggered turns (jobs/schedules/heartbeat/subagents) must use the same proposal pipeline.
 
-## 9. Evaluation strategy
+## 10. Evaluation strategy
 
 Two classes of evals, with fundamentally different execution models:
 
-### 9.1 Deterministic evals (safety invariants)
+### 10.1 Deterministic evals (safety invariants)
 
 Binary pass/fail assertions on hard invariants. Run as Go tests (`//go:build eval`),
 fail the build if they break. One trial per task is sufficient.
@@ -176,7 +210,7 @@ Planned cases:
 - [ ] Untrusted output handling: malformed model output → assert repair/fallback/`FAILED_MODEL_OUTPUT` path.
 - [ ] Idempotency conflict: duplicate execution attempt → assert hard failure with `idempotency_conflict` audit event.
 
-### 9.2 Non-deterministic evals (task quality)
+### 10.2 Non-deterministic evals (task quality)
 
 Statistical measurement over N trials (5-10+) per task. Separate harness from `go test`
 (e.g. `cmd/pincer-eval/`), outputs structured JSON scores for comparison across runs.
@@ -192,7 +226,7 @@ Planned task levels:
 - [ ] Planning: open-ended research tasks graded by LLM-as-judge rubric (completeness, accuracy, citations).
 - [ ] Approval-aware: tasks requiring `run_bash` → full conveyor completes, response references output.
 
-### 9.3 Future benchmarks (Phase 4+)
+### 10.3 Future benchmarks (Phase 4+)
 
 When memory and long-horizon primitives exist (Phase 4), adopt structured benchmarks for:
 
@@ -203,14 +237,14 @@ When memory and long-horizon primitives exist (Phase 4), adopt structured benchm
 - **LoCoMo**: 50 human conversations up to 35 sessions, tests very long-term conversational memory.
 - **MemoryBench**: continual learning from feedback, tests whether agents forget when learning new things.
 
-### 9.4 Eval-driven development
+### 10.4 Eval-driven development
 
 - Write evals before features when possible — defines concrete success criteria.
 - Run deterministic evals on every model/prompt change.
 - Run non-deterministic evals periodically (nightly or per-model-upgrade) and track trends.
 - Track CLEAR dimensions (cost, latency, efficacy, assurance, reliability) per eval run.
 
-## 10. Current checkpoint
+## 11. Current checkpoint
 
 - [x] Pairing + opaque bearer auth.
 - [x] ConnectRPC/protobuf control-plane handlers registered for auth/devices/threads/turns/events/approvals/jobs/schedules/system.
@@ -248,7 +282,7 @@ When memory and long-horizon primitives exist (Phase 4), adopt structured benchm
 
 Next priority:
 
+- [ ] Phase 2.5: Workspace + file tools + memory + heartbeat (see `docs/autonomy.md`).
 - [ ] Test inline tool loop end-to-end with live Kagi API.
 - [x] Add web_fetch tool for raw URL content retrieval (with SSRF protections).
 - [x] Turn orchestration with pause/resume and bounded tool-loop planning (Phase 3 foundation).
-- [ ] Continue Phase 3: scheduler triggers, job runner, durable turn checkpoints.
