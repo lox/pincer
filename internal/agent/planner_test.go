@@ -499,6 +499,132 @@ func TestOpenAIPlannerLoadsSOULPromptFromFile(t *testing.T) {
 	}
 }
 
+func TestOpenAIPlannerIncludesIdentityPromptWhenConfigured(t *testing.T) {
+	t.Parallel()
+
+	const identity = "You are Emaline. Non-human. Independent counterpart."
+
+	var (
+		mu          sync.Mutex
+		sawIdentity bool
+	)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req openAIChatCompletionRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		for _, msg := range req.Messages {
+			if msg.Role == "system" && strings.Contains(msg.Content, identity) {
+				mu.Lock()
+				sawIdentity = true
+				mu.Unlock()
+				break
+			}
+		}
+
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]any{"content": "ok"}},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	planner, err := NewOpenAIPlanner(OpenAIPlannerConfig{
+		APIKey:         "test-key",
+		BaseURL:        srv.URL,
+		PrimaryModel:   "primary-model",
+		HTTPClient:     srv.Client(),
+		IdentityPrompt: identity,
+		SOULPrompt:     "Keep it concise.",
+	})
+	if err != nil {
+		t.Fatalf("new planner: %v", err)
+	}
+
+	if _, err := planner.Plan(context.Background(), PlanRequest{
+		ThreadID:    "thr_test",
+		UserMessage: "hello",
+	}); err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !sawIdentity {
+		t.Fatalf("expected planner request to include IDENTITY guidance")
+	}
+}
+
+func TestOpenAIPlannerLoadsIdentityPromptFromFile(t *testing.T) {
+	t.Parallel()
+
+	const identity = "Name: Emaline\nNature: Non-human emergent intelligence."
+
+	dir := t.TempDir()
+	identityPath := filepath.Join(dir, "IDENTITY.md")
+	if err := os.WriteFile(identityPath, []byte(identity), 0o644); err != nil {
+		t.Fatalf("write IDENTITY.md: %v", err)
+	}
+
+	var (
+		mu          sync.Mutex
+		sawIdentity bool
+	)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req openAIChatCompletionRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		for _, msg := range req.Messages {
+			if msg.Role == "system" && strings.Contains(msg.Content, identity) {
+				mu.Lock()
+				sawIdentity = true
+				mu.Unlock()
+				break
+			}
+		}
+
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]any{"content": "ok"}},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	planner, err := NewOpenAIPlanner(OpenAIPlannerConfig{
+		APIKey:       "test-key",
+		BaseURL:      srv.URL,
+		PrimaryModel: "primary-model",
+		HTTPClient:   srv.Client(),
+		IdentityPath: identityPath,
+		SOULPrompt:   "Be direct.",
+	})
+	if err != nil {
+		t.Fatalf("new planner: %v", err)
+	}
+
+	if _, err := planner.Plan(context.Background(), PlanRequest{
+		ThreadID:    "thr_test",
+		UserMessage: "hello",
+	}); err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !sawIdentity {
+		t.Fatalf("expected planner request to include IDENTITY prompt loaded from file")
+	}
+}
+
 func TestOpenAIPlannerGetMemoryContextIncludesRecentNotesAndMTimeCache(t *testing.T) {
 	t.Parallel()
 
