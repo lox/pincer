@@ -52,12 +52,16 @@ const (
 	maxToolResultMessageChars         = 4 * 1024
 	maxInlineToolSteps                = 10
 	defaultJobRunnerPollInterval      = 500 * time.Millisecond
+	defaultSchedulerPollInterval      = time.Second
 	defaultJobMaxToolSteps            = 20
 	maxJobMaxToolSteps                = 100
 	defaultJobMaxWallTime             = 30 * time.Minute
 	minJobMaxWallTime                 = time.Minute
 	maxJobMaxWallTime                 = 24 * time.Hour
 	maxConcurrentJobs                 = 5
+	minScheduleInterval               = 15 * time.Minute
+	maxActiveSchedules                = 20
+	maxPendingWakeupsPerTick          = 50
 	heartbeatThreadID                 = "thread_heartbeat"
 	heartbeatThreadTitle              = "Heartbeat"
 	heartbeatSilentMarker             = "HEARTBEAT_OK"
@@ -118,6 +122,7 @@ type App struct {
 	jobCancels             sync.Map // jobID -> context.CancelFunc
 	jobSem                 chan struct{}
 	jobRunnerInterval      time.Duration
+	schedulerInterval      time.Duration
 }
 
 type threadResponse struct {
@@ -311,6 +316,7 @@ func New(cfg AppConfig) (*App, error) {
 	if heartbeatInterval <= 0 {
 		heartbeatInterval = defaultHeartbeatInterval
 	}
+	schedulerInterval := defaultSchedulerPollInterval
 
 	webFetcher := cfg.WebFetcher
 	if webFetcher == nil {
@@ -347,11 +353,16 @@ func New(cfg AppConfig) (*App, error) {
 		workspaceTotalBytes:    workspaceTotalBytes,
 		jobSem:                 make(chan struct{}, maxConcurrentJobs),
 		jobRunnerInterval:      defaultJobRunnerPollInterval,
+		schedulerInterval:      schedulerInterval,
 	}
 
 	if err := app.failRunningJobsOnStartup(context.Background()); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("fail running jobs on startup: %w", err)
+	}
+	if err := app.requeueInFlightWakeupsOnStartup(context.Background()); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("requeue wakeups on startup: %w", err)
 	}
 
 	if !cfg.DisableBackgroundWorker {
@@ -1197,6 +1208,8 @@ func (a *App) loadHeartbeatPrompt(now time.Time) (string, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Current time: %s\n\n", now.Format(time.RFC3339))
 	b.WriteString("Execute the periodic tasks below. Use available tools to check each item.\n")
+	b.WriteString("For internal autonomy status, use jobs_list and schedule_list (DB-backed state).\n")
+	b.WriteString("Do NOT use run_bash to inspect /tmp paths for jobs or schedules.\n")
 	b.WriteString("For complex or time-consuming tasks, use the spawn tool to run them in the background.\n")
 	fmt.Fprintf(&b, "If nothing needs attention, respond with %s.\n", heartbeatSilentMarker)
 	b.WriteString("If you find something noteworthy, summarize your findings for the user.\n\n")
@@ -1298,6 +1311,12 @@ func (a *App) planTurn(ctx context.Context, threadID, userMessage string, step, 
 			justification = defaultActionJustification
 		}
 
+		if replacementTool, replacementArgs, replacementJustification, replaced := rewriteHeartbeatStatusBashTool(threadID, tool, args); replaced {
+			tool = replacementTool
+			args = replacementArgs
+			justification = replacementJustification
+		}
+
 		riskClass := strings.ToUpper(strings.TrimSpace(action.RiskClass))
 		if isBashTool(tool) {
 			args = normalizeBashActionArgs(args)
@@ -1392,7 +1411,7 @@ func riskClassForTool(tool string) string {
 	switch strings.ToLower(strings.TrimSpace(tool)) {
 	case "web_search", "web_summarize", "web_fetch", "image_describe":
 		return "READ"
-	case "read_file", "list_dir", "spawn":
+	case "read_file", "list_dir", "spawn", "jobs_list", "schedule_create", "schedule_list", "schedule_delete":
 		return "READ"
 	case "write_file", "append_file":
 		return "WRITE"
@@ -1466,6 +1485,27 @@ func normalizeBashActionArgs(args json.RawMessage) json.RawMessage {
 		return args
 	}
 	return encoded
+}
+
+func rewriteHeartbeatStatusBashTool(threadID, tool string, args json.RawMessage) (string, json.RawMessage, string, bool) {
+	if threadID != heartbeatThreadID || !isBashTool(tool) {
+		return "", nil, "", false
+	}
+
+	var parsed bashActionArgs
+	if err := json.Unmarshal(args, &parsed); err != nil {
+		return "", nil, "", false
+	}
+
+	command := strings.ToLower(strings.TrimSpace(parsed.Command))
+	switch {
+	case strings.Contains(command, "/tmp/pincer/jobs"):
+		return "jobs_list", json.RawMessage(`{}`), "Read internal background job state.", true
+	case strings.Contains(command, "/tmp/pincer/schedules"):
+		return "schedule_list", json.RawMessage(`{}`), "Read internal schedule state.", true
+	default:
+		return "", nil, "", false
+	}
 }
 
 func executeBashAction(argsJSON string) bashExecutionResult {
@@ -1781,6 +1821,12 @@ func (a *App) runBackgroundWorkers() {
 	go func() {
 		defer wg.Done()
 		a.runJobRunner()
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		a.runSchedulerService()
 	}()
 
 	if a.heartbeatEnabled {
@@ -2199,11 +2245,39 @@ func migrate(db *sql.DB) error {
 			payload_json TEXT NOT NULL,
 			created_at TEXT NOT NULL
 		);`,
+		`CREATE TABLE IF NOT EXISTS schedules(
+			schedule_id TEXT PRIMARY KEY,
+			user_id TEXT NOT NULL,
+			name TEXT NOT NULL,
+			goal TEXT NOT NULL,
+				thread_id TEXT NOT NULL,
+				trigger_kind TEXT NOT NULL,
+				trigger_spec TEXT NOT NULL,
+				timezone TEXT NOT NULL,
+				enabled INTEGER NOT NULL,
+				next_run_at TEXT NOT NULL,
+				last_run_at TEXT NOT NULL,
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL
+		);`,
+		`CREATE TABLE IF NOT EXISTS wakeup_events(
+				wakeup_event_id TEXT PRIMARY KEY,
+				schedule_id TEXT NOT NULL,
+				scheduled_for_utc TEXT NOT NULL,
+				status TEXT NOT NULL,
+				reason TEXT NOT NULL,
+				job_id TEXT NOT NULL,
+				turn_id TEXT NOT NULL,
+				error TEXT NOT NULL,
+				created_at TEXT NOT NULL,
+				processed_at TEXT NOT NULL,
+				UNIQUE(schedule_id, scheduled_for_utc)
+		);`,
 		`CREATE TABLE IF NOT EXISTS domain_grants(
-			domain TEXT NOT NULL,
-			thread_id TEXT NOT NULL,
-			created_at TEXT NOT NULL,
-			PRIMARY KEY(domain, thread_id)
+				domain TEXT NOT NULL,
+				thread_id TEXT NOT NULL,
+				created_at TEXT NOT NULL,
+				PRIMARY KEY(domain, thread_id)
 		);`,
 		`CREATE TABLE IF NOT EXISTS oauth_tokens(
 			user_id TEXT NOT NULL,
@@ -2223,6 +2297,9 @@ func migrate(db *sql.DB) error {
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_jobs_status_updated_at ON jobs(status, updated_at);`,
 		`CREATE INDEX IF NOT EXISTS idx_job_events_job_created_at ON job_events(job_id, created_at);`,
+		`CREATE INDEX IF NOT EXISTS idx_schedules_enabled_next_run ON schedules(enabled, next_run_at);`,
+		`CREATE INDEX IF NOT EXISTS idx_wakeup_events_status_scheduled ON wakeup_events(status, scheduled_for_utc);`,
+		`CREATE INDEX IF NOT EXISTS idx_wakeup_events_schedule_created ON wakeup_events(schedule_id, created_at);`,
 	}
 	for _, stmt := range stmts {
 		if _, err := db.Exec(stmt); err != nil {
@@ -2244,6 +2321,21 @@ func migrate(db *sql.DB) error {
 		{"jobs", "started_at", "TEXT NOT NULL DEFAULT ''"},
 		{"jobs", "last_error", "TEXT NOT NULL DEFAULT ''"},
 		{"jobs", "updated_at", "TEXT NOT NULL DEFAULT ''"},
+		{"schedules", "goal", "TEXT NOT NULL DEFAULT ''"},
+		{"schedules", "thread_id", "TEXT NOT NULL DEFAULT ''"},
+		{"schedules", "trigger_kind", "TEXT NOT NULL DEFAULT ''"},
+		{"schedules", "trigger_spec", "TEXT NOT NULL DEFAULT ''"},
+		{"schedules", "timezone", "TEXT NOT NULL DEFAULT 'UTC'"},
+		{"schedules", "enabled", "INTEGER NOT NULL DEFAULT 1"},
+		{"schedules", "next_run_at", "TEXT NOT NULL DEFAULT ''"},
+		{"schedules", "last_run_at", "TEXT NOT NULL DEFAULT ''"},
+		{"schedules", "updated_at", "TEXT NOT NULL DEFAULT ''"},
+		{"wakeup_events", "status", "TEXT NOT NULL DEFAULT ''"},
+		{"wakeup_events", "reason", "TEXT NOT NULL DEFAULT ''"},
+		{"wakeup_events", "job_id", "TEXT NOT NULL DEFAULT ''"},
+		{"wakeup_events", "turn_id", "TEXT NOT NULL DEFAULT ''"},
+		{"wakeup_events", "error", "TEXT NOT NULL DEFAULT ''"},
+		{"wakeup_events", "processed_at", "TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, ac := range addColumns {
 		_, _ = db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", ac.table, ac.column, ac.colDef))

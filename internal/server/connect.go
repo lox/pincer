@@ -771,20 +771,145 @@ func (a *App) CancelJob(ctx context.Context, req *connect.Request[protocolv1.Can
 	return connect.NewResponse(&protocolv1.CancelJobResponse{JobId: job.JobID, Status: dbJobStatusToProto(job.Status)}), nil
 }
 
-func (a *App) ListSchedules(context.Context, *connect.Request[protocolv1.ListSchedulesRequest]) (*connect.Response[protocolv1.ListSchedulesResponse], error) {
-	return connect.NewResponse(&protocolv1.ListSchedulesResponse{}), nil
+func (a *App) ListSchedules(ctx context.Context, _ *connect.Request[protocolv1.ListSchedulesRequest]) (*connect.Response[protocolv1.ListSchedulesResponse], error) {
+	items, err := a.listSchedules(ctx)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("list schedules: %w", err))
+	}
+
+	result := make([]*protocolv1.Schedule, 0, len(items))
+	for _, item := range items {
+		result = append(result, a.scheduleToProto(item))
+	}
+	return connect.NewResponse(&protocolv1.ListSchedulesResponse{Items: result}), nil
 }
 
-func (a *App) CreateSchedule(context.Context, *connect.Request[protocolv1.CreateScheduleRequest]) (*connect.Response[protocolv1.CreateScheduleResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("create schedule is not implemented"))
+func (a *App) CreateSchedule(ctx context.Context, req *connect.Request[protocolv1.CreateScheduleRequest]) (*connect.Response[protocolv1.CreateScheduleResponse], error) {
+	msg := req.Msg
+	item, err := a.createSchedule(ctx, createScheduleInput{
+		Name:        msg.GetName(),
+		Goal:        msg.GetName(),
+		TriggerKind: msg.GetTriggerKind(),
+		TriggerSpec: msg.GetTriggerSpec(),
+		Timezone:    msg.GetTimezone(),
+		Enabled:     true,
+	})
+	if err != nil {
+		switch {
+		case strings.Contains(err.Error(), "planner is not configured"):
+			return nil, connect.NewError(connect.CodeFailedPrecondition, err)
+		case strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "max active schedules"):
+			return nil, connect.NewError(connect.CodeInvalidArgument, err)
+		default:
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("create schedule: %w", err))
+		}
+	}
+	return connect.NewResponse(&protocolv1.CreateScheduleResponse{Item: a.scheduleToProto(item)}), nil
 }
 
-func (a *App) UpdateSchedule(context.Context, *connect.Request[protocolv1.UpdateScheduleRequest]) (*connect.Response[protocolv1.UpdateScheduleResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("update schedule is not implemented"))
+func (a *App) UpdateSchedule(ctx context.Context, req *connect.Request[protocolv1.UpdateScheduleRequest]) (*connect.Response[protocolv1.UpdateScheduleResponse], error) {
+	scheduleID := strings.TrimSpace(req.Msg.GetScheduleId())
+	if scheduleID == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("schedule_id is required"))
+	}
+
+	patch := req.Msg.GetPatch()
+	if patch == nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("patch is required"))
+	}
+
+	values := patch.AsMap()
+	input := updateScheduleInput{ScheduleID: scheduleID}
+	applied := 0
+	for key, rawValue := range values {
+		switch strings.ToLower(strings.TrimSpace(key)) {
+		case "name":
+			value, ok := rawValue.(string)
+			if !ok {
+				return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("patch.name must be a string"))
+			}
+			input.Name = &value
+			applied++
+		case "goal":
+			value, ok := rawValue.(string)
+			if !ok {
+				return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("patch.goal must be a string"))
+			}
+			input.Goal = &value
+			applied++
+		case "trigger_kind":
+			kind, err := parseScheduleTriggerKindPatchValue(rawValue)
+			if err != nil {
+				return nil, connect.NewError(connect.CodeInvalidArgument, err)
+			}
+			input.TriggerKind = &kind
+			applied++
+		case "trigger_spec":
+			value, ok := rawValue.(string)
+			if !ok {
+				return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("patch.trigger_spec must be a string"))
+			}
+			input.TriggerSpec = &value
+			applied++
+		case "timezone":
+			value, ok := rawValue.(string)
+			if !ok {
+				return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("patch.timezone must be a string"))
+			}
+			input.Timezone = &value
+			applied++
+		case "enabled":
+			value, ok := rawValue.(bool)
+			if !ok {
+				return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("patch.enabled must be a bool"))
+			}
+			input.Enabled = &value
+			applied++
+		default:
+			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("unsupported patch field %q", key))
+		}
+	}
+	if applied == 0 {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("patch must include at least one field"))
+	}
+
+	item, err := a.updateSchedule(ctx, input)
+	if err != nil {
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			return nil, connect.NewError(connect.CodeNotFound, errors.New("schedule not found"))
+		case strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "max active schedules"):
+			return nil, connect.NewError(connect.CodeInvalidArgument, err)
+		default:
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("update schedule: %w", err))
+		}
+	}
+
+	return connect.NewResponse(&protocolv1.UpdateScheduleResponse{Item: a.scheduleToProto(item)}), nil
 }
 
-func (a *App) RunScheduleNow(context.Context, *connect.Request[protocolv1.RunScheduleNowRequest]) (*connect.Response[protocolv1.RunScheduleNowResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("run schedule now is not implemented"))
+func (a *App) RunScheduleNow(ctx context.Context, req *connect.Request[protocolv1.RunScheduleNowRequest]) (*connect.Response[protocolv1.RunScheduleNowResponse], error) {
+	scheduleID := strings.TrimSpace(req.Msg.GetScheduleId())
+	if scheduleID == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("schedule_id is required"))
+	}
+
+	wakeup, err := a.runScheduleNow(ctx, scheduleID)
+	if err != nil {
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			return nil, connect.NewError(connect.CodeNotFound, errors.New("schedule not found"))
+		default:
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("run schedule now: %w", err))
+		}
+	}
+
+	return connect.NewResponse(&protocolv1.RunScheduleNowResponse{
+		ScheduleId:    scheduleID,
+		WakeupEventId: wakeup.WakeupEventID,
+		JobId:         wakeup.JobID,
+		TurnId:        wakeup.TurnID,
+	}), nil
 }
 
 func (a *App) GetPolicySummary(context.Context, *connect.Request[protocolv1.GetPolicySummaryRequest]) (*connect.Response[protocolv1.GetPolicySummaryResponse], error) {
@@ -1205,6 +1330,22 @@ type spawnToolArgs struct {
 	MaxWallTimeMS uint64 `json:"max_wall_time_ms,omitempty"`
 }
 
+type scheduleCreateToolArgs struct {
+	Name        string `json:"name"`
+	Goal        string `json:"goal"`
+	Cron        string `json:"cron,omitempty"`
+	Interval    string `json:"interval,omitempty"`
+	At          string `json:"at,omitempty"`
+	Timezone    string `json:"timezone,omitempty"`
+	TriggerKind string `json:"trigger_kind,omitempty"`
+	TriggerSpec string `json:"trigger_spec,omitempty"`
+	Enabled     *bool  `json:"enabled,omitempty"`
+}
+
+type scheduleDeleteToolArgs struct {
+	ScheduleID string `json:"schedule_id"`
+}
+
 func (a *App) executeInlineReadTool(ctx context.Context, originThreadID string, action agent.ProposedAction) (string, error) {
 	tool := strings.ToLower(strings.TrimSpace(action.Tool))
 
@@ -1438,6 +1579,110 @@ func (a *App) executeInlineReadTool(ctx context.Context, originThreadID string, 
 			return fmt.Sprintf("spawn error: %v", err), err
 		}
 		return fmt.Sprintf("spawned job %s (thread %s) for goal: %s", job.JobID, job.ThreadID, job.Goal), nil
+
+	case tool == "jobs_list":
+		items, err := a.listJobs(ctx)
+		if err != nil {
+			return fmt.Sprintf("jobs_list error: %v", err), err
+		}
+
+		type jobsListItem struct {
+			JobID          string `json:"job_id"`
+			Goal           string `json:"goal"`
+			Status         string `json:"status"`
+			ThreadID       string `json:"thread_id"`
+			OriginThreadID string `json:"origin_thread_id"`
+			TriggerType    string `json:"trigger_type"`
+			TriggerSource  string `json:"trigger_source_id"`
+			UpdatedAt      string `json:"updated_at"`
+		}
+
+		payload := make([]jobsListItem, 0, len(items))
+		for _, item := range items {
+			payload = append(payload, jobsListItem{
+				JobID:          item.JobID,
+				Goal:           item.Goal,
+				Status:         item.Status,
+				ThreadID:       item.ThreadID,
+				OriginThreadID: item.OriginThreadID,
+				TriggerType:    item.TriggerTypeRaw,
+				TriggerSource:  item.TriggerSource,
+				UpdatedAt:      item.UpdatedAtRaw,
+			})
+		}
+		encoded, _ := json.Marshal(map[string]any{"items": payload})
+		return string(encoded), nil
+
+	case tool == "schedule_create":
+		var args scheduleCreateToolArgs
+		if err := json.Unmarshal(action.Args, &args); err != nil {
+			return fmt.Sprintf("invalid schedule_create args: %v", err), err
+		}
+
+		input, err := scheduleCreateInputFromToolArgs(args)
+		if err != nil {
+			return fmt.Sprintf("schedule_create error: %v", err), err
+		}
+		schedule, err := a.createSchedule(ctx, input)
+		if err != nil {
+			return fmt.Sprintf("schedule_create error: %v", err), err
+		}
+		nextRun := schedule.NextRunAtRaw
+		if nextRun == "" {
+			nextRun = "disabled"
+		}
+		return fmt.Sprintf("created schedule %s (thread %s), next run at %s", schedule.ScheduleID, schedule.ThreadID, nextRun), nil
+
+	case tool == "schedule_list":
+		items, err := a.listSchedules(ctx)
+		if err != nil {
+			return fmt.Sprintf("schedule_list error: %v", err), err
+		}
+
+		type scheduleListItem struct {
+			ScheduleID       string `json:"schedule_id"`
+			Name             string `json:"name"`
+			Goal             string `json:"goal"`
+			TriggerKind      string `json:"trigger_kind"`
+			TriggerSpec      string `json:"trigger_spec"`
+			Timezone         string `json:"timezone"`
+			Enabled          bool   `json:"enabled"`
+			NextRunAt        string `json:"next_run_at,omitempty"`
+			LastRunAt        string `json:"last_run_at,omitempty"`
+			ScheduleThreadID string `json:"thread_id"`
+		}
+
+		payload := make([]scheduleListItem, 0, len(items))
+		for _, item := range items {
+			payload = append(payload, scheduleListItem{
+				ScheduleID:       item.ScheduleID,
+				Name:             item.Name,
+				Goal:             item.Goal,
+				TriggerKind:      item.TriggerKindRaw,
+				TriggerSpec:      item.TriggerSpec,
+				Timezone:         item.Timezone,
+				Enabled:          item.Enabled,
+				NextRunAt:        item.NextRunAtRaw,
+				LastRunAt:        item.LastRunAtRaw,
+				ScheduleThreadID: item.ThreadID,
+			})
+		}
+		encoded, _ := json.Marshal(map[string]any{"items": payload})
+		return string(encoded), nil
+
+	case tool == "schedule_delete":
+		var args scheduleDeleteToolArgs
+		if err := json.Unmarshal(action.Args, &args); err != nil {
+			return fmt.Sprintf("invalid schedule_delete args: %v", err), err
+		}
+		scheduleID := strings.TrimSpace(args.ScheduleID)
+		if scheduleID == "" {
+			return "schedule_delete error: schedule_id is required", errors.New("schedule_id is required")
+		}
+		if err := a.deleteSchedule(ctx, scheduleID); err != nil {
+			return fmt.Sprintf("schedule_delete error: %v", err), err
+		}
+		return fmt.Sprintf("deleted schedule %s", scheduleID), nil
 
 	default:
 		return fmt.Sprintf("unknown inline read tool: %s", action.Tool), fmt.Errorf("unknown inline read tool: %s", action.Tool)
@@ -1874,4 +2119,126 @@ func jsonStringToStruct(raw string) *structpb.Struct {
 		return nil
 	}
 	return result
+}
+
+func parseScheduleTriggerKindPatchValue(value any) (protocolv1.ScheduleTriggerKind, error) {
+	switch typed := value.(type) {
+	case string:
+		return parseScheduleTriggerKindText(typed)
+	case float64:
+		if typed != float64(int32(typed)) {
+			return 0, errors.New("patch.trigger_kind enum number must be an integer")
+		}
+		candidate := protocolv1.ScheduleTriggerKind(int32(typed))
+		if _, err := scheduleTriggerKindToDB(candidate); err != nil {
+			return 0, err
+		}
+		return candidate, nil
+	default:
+		return 0, errors.New("patch.trigger_kind must be a string or enum number")
+	}
+}
+
+func parseScheduleTriggerKindText(raw string) (protocolv1.ScheduleTriggerKind, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return 0, errors.New("trigger_kind is required")
+	}
+	if numeric, err := strconv.Atoi(trimmed); err == nil {
+		candidate := protocolv1.ScheduleTriggerKind(numeric)
+		if _, kindErr := scheduleTriggerKindToDB(candidate); kindErr != nil {
+			return 0, kindErr
+		}
+		return candidate, nil
+	}
+
+	normalized := strings.ToUpper(trimmed)
+	if value, ok := protocolv1.ScheduleTriggerKind_value[normalized]; ok {
+		candidate := protocolv1.ScheduleTriggerKind(value)
+		if _, err := scheduleTriggerKindToDB(candidate); err != nil {
+			return 0, err
+		}
+		return candidate, nil
+	}
+
+	switch strings.ToLower(trimmed) {
+	case "cron":
+		return protocolv1.ScheduleTriggerKind_SCHEDULE_TRIGGER_CRON, nil
+	case "interval":
+		return protocolv1.ScheduleTriggerKind_SCHEDULE_TRIGGER_INTERVAL, nil
+	case "at":
+		return protocolv1.ScheduleTriggerKind_SCHEDULE_TRIGGER_AT, nil
+	default:
+		return 0, fmt.Errorf("invalid trigger_kind %q", raw)
+	}
+}
+
+func scheduleCreateInputFromToolArgs(args scheduleCreateToolArgs) (createScheduleInput, error) {
+	goal := strings.TrimSpace(args.Goal)
+	name := strings.TrimSpace(args.Name)
+	if goal == "" {
+		goal = name
+	}
+	if name == "" {
+		name = goal
+	}
+	if goal == "" {
+		return createScheduleInput{}, errors.New("goal is required")
+	}
+
+	enabled := true
+	if args.Enabled != nil {
+		enabled = *args.Enabled
+	}
+
+	triggerKindText := strings.TrimSpace(args.TriggerKind)
+	triggerSpec := strings.TrimSpace(args.TriggerSpec)
+	if triggerKindText != "" || triggerSpec != "" {
+		if triggerKindText == "" || triggerSpec == "" {
+			return createScheduleInput{}, errors.New("trigger_kind and trigger_spec must be provided together")
+		}
+		kind, err := parseScheduleTriggerKindText(triggerKindText)
+		if err != nil {
+			return createScheduleInput{}, err
+		}
+		return createScheduleInput{
+			Name:        name,
+			Goal:        goal,
+			TriggerKind: kind,
+			TriggerSpec: triggerSpec,
+			Timezone:    args.Timezone,
+			Enabled:     enabled,
+		}, nil
+	}
+
+	configured := 0
+	kind := protocolv1.ScheduleTriggerKind_SCHEDULE_TRIGGER_KIND_UNSPECIFIED
+	spec := ""
+	if cronSpec := strings.TrimSpace(args.Cron); cronSpec != "" {
+		configured++
+		kind = protocolv1.ScheduleTriggerKind_SCHEDULE_TRIGGER_CRON
+		spec = cronSpec
+	}
+	if intervalSpec := strings.TrimSpace(args.Interval); intervalSpec != "" {
+		configured++
+		kind = protocolv1.ScheduleTriggerKind_SCHEDULE_TRIGGER_INTERVAL
+		spec = intervalSpec
+	}
+	if atSpec := strings.TrimSpace(args.At); atSpec != "" {
+		configured++
+		kind = protocolv1.ScheduleTriggerKind_SCHEDULE_TRIGGER_AT
+		spec = atSpec
+	}
+	if configured != 1 {
+		return createScheduleInput{}, errors.New("exactly one of cron, interval, or at must be provided")
+	}
+
+	return createScheduleInput{
+		Name:        name,
+		Goal:        goal,
+		TriggerKind: kind,
+		TriggerSpec: spec,
+		Timezone:    args.Timezone,
+		Enabled:     enabled,
+	}, nil
 }

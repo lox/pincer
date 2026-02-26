@@ -12,6 +12,7 @@ import (
 	protocolv1 "github.com/lox/pincer/gen/proto/pincer/protocol/v1"
 	"github.com/lox/pincer/gen/proto/pincer/protocol/v1/protocolv1connect"
 	"github.com/lox/pincer/internal/agent"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 func TestStartTurnStreamsLifecycleEvents(t *testing.T) {
@@ -680,6 +681,89 @@ func TestSpawnToolCreatesBackgroundJobAndPostsCompletionSummary(t *testing.T) {
 	}
 }
 
+func TestJobsListToolExecutesInlineWithoutApproval(t *testing.T) {
+	t.Parallel()
+
+	planner := &staticPlannerFunc{fn: func(_ context.Context, req agent.PlanRequest) (agent.PlanResult, error) {
+		switch req.UserMessage {
+		case "check active jobs":
+			for _, msg := range req.History {
+				if strings.Contains(msg.Content, "[tool_result:jobs_list]") {
+					return agent.PlanResult{AssistantMessage: "I found current background job state from the DB."}, nil
+				}
+			}
+			return agent.PlanResult{
+				AssistantMessage: "Checking current background jobs.",
+				ProposedActions: []agent.ProposedAction{{
+					Tool:          "jobs_list",
+					Args:          []byte(`{}`),
+					Justification: "Check internal background job state.",
+					RiskClass:     "READ",
+				}},
+			}, nil
+		default:
+			return agent.PlanResult{AssistantMessage: "ok"}, nil
+		}
+	}}
+
+	app := newTestAppWithPlanner(t, planner)
+	if _, err := app.createJob(context.Background(), createJobInput{
+		Goal:          "seeded job",
+		TriggerType:   protocolv1.TriggerType_JOB_WAKEUP,
+		TriggerSource: "seed",
+	}); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
+
+	token := bootstrapConnectToken(t, srv.URL)
+	httpClient := newAuthorizedHTTPClient(token)
+
+	threadsClient := protocolv1connect.NewThreadsServiceClient(httpClient, srv.URL)
+	turnsClient := protocolv1connect.NewTurnsServiceClient(httpClient, srv.URL)
+	approvalsClient := protocolv1connect.NewApprovalsServiceClient(httpClient, srv.URL)
+
+	createResp, err := threadsClient.CreateThread(context.Background(), connect.NewRequest(&protocolv1.CreateThreadRequest{}))
+	if err != nil {
+		t.Fatalf("create thread: %v", err)
+	}
+	threadID := createResp.Msg.GetThreadId()
+
+	if _, err := turnsClient.SendTurn(context.Background(), connect.NewRequest(&protocolv1.SendTurnRequest{
+		ThreadId:    threadID,
+		UserText:    "check active jobs",
+		TriggerType: protocolv1.TriggerType_CHAT_MESSAGE,
+	})); err != nil {
+		t.Fatalf("send turn: %v", err)
+	}
+
+	pendingResp, err := approvalsClient.ListApprovals(context.Background(), connect.NewRequest(&protocolv1.ListApprovalsRequest{Status: protocolv1.ActionStatus_PENDING}))
+	if err != nil {
+		t.Fatalf("list pending approvals: %v", err)
+	}
+	if len(pendingResp.Msg.GetItems()) != 0 {
+		t.Fatalf("expected jobs_list to execute inline without approvals, got %d pending", len(pendingResp.Msg.GetItems()))
+	}
+
+	messagesResp, err := threadsClient.ListThreadMessages(context.Background(), connect.NewRequest(&protocolv1.ListThreadMessagesRequest{ThreadId: threadID}))
+	if err != nil {
+		t.Fatalf("list thread messages: %v", err)
+	}
+
+	foundAssistant := false
+	for _, item := range messagesResp.Msg.GetItems() {
+		if item.GetRole() == "assistant" && strings.Contains(item.GetContent(), "background job state") {
+			foundAssistant = true
+			break
+		}
+	}
+	if !foundAssistant {
+		t.Fatalf("expected assistant response after jobs_list inline execution")
+	}
+}
+
 func TestJobsServiceCreateListGetAndCancel(t *testing.T) {
 	t.Parallel()
 
@@ -873,6 +957,289 @@ func TestJobProposalsResumeAfterApprovalAndComplete(t *testing.T) {
 	}
 	if !foundCompletion {
 		t.Fatalf("expected job completion summary in originating thread")
+	}
+}
+
+func TestScheduleRunNowDedupesWhenJobAlreadyActive(t *testing.T) {
+	t.Parallel()
+
+	planner := &staticPlannerFunc{fn: func(_ context.Context, req agent.PlanRequest) (agent.PlanResult, error) {
+		if req.UserMessage == "schedule goal needs approval" {
+			return agent.PlanResult{
+				AssistantMessage: "Need approval for scheduled command.",
+				ProposedActions: []agent.ProposedAction{{
+					Tool:          "run_bash",
+					Args:          []byte(`{"command":"echo from schedule"}`),
+					Justification: "Scheduled work needs shell command.",
+					RiskClass:     "HIGH",
+				}},
+			}, nil
+		}
+		return agent.PlanResult{AssistantMessage: "ok"}, nil
+	}}
+
+	app := newTestAppWithPlanner(t, planner)
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
+
+	token := bootstrapConnectToken(t, srv.URL)
+	httpClient := newAuthorizedHTTPClient(token)
+
+	schedulesClient := protocolv1connect.NewSchedulesServiceClient(httpClient, srv.URL)
+	jobsClient := protocolv1connect.NewJobsServiceClient(httpClient, srv.URL)
+
+	createResp, err := schedulesClient.CreateSchedule(context.Background(), connect.NewRequest(&protocolv1.CreateScheduleRequest{
+		Name:        "schedule goal needs approval",
+		TriggerKind: protocolv1.ScheduleTriggerKind_SCHEDULE_TRIGGER_INTERVAL,
+		TriggerSpec: "15m",
+		Timezone:    "UTC",
+	}))
+	if err != nil {
+		t.Fatalf("create schedule: %v", err)
+	}
+	scheduleID := createResp.Msg.GetItem().GetScheduleId()
+
+	firstRun, err := schedulesClient.RunScheduleNow(context.Background(), connect.NewRequest(&protocolv1.RunScheduleNowRequest{ScheduleId: scheduleID}))
+	if err != nil {
+		t.Fatalf("run schedule now (first): %v", err)
+	}
+	if firstRun.Msg.GetWakeupEventId() == "" {
+		t.Fatalf("expected wakeup_event_id from first run")
+	}
+	if firstRun.Msg.GetJobId() == "" {
+		t.Fatalf("expected first run to dispatch a job")
+	}
+
+	waitForCondition(t, 5*time.Second, func() bool {
+		jobsResp, err := jobsClient.ListJobs(context.Background(), connect.NewRequest(&protocolv1.ListJobsRequest{}))
+		if err != nil {
+			return false
+		}
+		count := 0
+		waitingApproval := false
+		for _, item := range jobsResp.Msg.GetItems() {
+			if item.GetTriggerSourceId() != scheduleID {
+				continue
+			}
+			count++
+			if item.GetStatus() == protocolv1.JobStatus_JOB_WAITING_APPROVAL {
+				waitingApproval = true
+			}
+		}
+		return count == 1 && waitingApproval
+	}, "first schedule run waiting approval")
+
+	secondRun, err := schedulesClient.RunScheduleNow(context.Background(), connect.NewRequest(&protocolv1.RunScheduleNowRequest{ScheduleId: scheduleID}))
+	if err != nil {
+		t.Fatalf("run schedule now (second): %v", err)
+	}
+	if secondRun.Msg.GetWakeupEventId() == "" {
+		t.Fatalf("expected wakeup_event_id from second run")
+	}
+	if secondRun.Msg.GetJobId() != "" {
+		t.Fatalf("expected second run to be deduped while first job is active")
+	}
+
+	waitForCondition(t, 3*time.Second, func() bool {
+		jobsResp, err := jobsClient.ListJobs(context.Background(), connect.NewRequest(&protocolv1.ListJobsRequest{}))
+		if err != nil {
+			return false
+		}
+		count := 0
+		for _, item := range jobsResp.Msg.GetItems() {
+			if item.GetTriggerSourceId() == scheduleID {
+				count++
+			}
+		}
+		return count == 1
+	}, "deduped schedule wakeup")
+}
+
+func TestScheduleRunNowPreservesApprovalConveyor(t *testing.T) {
+	t.Parallel()
+
+	planner := &staticPlannerFunc{fn: func(_ context.Context, req agent.PlanRequest) (agent.PlanResult, error) {
+		if req.UserMessage == "schedule goal requires approval" {
+			for _, msg := range req.History {
+				if strings.Contains(msg.Content, "[tool_result:run_bash]") {
+					return agent.PlanResult{AssistantMessage: "Scheduled run completed."}, nil
+				}
+			}
+			return agent.PlanResult{
+				AssistantMessage: "Need approval for scheduled command.",
+				ProposedActions: []agent.ProposedAction{{
+					Tool:          "run_bash",
+					Args:          []byte(`{"command":"echo schedule approval"}`),
+					Justification: "Scheduled work needs shell command.",
+					RiskClass:     "HIGH",
+				}},
+			}, nil
+		}
+		return agent.PlanResult{AssistantMessage: "ok"}, nil
+	}}
+
+	app := newTestAppWithPlanner(t, planner)
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
+
+	token := bootstrapConnectToken(t, srv.URL)
+	httpClient := newAuthorizedHTTPClient(token)
+
+	schedulesClient := protocolv1connect.NewSchedulesServiceClient(httpClient, srv.URL)
+	jobsClient := protocolv1connect.NewJobsServiceClient(httpClient, srv.URL)
+	approvalsClient := protocolv1connect.NewApprovalsServiceClient(httpClient, srv.URL)
+	systemClient := protocolv1connect.NewSystemServiceClient(httpClient, srv.URL)
+
+	createResp, err := schedulesClient.CreateSchedule(context.Background(), connect.NewRequest(&protocolv1.CreateScheduleRequest{
+		Name:        "schedule goal requires approval",
+		TriggerKind: protocolv1.ScheduleTriggerKind_SCHEDULE_TRIGGER_INTERVAL,
+		TriggerSpec: "15m",
+		Timezone:    "UTC",
+	}))
+	if err != nil {
+		t.Fatalf("create schedule: %v", err)
+	}
+	scheduleID := createResp.Msg.GetItem().GetScheduleId()
+
+	if _, err := schedulesClient.RunScheduleNow(context.Background(), connect.NewRequest(&protocolv1.RunScheduleNowRequest{ScheduleId: scheduleID})); err != nil {
+		t.Fatalf("run schedule now: %v", err)
+	}
+
+	waitForCondition(t, 5*time.Second, func() bool {
+		jobsResp, err := jobsClient.ListJobs(context.Background(), connect.NewRequest(&protocolv1.ListJobsRequest{}))
+		if err != nil {
+			return false
+		}
+		for _, item := range jobsResp.Msg.GetItems() {
+			if item.GetTriggerSourceId() == scheduleID && item.GetStatus() == protocolv1.JobStatus_JOB_WAITING_APPROVAL {
+				return true
+			}
+		}
+		return false
+	}, "schedule job waiting approval")
+
+	pendingResp, err := approvalsClient.ListApprovals(context.Background(), connect.NewRequest(&protocolv1.ListApprovalsRequest{Status: protocolv1.ActionStatus_PENDING}))
+	if err != nil {
+		t.Fatalf("list pending approvals: %v", err)
+	}
+	if len(pendingResp.Msg.GetItems()) == 0 {
+		t.Fatalf("expected pending approval from schedule-triggered job")
+	}
+	actionID := pendingResp.Msg.GetItems()[0].GetActionId()
+
+	auditBefore, err := systemClient.ListAudit(context.Background(), connect.NewRequest(&protocolv1.ListAuditRequest{}))
+	if err != nil {
+		t.Fatalf("list audit before approval: %v", err)
+	}
+	for _, entry := range auditBefore.Msg.GetItems() {
+		if entry.GetActionId() == actionID && entry.GetEventType() == "action_executed" {
+			t.Fatalf("action executed before approval for %s", actionID)
+		}
+	}
+
+	if _, err := approvalsClient.ApproveAction(context.Background(), connect.NewRequest(&protocolv1.ApproveActionRequest{ActionId: actionID})); err != nil {
+		t.Fatalf("approve action: %v", err)
+	}
+
+	waitForCondition(t, 8*time.Second, func() bool {
+		listResp, err := jobsClient.ListJobs(context.Background(), connect.NewRequest(&protocolv1.ListJobsRequest{}))
+		if err != nil {
+			return false
+		}
+		for _, item := range listResp.Msg.GetItems() {
+			if item.GetTriggerSourceId() == scheduleID && item.GetStatus() == protocolv1.JobStatus_JOB_COMPLETED {
+				return true
+			}
+		}
+		return false
+	}, "schedule job completion after approval")
+
+	waitForCondition(t, 5*time.Second, func() bool {
+		auditResp, err := systemClient.ListAudit(context.Background(), connect.NewRequest(&protocolv1.ListAuditRequest{}))
+		if err != nil {
+			return false
+		}
+		for _, entry := range auditResp.Msg.GetItems() {
+			if entry.GetActionId() == actionID && entry.GetEventType() == "action_executed" {
+				return true
+			}
+		}
+		return false
+	}, "schedule action executed after approval")
+}
+
+func TestSchedulesServiceCreateListAndUpdate(t *testing.T) {
+	t.Parallel()
+
+	app := newTestAppWithPlanner(t, &staticPlannerFunc{fn: func(_ context.Context, _ agent.PlanRequest) (agent.PlanResult, error) {
+		return agent.PlanResult{AssistantMessage: "ok"}, nil
+	}})
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
+
+	token := bootstrapConnectToken(t, srv.URL)
+	httpClient := newAuthorizedHTTPClient(token)
+
+	schedulesClient := protocolv1connect.NewSchedulesServiceClient(httpClient, srv.URL)
+
+	createResp, err := schedulesClient.CreateSchedule(context.Background(), connect.NewRequest(&protocolv1.CreateScheduleRequest{
+		Name:        "Morning digest",
+		TriggerKind: protocolv1.ScheduleTriggerKind_SCHEDULE_TRIGGER_INTERVAL,
+		TriggerSpec: "15m",
+		Timezone:    "UTC",
+	}))
+	if err != nil {
+		t.Fatalf("create schedule: %v", err)
+	}
+	scheduleID := createResp.Msg.GetItem().GetScheduleId()
+	if scheduleID == "" {
+		t.Fatalf("expected create schedule response to include schedule_id")
+	}
+
+	listResp, err := schedulesClient.ListSchedules(context.Background(), connect.NewRequest(&protocolv1.ListSchedulesRequest{}))
+	if err != nil {
+		t.Fatalf("list schedules: %v", err)
+	}
+	if len(listResp.Msg.GetItems()) == 0 {
+		t.Fatalf("expected at least one schedule in list")
+	}
+
+	found := false
+	for _, item := range listResp.Msg.GetItems() {
+		if item.GetScheduleId() == scheduleID {
+			found = true
+			if item.GetName() != "Morning digest" {
+				t.Fatalf("expected schedule name %q, got %q", "Morning digest", item.GetName())
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected created schedule in list")
+	}
+
+	patch, err := structpb.NewStruct(map[string]any{
+		"name":    "Updated digest",
+		"enabled": false,
+	})
+	if err != nil {
+		t.Fatalf("build patch: %v", err)
+	}
+
+	updateResp, err := schedulesClient.UpdateSchedule(context.Background(), connect.NewRequest(&protocolv1.UpdateScheduleRequest{
+		ScheduleId: scheduleID,
+		Patch:      patch,
+	}))
+	if err != nil {
+		t.Fatalf("update schedule: %v", err)
+	}
+	if updateResp.Msg.GetItem().GetName() != "Updated digest" {
+		t.Fatalf("expected updated name %q, got %q", "Updated digest", updateResp.Msg.GetItem().GetName())
+	}
+	if updateResp.Msg.GetItem().GetEnabled() {
+		t.Fatalf("expected updated schedule to be disabled")
+	}
+	if updateResp.Msg.GetItem().GetNextRunAt() != nil {
+		t.Fatalf("expected disabled schedule to clear next_run_at")
 	}
 }
 

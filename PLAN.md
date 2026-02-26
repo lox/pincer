@@ -1,7 +1,7 @@
 # Pincer Implementation Plan
 
 Status: Active
-Last updated: 2026-02-26
+Last updated: 2026-02-27
 
 This document tracks phased delivery and concrete implementation status.
 The canonical end-state design is in `docs/spec.md`.
@@ -104,9 +104,9 @@ Steps:
 - [x] Implement `spawn` tool and background job runner (goroutine per job, job-scoped budgets).
 - [x] Post job results to originating chat thread on completion.
 - [x] Mark in-flight `RUNNING` jobs as `FAILED` with `job_failed_restart` audit on startup.
-- [ ] Implement `schedule_create`, `schedule_list`, `schedule_delete` tools.
-- [ ] Implement scheduler service with `cron`/`interval`/`at` triggers and wakeup deduplication.
-- [ ] Connect scheduler wakeups to job creation.
+- [x] Implement `schedule_create`, `schedule_list`, `schedule_delete` tools.
+- [x] Implement scheduler service with `cron`/`interval`/`at` triggers and wakeup deduplication.
+- [x] Connect scheduler wakeups to job creation.
 - [ ] Define unified work item queue: all triggers (chat, heartbeat, schedule, spawn, future webhooks) produce same work item shape.
 - [ ] Add Agent Memory section to iOS Settings (view/edit MEMORY.md via RPC).
 - [ ] Add Heartbeat config to iOS Settings (toggle, interval, edit HEARTBEAT.md).
@@ -118,8 +118,8 @@ Exit criteria:
 - [x] Agent remembers facts across sessions via file-based memory.
 - [x] Heartbeat fires periodically and the agent can proactively report findings.
 - [x] Agent can spawn background jobs that run the full planner-tool loop.
-- [ ] Agent can create its own scheduled triggers.
-- [ ] All autonomy triggers use the same approval pipeline for external side effects.
+- [x] Agent can create its own scheduled triggers.
+- [x] All autonomy triggers use the same approval pipeline for external side effects.
 
 ## 6. Phase 3 - Long-horizon autonomy and durable execution
 

@@ -1,7 +1,7 @@
 # Pincer Autonomy Mechanisms
 
-Status: Partially implemented (workspace + memory + heartbeat + jobs backend complete; scheduler + iOS autonomy surfaces pending)
-Date: 2026-02-26
+Status: Partially implemented (workspace + memory + heartbeat + jobs + scheduler backend complete; iOS autonomy surfaces pending)
+Date: 2026-02-27
 References: `docs/spec.md` §11, `docs/ios-ui-plan.md`, `PLAN.md`
 
 This document defines the autonomy primitives that make Pincer proactive and useful over long time horizons. The design draws from [picoclaw](https://github.com/sipeed/picoclaw) and [openclaw](https://github.com/openclaw/openclaw) while preserving Pincer's security-first approval model.
@@ -232,7 +232,7 @@ Persistent triggers that create jobs or heartbeat-like turns on a schedule.
 |------|-----------|----------|
 | `cron` | Cron expression | "Every Monday at 9am" |
 | `interval` | Duration | "Every 2 hours" (minimum: 15 minutes) |
-| `at` | Timestamp | "Tomorrow at 3pm" (one-shot, auto-deletes) |
+| `at` | Timestamp | "Tomorrow at 3pm" (one-shot, auto-disables after firing) |
 
 ### 6.2 Scheduler tool
 
@@ -404,7 +404,9 @@ Each step should be a working vertical slice — implement backend, register too
 
 ### 10.5 Scheduler
 
-1. Implement `schedule_create`, `schedule_list`, `schedule_delete` tools.
-2. Add scheduler service goroutine with SQLite-persisted triggers and wakeup deduplication.
-3. Connect scheduler wakeups to job creation.
-4. Test: agent creates a schedule, it fires on time, job runs and result surfaces.
+Implemented (backend):
+
+1. `schedule_create`, `schedule_list`, `schedule_delete` tools are wired into inline READ execution.
+2. Scheduler service runs as a background worker with SQLite-persisted schedules and wakeup deduplication.
+3. Scheduler wakeups are routed into the existing job creation path (`SCHEDULE_WAKEUP` trigger).
+4. Restart safety is covered by persisted wakeups and requeue of in-flight wakeups on startup.

@@ -56,6 +56,8 @@ Go Backend (single binary)
 - **Post-approval turn continuation** — after tool execution, results feed back into the LLM for re-planning. Turns pause at approval gates (`TurnPaused`) and resume automatically after all actions resolve (`TurnResumed`), enabling multi-step adaptive agent behavior.
 - **Heartbeat autonomy loop** — optional background heartbeat turns run in a dedicated `thread_heartbeat`, read `HEARTBEAT.md`, execute via the same turn pipeline, and suppress no-op `HEARTBEAT_OK` outputs.
 - **Spawned background jobs** — the READ-classified `spawn` tool creates background jobs that run through the same planner/tool and approval conveyor, publish job states (`RUNNING`, `WAITING_APPROVAL`, `COMPLETED`, `FAILED`, `PAUSED_BUDGET`, `CANCELLED`), and post completion summaries back to originating chat threads.
+- **Autonomous schedules** — READ-classified `schedule_create`, `schedule_list`, and `schedule_delete` tools create durable `cron`/`interval`/`at` schedules with dedicated schedule threads.
+- **Scheduler wakeups with dedupe** — a restart-safe scheduler worker persists wakeups, deduplicates when a prior schedule run is still active, and routes wakeups into the existing job pipeline (`SCHEDULE_WAKEUP -> job -> approval conveyor`).
 - **Assistant thinking** — model reasoning (`reasoning_content`) is captured and streamed to the iOS app as `AssistantThinkingDelta` events, rendered as expandable thinking bubbles in the chat timeline.
 - **iOS control app** — SwiftUI chat with full markdown rendering (via Textual), approvals tab, device/session management, and settings.
 - **Audit log** — every side-effect transition (`proposed → approved → executed`) is recorded and queryable.

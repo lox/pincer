@@ -101,9 +101,7 @@ type OpenAIPlannerConfig struct {
 	WorkspaceRoot string
 	HTTPClient    *http.Client
 	UserAgent     string
-	SOULPrompt    string
 	SOULPath      string
-	LawsPrompt    string
 	LawsPath      string
 }
 
@@ -115,8 +113,8 @@ type OpenAIPlanner struct {
 	workspaceRoot string
 	httpClient    *http.Client
 	userAgent     string
-	lawsPrompt    string
-	soulPrompt    string
+	lawsPath      string
+	soulPath      string
 	memoryCacheMu sync.Mutex
 	memoryCache   memoryContextCache
 }
@@ -145,40 +143,22 @@ func NewOpenAIPlanner(cfg OpenAIPlannerConfig) (*OpenAIPlanner, error) {
 
 	workspaceRoot := strings.TrimSpace(cfg.WorkspaceRoot)
 
-	lawsPrompt := strings.TrimSpace(cfg.LawsPrompt)
-	if lawsPrompt == "" {
-		lawsPath := strings.TrimSpace(cfg.LawsPath)
-		if lawsPath == "" {
-			if workspaceRoot != "" {
-				lawsPath = filepath.Join(workspaceRoot, "LAWS.md")
-			} else {
-				lawsPath = defaultLAWSPath
-			}
+	lawsPath := strings.TrimSpace(cfg.LawsPath)
+	if lawsPath == "" {
+		if workspaceRoot != "" {
+			lawsPath = filepath.Join(workspaceRoot, "LAWS.md")
+		} else {
+			lawsPath = defaultLAWSPath
 		}
-
-		loaded, err := loadPromptFile(lawsPath)
-		if err != nil {
-			return nil, fmt.Errorf("read laws prompt: %w", err)
-		}
-		lawsPrompt = loaded
 	}
 
-	soulPrompt := strings.TrimSpace(cfg.SOULPrompt)
-	if soulPrompt == "" {
-		soulPath := strings.TrimSpace(cfg.SOULPath)
-		if soulPath == "" {
-			if workspaceRoot != "" {
-				soulPath = filepath.Join(workspaceRoot, "SOUL.md")
-			} else {
-				soulPath = defaultSOULPath
-			}
+	soulPath := strings.TrimSpace(cfg.SOULPath)
+	if soulPath == "" {
+		if workspaceRoot != "" {
+			soulPath = filepath.Join(workspaceRoot, "SOUL.md")
+		} else {
+			soulPath = defaultSOULPath
 		}
-
-		loaded, err := loadPromptFile(soulPath)
-		if err != nil {
-			return nil, fmt.Errorf("read SOUL prompt: %w", err)
-		}
-		soulPrompt = loaded
 	}
 
 	return &OpenAIPlanner{
@@ -189,8 +169,8 @@ func NewOpenAIPlanner(cfg OpenAIPlannerConfig) (*OpenAIPlanner, error) {
 		workspaceRoot: workspaceRoot,
 		httpClient:    cfg.HTTPClient,
 		userAgent:     strings.TrimSpace(cfg.UserAgent),
-		lawsPrompt:    lawsPrompt,
-		soulPrompt:    soulPrompt,
+		lawsPath:      lawsPath,
+		soulPath:      soulPath,
 	}, nil
 }
 
@@ -275,7 +255,11 @@ var knownTools = map[string]bool{
 	"write_file":         true,
 	"append_file":        true,
 	"list_dir":           true,
+	"jobs_list":          true,
 	"spawn":              true,
+	"schedule_create":    true,
+	"schedule_list":      true,
+	"schedule_delete":    true,
 	"image_describe":     true,
 	"gmail_search":       true,
 	"gmail_read":         true,
@@ -405,6 +389,55 @@ var plannerTools = []openAITool{
 	{
 		Type: "function",
 		Function: openAIToolFunction{
+			Name:        "jobs_list",
+			Description: "List known background jobs and their statuses from the internal database.",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{}}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: openAIToolFunction{
+			Name:        "schedule_create",
+			Description: "Create a persistent autonomous schedule. Exactly one trigger must be provided: cron, interval, or at.",
+			Parameters: json.RawMessage(`{
+						"type": "object",
+						"properties": {
+							"name": {"type": "string", "description": "Human-readable schedule name"},
+							"goal": {"type": "string", "description": "Goal/instructions to run when the schedule fires"},
+							"cron": {"type": "string", "description": "Cron expression for recurring runs (e.g. 0 9 * * *)"},
+							"interval": {"type": "string", "description": "Duration for recurring runs (minimum 15m), e.g. 2h or 30m"},
+							"at": {"type": "string", "description": "One-shot RFC3339 timestamp"},
+							"timezone": {"type": "string", "description": "IANA timezone (defaults to UTC)"}
+						},
+						"required": ["goal"]
+				}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: openAIToolFunction{
+			Name:        "schedule_list",
+			Description: "List current schedules and their next run times.",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{}}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: openAIToolFunction{
+			Name:        "schedule_delete",
+			Description: "Delete a schedule by ID.",
+			Parameters: json.RawMessage(`{
+						"type": "object",
+						"properties": {
+							"schedule_id": {"type": "string", "description": "Schedule identifier"}
+						},
+						"required": ["schedule_id"]
+				}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: openAIToolFunction{
 			Name:        "image_describe",
 			Description: "Analyze an image at a URL using a vision model. Returns a detailed text description of the image contents. Use this for understanding screenshots, photos, diagrams, charts, or any visual content.",
 			Parameters: json.RawMessage(`{
@@ -497,7 +530,7 @@ var plannerTools = []openAITool{
 		Type: "function",
 		Function: openAIToolFunction{
 			Name:        "run_bash",
-			Description: "Execute a shell command on the host. All shell commands require user approval before execution. Do NOT use for web access — use web_search or web_summarize instead.",
+			Description: "Execute a shell command on the host. All shell commands require user approval before execution. Do NOT use for web access — use web_search or web_summarize instead. Do NOT use for internal autonomy state (jobs/schedules) — use jobs_list and schedule_list.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -535,18 +568,18 @@ func (p *OpenAIPlanner) planWithModel(ctx context.Context, model string, req Pla
 				"- When summarizing fetched web content, preserve important source links from the original page. Include them inline next to the relevant claims so users can click through to the source.",
 		},
 	}
-	if p.lawsPrompt != "" {
+	if lawsPrompt, _ := loadPromptFile(p.lawsPath); lawsPrompt != "" {
 		messages = append(messages, openAIMessage{
 			Role: "system",
 			Content: "Apply the following LAWS guidance as non-negotiable constraints while still obeying safety constraints:\n" +
-				p.lawsPrompt,
+				lawsPrompt,
 		})
 	}
-	if p.soulPrompt != "" {
+	if soulPrompt, _ := loadPromptFile(p.soulPath); soulPrompt != "" {
 		messages = append(messages, openAIMessage{
 			Role: "system",
 			Content: "Apply the following SOUL guidance for style and phrasing while still obeying safety constraints:\n" +
-				p.soulPrompt,
+				soulPrompt,
 		})
 	}
 	memoryContext, err := p.GetMemoryContext()
@@ -775,6 +808,31 @@ func justificationForAction(tool string, args json.RawMessage) string {
 				goal = goal[:120] + "…"
 			}
 			return fmt.Sprintf("Spawn background job: %s", goal)
+		}
+	case "jobs_list":
+		return "List background jobs"
+	case "schedule_create":
+		var a struct {
+			Name string `json:"name"`
+			Goal string `json:"goal"`
+		}
+		if json.Unmarshal(args, &a) == nil {
+			name := strings.TrimSpace(a.Name)
+			if name != "" {
+				return fmt.Sprintf("Create schedule: %s", name)
+			}
+			if strings.TrimSpace(a.Goal) != "" {
+				return fmt.Sprintf("Create schedule for goal: %s", strings.TrimSpace(a.Goal))
+			}
+		}
+	case "schedule_list":
+		return "List schedules"
+	case "schedule_delete":
+		var a struct {
+			ScheduleID string `json:"schedule_id"`
+		}
+		if json.Unmarshal(args, &a) == nil && strings.TrimSpace(a.ScheduleID) != "" {
+			return fmt.Sprintf("Delete schedule: %s", strings.TrimSpace(a.ScheduleID))
 		}
 	case "image_describe":
 		var a struct {

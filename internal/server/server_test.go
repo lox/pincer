@@ -745,6 +745,41 @@ func TestPlanTurnNormalizesRunBashTimeoutToMaxBound(t *testing.T) {
 	}
 }
 
+func TestPlanTurnRewritesHeartbeatJobStatusBashToJobsList(t *testing.T) {
+	t.Parallel()
+
+	app := newTestAppWithPlanner(t, stubPlanner{
+		result: agent.PlanResult{
+			AssistantMessage: "Checking spawned job status.",
+			ProposedActions: []agent.ProposedAction{
+				{
+					Tool:          "run_bash",
+					Args:          json.RawMessage(`{"command":"ls /tmp/pincer/jobs/ 2>/dev/null && cat /tmp/pincer/jobs/*/status 2>/dev/null || echo \"No spawned jobs found\""}`),
+					Justification: "Check spawned jobs.",
+					RiskClass:     "HIGH",
+				},
+			},
+		},
+	})
+
+	plan, err := app.planTurn(context.Background(), heartbeatThreadID, "heartbeat", 0, 0, "")
+	if err != nil {
+		t.Fatalf("plan turn: %v", err)
+	}
+	if len(plan.ProposedActions) != 1 {
+		t.Fatalf("expected 1 proposed action, got %d", len(plan.ProposedActions))
+	}
+	if got := plan.ProposedActions[0].Tool; got != "jobs_list" {
+		t.Fatalf("expected heartbeat status bash command to rewrite to jobs_list, got %q", got)
+	}
+	if got := plan.ProposedActions[0].RiskClass; got != "READ" {
+		t.Fatalf("expected rewritten tool risk READ, got %q", got)
+	}
+	if got := strings.TrimSpace(string(plan.ProposedActions[0].Args)); got != "{}" {
+		t.Fatalf("expected rewritten args {}, got %q", got)
+	}
+}
+
 func TestWebFetchExecutesInlineAsReadTool(t *testing.T) {
 	t.Parallel()
 
@@ -1123,6 +1158,106 @@ func TestWorkspaceFileToolsRejectSymlinkEscape(t *testing.T) {
 	}
 	if output, err := runTool("write_file", map[string]string{"path": "scratch/escape-link.txt", "content": "overwrite"}); err == nil {
 		t.Fatalf("expected write_file symlink escape rejection, got output=%q", output)
+	}
+}
+
+func TestSchedulerWorkerDispatchesDueScheduleAfterRestart(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "pincer-test.db")
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+
+	planner := &staticPlannerFunc{fn: func(_ context.Context, req agent.PlanRequest) (agent.PlanResult, error) {
+		if req.UserMessage == "restart schedule goal" {
+			return agent.PlanResult{AssistantMessage: "Scheduled restart run complete."}, nil
+		}
+		return agent.PlanResult{AssistantMessage: "ok"}, nil
+	}}
+
+	app1, err := New(AppConfig{
+		DBPath:                  dbPath,
+		WorkspaceRoot:           workspaceRoot,
+		Planner:                 planner,
+		DisableBackgroundWorker: true,
+	})
+	if err != nil {
+		t.Fatalf("new app1: %v", err)
+	}
+
+	srv1 := httptest.NewServer(app1.Handler())
+	token := bootstrapAuthToken(t, srv1.URL)
+	schedulesClient := protocolv1connect.NewSchedulesServiceClient(connectHTTPClient(token), srv1.URL)
+
+	createResp, err := schedulesClient.CreateSchedule(context.Background(), connect.NewRequest(&protocolv1.CreateScheduleRequest{
+		Name:        "restart schedule goal",
+		TriggerKind: protocolv1.ScheduleTriggerKind_SCHEDULE_TRIGGER_INTERVAL,
+		TriggerSpec: "15m",
+		Timezone:    "UTC",
+	}))
+	if err != nil {
+		t.Fatalf("create schedule: %v", err)
+	}
+	scheduleID := createResp.Msg.GetItem().GetScheduleId()
+
+	pastDue := time.Now().UTC().Add(-1 * time.Minute).Format(time.RFC3339Nano)
+	nowStr := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := app1.db.Exec(`
+		UPDATE schedules
+		SET next_run_at = ?, updated_at = ?
+		WHERE schedule_id = ?
+	`, pastDue, nowStr, scheduleID); err != nil {
+		t.Fatalf("set schedule due in the past: %v", err)
+	}
+
+	var preRestartJobs int
+	if err := app1.db.QueryRow(`
+		SELECT COUNT(*)
+		FROM jobs
+		WHERE trigger_type = ? AND trigger_source_id = ?
+	`, protocolv1.TriggerType_SCHEDULE_WAKEUP.String(), scheduleID).Scan(&preRestartJobs); err != nil {
+		t.Fatalf("count jobs before restart: %v", err)
+	}
+	if preRestartJobs != 0 {
+		t.Fatalf("expected no schedule jobs before restart, got %d", preRestartJobs)
+	}
+
+	srv1.Close()
+	if err := app1.Close(); err != nil {
+		t.Fatalf("close app1: %v", err)
+	}
+
+	app2, err := New(AppConfig{
+		DBPath:        dbPath,
+		WorkspaceRoot: workspaceRoot,
+		Planner:       planner,
+	})
+	if err != nil {
+		t.Fatalf("new app2: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = app2.Close()
+	})
+
+	waitForCondition(t, 8*time.Second, func() bool {
+		var total int
+		var completed int
+		err := app2.db.QueryRow(`
+			SELECT COUNT(*), SUM(CASE WHEN status = ? THEN 1 ELSE 0 END)
+			FROM jobs
+			WHERE trigger_type = ? AND trigger_source_id = ?
+		`, jobStatusCompleted, protocolv1.TriggerType_SCHEDULE_WAKEUP.String(), scheduleID).Scan(&total, &completed)
+		if err != nil {
+			return false
+		}
+		return total == 1 && completed == 1
+	}, "schedule wakeup dispatched after restart")
+
+	var wakeupCount int
+	if err := app2.db.QueryRow(`SELECT COUNT(*) FROM wakeup_events WHERE schedule_id = ?`, scheduleID).Scan(&wakeupCount); err != nil {
+		t.Fatalf("count wakeup events: %v", err)
+	}
+	if wakeupCount != 1 {
+		t.Fatalf("expected exactly 1 wakeup event, got %d", wakeupCount)
 	}
 }
 
@@ -2006,6 +2141,9 @@ func TestHeartbeatOKDoesNotSurfaceVisibleMessages(t *testing.T) {
 		plannerCalls.Add(1)
 		if !strings.Contains(req.UserMessage, "HEARTBEAT_OK") {
 			t.Fatalf("expected heartbeat prompt instructions in user message, got %q", req.UserMessage)
+		}
+		if !strings.Contains(req.UserMessage, "jobs_list") || !strings.Contains(req.UserMessage, "schedule_list") {
+			t.Fatalf("expected heartbeat prompt to mention jobs_list and schedule_list, got %q", req.UserMessage)
 		}
 		return agent.PlanResult{AssistantMessage: heartbeatSilentMarker}, nil
 	}}

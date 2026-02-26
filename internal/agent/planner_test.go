@@ -138,6 +138,44 @@ func TestParseToolCallResponse(t *testing.T) {
 		}
 	})
 
+	t.Run("schedule tool calls parse successfully", func(t *testing.T) {
+		toolCalls := []openAIToolCall{
+			{ID: "call_1", Type: "function", Function: struct {
+				Name      string `json:"name"`
+				Arguments string `json:"arguments"`
+			}{Name: "schedule_create", Arguments: `{"name":"Morning check","goal":"Review urgent updates","interval":"15m"}`}},
+		}
+		result, err := parseToolCallResponse("Scheduling now.", toolCalls)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result.ProposedActions) != 1 {
+			t.Fatalf("expected 1 action, got %d", len(result.ProposedActions))
+		}
+		if result.ProposedActions[0].Tool != "schedule_create" {
+			t.Fatalf("unexpected tool: %q", result.ProposedActions[0].Tool)
+		}
+	})
+
+	t.Run("jobs_list tool calls parse successfully", func(t *testing.T) {
+		toolCalls := []openAIToolCall{
+			{ID: "call_1", Type: "function", Function: struct {
+				Name      string `json:"name"`
+				Arguments string `json:"arguments"`
+			}{Name: "jobs_list", Arguments: `{}`}},
+		}
+		result, err := parseToolCallResponse("Checking jobs.", toolCalls)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result.ProposedActions) != 1 {
+			t.Fatalf("expected 1 action, got %d", len(result.ProposedActions))
+		}
+		if result.ProposedActions[0].Tool != "jobs_list" {
+			t.Fatalf("unexpected tool: %q", result.ProposedActions[0].Tool)
+		}
+	})
+
 	t.Run("content and tool calls", func(t *testing.T) {
 		toolCalls := []openAIToolCall{
 			{ID: "call_1", Type: "function", Function: struct {
@@ -330,13 +368,15 @@ func TestOpenAIPlannerSendsToolsInRequest(t *testing.T) {
 		}
 
 		mu.Lock()
-		if len(req.Tools) == 15 {
+		if len(req.Tools) == len(plannerTools) {
 			names := map[string]bool{}
 			for _, t := range req.Tools {
 				names[t.Function.Name] = true
 			}
 			if names["web_search"] && names["web_summarize"] && names["web_fetch"] && names["image_describe"] && names["run_bash"] &&
 				names["read_file"] && names["write_file"] && names["append_file"] && names["list_dir"] && names["spawn"] &&
+				names["jobs_list"] &&
+				names["schedule_create"] && names["schedule_list"] && names["schedule_delete"] &&
 				names["gmail_search"] && names["gmail_read"] && names["gmail_get_thread"] && names["gmail_create_draft"] && names["gmail_send_draft"] {
 				sawTools = true
 			}
@@ -371,7 +411,7 @@ func TestOpenAIPlannerSendsToolsInRequest(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	if !sawTools {
-		t.Fatalf("expected request to include all 15 tool definitions")
+		t.Fatalf("expected request to include all %d tool definitions", len(plannerTools))
 	}
 }
 
@@ -379,6 +419,12 @@ func TestOpenAIPlannerIncludesSOULPromptWhenConfigured(t *testing.T) {
 	t.Parallel()
 
 	const soul = "Be concise. Keep simple answers to one line."
+
+	dir := t.TempDir()
+	soulPath := filepath.Join(dir, "SOUL.md")
+	if err := os.WriteFile(soulPath, []byte(soul), 0o644); err != nil {
+		t.Fatalf("write SOUL.md: %v", err)
+	}
 
 	var (
 		mu      sync.Mutex
@@ -414,7 +460,7 @@ func TestOpenAIPlannerIncludesSOULPromptWhenConfigured(t *testing.T) {
 		BaseURL:      srv.URL,
 		PrimaryModel: "primary-model",
 		HTTPClient:   srv.Client(),
-		SOULPrompt:   soul,
+		SOULPath:     soulPath,
 	})
 	if err != nil {
 		t.Fatalf("new planner: %v", err)
@@ -504,6 +550,12 @@ func TestOpenAIPlannerIncludesLawsPromptWhenConfigured(t *testing.T) {
 
 	const laws = "Never claim an external action executed unless audit confirms it."
 
+	dir := t.TempDir()
+	lawsPath := filepath.Join(dir, "LAWS.md")
+	if err := os.WriteFile(lawsPath, []byte(laws), 0o644); err != nil {
+		t.Fatalf("write LAWS.md: %v", err)
+	}
+
 	var (
 		mu      sync.Mutex
 		sawLaws bool
@@ -538,8 +590,7 @@ func TestOpenAIPlannerIncludesLawsPromptWhenConfigured(t *testing.T) {
 		BaseURL:      srv.URL,
 		PrimaryModel: "primary-model",
 		HTTPClient:   srv.Client(),
-		LawsPrompt:   laws,
-		SOULPrompt:   "Keep it concise.",
+		LawsPath:     lawsPath,
 	})
 	if err != nil {
 		t.Fatalf("new planner: %v", err)
@@ -605,7 +656,6 @@ func TestOpenAIPlannerLoadsLawsPromptFromFile(t *testing.T) {
 		PrimaryModel: "primary-model",
 		HTTPClient:   srv.Client(),
 		LawsPath:     lawsPath,
-		SOULPrompt:   "Be direct.",
 	})
 	if err != nil {
 		t.Fatalf("new planner: %v", err)

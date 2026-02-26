@@ -847,6 +847,10 @@ func (a *App) inferJobTriggerFromThread(threadID string) (protocolv1.TriggerType
 	if err == nil && job != nil {
 		return protocolv1.TriggerType_JOB_WAKEUP, job.JobID
 	}
+	schedule, err := a.getScheduleByThreadID(context.Background(), threadID)
+	if err == nil && schedule != nil {
+		return protocolv1.TriggerType_SCHEDULE_WAKEUP, schedule.ScheduleID
+	}
 	return protocolv1.TriggerType_CHAT_MESSAGE, threadID
 }
 
