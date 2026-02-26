@@ -1116,7 +1116,7 @@ private struct ChatComposer: View {
     }
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(alignment: .bottom, spacing: 8) {
             TextField("Message...", text: $text, axis: .vertical)
                 .font(.system(.body, design: .rounded))
                 .foregroundStyle(PincerPalette.textPrimary)
@@ -1125,9 +1125,9 @@ private struct ChatComposer: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
                 .background(PincerPalette.card)
-                .clipShape(Capsule())
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                 .overlay(
-                    Capsule()
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
                         .stroke(PincerPalette.border, lineWidth: 1)
                 )
                 .submitLabel(.send)
@@ -1151,11 +1151,11 @@ private struct ChatComposer: View {
                     )
             }
             .disabled(!canSend)
+            .padding(.bottom, 2)
             .accessibilityIdentifier(A11y.chatSendButton)
         }
         .padding(6)
         .background(PincerPalette.page)
-        .clipShape(Capsule())
         .toolbar {
             ToolbarItemGroup(placement: .keyboard) {
                 Spacer()
