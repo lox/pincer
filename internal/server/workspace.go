@@ -177,12 +177,13 @@ func bootstrapWorkspace(root string) error {
 	}
 
 	bootstrapFiles := []struct {
-		name    string
-		content string
+		name        string
+		fallback    string
+		sourcePaths []string
 	}{
-		{name: "HEARTBEAT.md", content: defaultHeartbeatTemplate},
-		{name: "SOUL.md", content: defaultSOULTemplate},
-		{name: "IDENTITY.md", content: defaultIdentityTemplate},
+		{name: "HEARTBEAT.md", fallback: defaultHeartbeatTemplate, sourcePaths: []string{filepath.Join("templates", "HEARTBEAT.md")}},
+		{name: "SOUL.md", fallback: defaultSOULTemplate, sourcePaths: []string{filepath.Join("templates", "SOUL.md")}},
+		{name: "IDENTITY.md", fallback: defaultIdentityTemplate, sourcePaths: []string{filepath.Join("templates", "IDENTITY.md")}},
 	}
 
 	for _, file := range bootstrapFiles {
@@ -193,11 +194,36 @@ func bootstrapWorkspace(root string) error {
 			return fmt.Errorf("stat %s: %w", file.name, err)
 		}
 
-		if err := atomicWriteFile(outPath, []byte(file.content), 0o644); err != nil {
+		content, err := firstBootstrapTemplate(file.sourcePaths, file.fallback)
+		if err != nil {
+			return fmt.Errorf("load bootstrap content for %s: %w", file.name, err)
+		}
+
+		if err := atomicWriteFile(outPath, []byte(content), 0o644); err != nil {
 			return fmt.Errorf("write %s: %w", file.name, err)
 		}
 	}
 	return nil
+}
+
+func firstBootstrapTemplate(candidates []string, fallback string) (string, error) {
+	for _, candidate := range candidates {
+		if strings.TrimSpace(candidate) == "" {
+			continue
+		}
+		content, err := os.ReadFile(candidate)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return "", fmt.Errorf("read %s: %w", candidate, err)
+		}
+		if strings.TrimSpace(string(content)) == "" {
+			continue
+		}
+		return string(content), nil
+	}
+	return fallback, nil
 }
 
 func (a *App) lockWorkspacePath(path string) func() {

@@ -51,3 +51,39 @@ func TestBootstrapWorkspaceSeedsTemplateFilesWithoutOverwrite(t *testing.T) {
 		t.Fatalf("expected existing SOUL.md to be preserved, got %q", string(soulAfter))
 	}
 }
+
+func TestBootstrapWorkspaceUsesTemplatesDirectoryWhenPresent(t *testing.T) {
+	wd := t.TempDir()
+	t.Chdir(wd)
+
+	if err := os.MkdirAll("templates", 0o755); err != nil {
+		t.Fatalf("mkdir templates: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join("templates", "SOUL.md"), []byte("# template soul\n"), 0o644); err != nil {
+		t.Fatalf("write templates/SOUL.md: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join("templates", "IDENTITY.md"), []byte("# template identity\n"), 0o644); err != nil {
+		t.Fatalf("write templates/IDENTITY.md: %v", err)
+	}
+
+	root := filepath.Join(wd, "workspace")
+	if err := bootstrapWorkspace(root); err != nil {
+		t.Fatalf("bootstrap workspace: %v", err)
+	}
+
+	soul, err := os.ReadFile(filepath.Join(root, "SOUL.md"))
+	if err != nil {
+		t.Fatalf("read workspace SOUL.md: %v", err)
+	}
+	if string(soul) != "# template soul\n" {
+		t.Fatalf("expected workspace SOUL.md to be copied from templates, got %q", string(soul))
+	}
+
+	identity, err := os.ReadFile(filepath.Join(root, "IDENTITY.md"))
+	if err != nil {
+		t.Fatalf("read workspace IDENTITY.md: %v", err)
+	}
+	if string(identity) != "# template identity\n" {
+		t.Fatalf("expected workspace IDENTITY.md to be copied from templates, got %q", string(identity))
+	}
+}

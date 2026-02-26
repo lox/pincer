@@ -15,7 +15,7 @@ import (
 )
 
 const defaultOpenRouterBaseURL = "https://openrouter.ai/api/v1"
-const defaultSOULPath = "SOUL.md"
+const defaultSOULPath = "templates/SOUL.md"
 
 var (
 	ErrInvalidModelOutput = errors.New("invalid model output")

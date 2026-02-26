@@ -31,7 +31,7 @@ func TestEvalEndToEndApprovalFlow(t *testing.T) {
 		PrimaryModel:  primaryModel,
 		FallbackModel: fallbackModel,
 		HTTPClient:    &http.Client{Timeout: 60 * time.Second},
-		SOULPath:      "../../SOUL.md",
+		SOULPath:      "../../templates/SOUL.md",
 	})
 	if err != nil {
 		t.Fatalf("create planner: %v", err)
