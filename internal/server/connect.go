@@ -1191,6 +1191,53 @@ func (a *App) executeInlineReadTool(ctx context.Context, action agent.ProposedAc
 		}
 		return b.String(), nil
 
+	case tool == "read_file":
+		var args readFileArgs
+		if err := json.Unmarshal(action.Args, &args); err != nil {
+			return fmt.Sprintf("invalid read_file args: %v", err), err
+		}
+		relPath, content, err := a.readWorkspaceFile(args.Path)
+		if err != nil {
+			return fmt.Sprintf("read_file error: %v", err), err
+		}
+		if content == "" {
+			return fmt.Sprintf("path: %s\n[empty file]", relPath), nil
+		}
+		return fmt.Sprintf("path: %s\n%s", relPath, content), nil
+
+	case tool == "write_file":
+		var args writeFileArgs
+		if err := json.Unmarshal(action.Args, &args); err != nil {
+			return fmt.Sprintf("invalid write_file args: %v", err), err
+		}
+		relPath, writtenBytes, err := a.writeWorkspaceFile(args.Path, args.Content)
+		if err != nil {
+			return fmt.Sprintf("write_file error: %v", err), err
+		}
+		return fmt.Sprintf("wrote %d bytes to %s", writtenBytes, relPath), nil
+
+	case tool == "append_file":
+		var args appendFileArgs
+		if err := json.Unmarshal(action.Args, &args); err != nil {
+			return fmt.Sprintf("invalid append_file args: %v", err), err
+		}
+		relPath, appendedBytes, err := a.appendWorkspaceFile(args.Path, args.Content)
+		if err != nil {
+			return fmt.Sprintf("append_file error: %v", err), err
+		}
+		return fmt.Sprintf("appended %d bytes to %s", appendedBytes, relPath), nil
+
+	case tool == "list_dir":
+		var args listDirArgs
+		if err := json.Unmarshal(action.Args, &args); err != nil {
+			return fmt.Sprintf("invalid list_dir args: %v", err), err
+		}
+		listing, err := a.listWorkspaceDir(args.Path)
+		if err != nil {
+			return fmt.Sprintf("list_dir error: %v", err), err
+		}
+		return listing, nil
+
 	default:
 		return fmt.Sprintf("unknown inline read tool: %s", action.Tool), fmt.Errorf("unknown inline read tool: %s", action.Tool)
 	}

@@ -35,6 +35,7 @@ type cli struct {
 type serveCmd struct {
 	HTTPAddr           string `name:"http-addr" help:"HTTP listen address." env:"PINCER_HTTP_ADDR" default:":8080"`
 	DBPath             string `name:"db-path" help:"SQLite database path." env:"PINCER_DB_PATH" default:"./pincer.db"`
+	WorkspaceRoot      string `name:"workspace" help:"Workspace root for memory/skills/scratch files." env:"PINCER_WORKSPACE" default:"~/.pincer/workspace"`
 	TokenHMACKey       string `name:"token-hmac-key" help:"HMAC key for bearer token signing." env:"PINCER_TOKEN_HMAC_KEY"`
 	OpenRouterAPIKey   string `name:"openrouter-api-key" help:"OpenRouter API key." env:"OPENROUTER_API_KEY"`
 	OpenRouterBaseURL  string `name:"openrouter-base-url" help:"OpenRouter API base URL." env:"OPENROUTER_BASE_URL"`
@@ -185,6 +186,7 @@ func (cmd *serveCmd) Run(globals *cli) error {
 
 	app, err := server.New(server.AppConfig{
 		DBPath:             cmd.DBPath,
+		WorkspaceRoot:      cmd.WorkspaceRoot,
 		TokenHMACKey:       cmd.TokenHMACKey,
 		OpenRouterAPIKey:   cmd.OpenRouterAPIKey,
 		OpenRouterBaseURL:  cmd.OpenRouterBaseURL,
@@ -252,6 +254,7 @@ func (cmd *serveCmd) Run(globals *cli) error {
 		"pincer listening",
 		"addr", cmd.HTTPAddr,
 		"db_path", cmd.DBPath,
+		"workspace", cmd.WorkspaceRoot,
 		"openrouter_enabled", cmd.OpenRouterAPIKey != "",
 		"kagi_enabled", cmd.KagiAPIKey != "",
 		"model_primary", cmd.ModelPrimary,

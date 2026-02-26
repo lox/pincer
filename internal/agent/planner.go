@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -95,6 +96,7 @@ type OpenAIPlannerConfig struct {
 	BaseURL       string
 	PrimaryModel  string
 	FallbackModel string
+	WorkspaceRoot string
 	HTTPClient    *http.Client
 	UserAgent     string
 	SOULPrompt    string
@@ -106,9 +108,12 @@ type OpenAIPlanner struct {
 	baseURL       string
 	primaryModel  string
 	fallbackModel string
+	workspaceRoot string
 	httpClient    *http.Client
 	userAgent     string
 	soulPrompt    string
+	memoryCacheMu sync.Mutex
+	memoryCache   memoryContextCache
 }
 
 func NewOpenAIPlanner(cfg OpenAIPlannerConfig) (*OpenAIPlanner, error) {
@@ -152,6 +157,7 @@ func NewOpenAIPlanner(cfg OpenAIPlannerConfig) (*OpenAIPlanner, error) {
 		baseURL:       baseURL,
 		primaryModel:  strings.TrimSpace(cfg.PrimaryModel),
 		fallbackModel: strings.TrimSpace(cfg.FallbackModel),
+		workspaceRoot: strings.TrimSpace(cfg.WorkspaceRoot),
 		httpClient:    cfg.HTTPClient,
 		userAgent:     strings.TrimSpace(cfg.UserAgent),
 		soulPrompt:    soulPrompt,
@@ -235,6 +241,10 @@ var knownTools = map[string]bool{
 	"web_search":         true,
 	"web_summarize":      true,
 	"web_fetch":          true,
+	"read_file":          true,
+	"write_file":         true,
+	"append_file":        true,
+	"list_dir":           true,
 	"image_describe":     true,
 	"gmail_search":       true,
 	"gmail_read":         true,
@@ -285,6 +295,63 @@ var plannerTools = []openAITool{
 					"url": {"type": "string", "description": "The URL to fetch"}
 				},
 				"required": ["url"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: openAIToolFunction{
+			Name:        "read_file",
+			Description: "Read a file from the internal workspace. Path must stay within the workspace root.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"path": {"type": "string", "description": "Workspace-relative path to read"}
+				},
+				"required": ["path"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: openAIToolFunction{
+			Name:        "write_file",
+			Description: "Write or overwrite a file in the internal workspace. Parent directories are created automatically.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"path": {"type": "string", "description": "Workspace-relative path to write"},
+					"content": {"type": "string", "description": "File content"}
+				},
+				"required": ["path", "content"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: openAIToolFunction{
+			Name:        "append_file",
+			Description: "Append content to a file in the internal workspace. A trailing newline is added automatically.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"path": {"type": "string", "description": "Workspace-relative path to append"},
+					"content": {"type": "string", "description": "Content to append"}
+				},
+				"required": ["path", "content"]
+			}`),
+		},
+	},
+	{
+		Type: "function",
+		Function: openAIToolFunction{
+			Name:        "list_dir",
+			Description: "List directory entries inside the internal workspace.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"path": {"type": "string", "description": "Workspace-relative directory path", "default": "."}
+				}
 			}`),
 		},
 	},
@@ -426,6 +493,16 @@ func (p *OpenAIPlanner) planWithModel(ctx context.Context, model string, req Pla
 			Role: "system",
 			Content: "Apply the following SOUL guidance for style and phrasing while still obeying safety constraints:\n" +
 				p.soulPrompt,
+		})
+	}
+	memoryContext, err := p.GetMemoryContext()
+	if err != nil {
+		return PlanResult{}, fmt.Errorf("load memory context: %w", err)
+	}
+	if memoryContext != "" {
+		messages = append(messages, openAIMessage{
+			Role:    "system",
+			Content: memoryContext,
 		})
 	}
 	if repair {
@@ -601,6 +678,38 @@ func justificationForAction(tool string, args json.RawMessage) string {
 		}
 		if json.Unmarshal(args, &a) == nil && strings.TrimSpace(a.URL) != "" {
 			return fmt.Sprintf("Summarize: %s", strings.TrimSpace(a.URL))
+		}
+	case "read_file":
+		var a struct {
+			Path string `json:"path"`
+		}
+		if json.Unmarshal(args, &a) == nil && strings.TrimSpace(a.Path) != "" {
+			return fmt.Sprintf("Read file: %s", strings.TrimSpace(a.Path))
+		}
+	case "write_file":
+		var a struct {
+			Path string `json:"path"`
+		}
+		if json.Unmarshal(args, &a) == nil && strings.TrimSpace(a.Path) != "" {
+			return fmt.Sprintf("Write file: %s", strings.TrimSpace(a.Path))
+		}
+	case "append_file":
+		var a struct {
+			Path string `json:"path"`
+		}
+		if json.Unmarshal(args, &a) == nil && strings.TrimSpace(a.Path) != "" {
+			return fmt.Sprintf("Append file: %s", strings.TrimSpace(a.Path))
+		}
+	case "list_dir":
+		var a struct {
+			Path string `json:"path"`
+		}
+		if json.Unmarshal(args, &a) == nil {
+			path := strings.TrimSpace(a.Path)
+			if path == "" {
+				path = "."
+			}
+			return fmt.Sprintf("List directory: %s", path)
 		}
 	case "image_describe":
 		var a struct {

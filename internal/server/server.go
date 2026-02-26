@@ -56,6 +56,7 @@ var errIdempotencyConflict = errors.New("idempotency conflict")
 
 type AppConfig struct {
 	DBPath                  string
+	WorkspaceRoot           string
 	TokenHMACKey            string
 	OpenRouterAPIKey        string
 	OpenRouterBaseURL       string
@@ -76,6 +77,7 @@ type App struct {
 	db                     *sql.DB
 	tokenHMACKey           []byte
 	logger                 *charmLog.Logger
+	workspaceRoot          string
 	planner                agent.Planner
 	kagiAPIKey             string
 	webFetcher             *agent.WebFetcher
@@ -92,6 +94,9 @@ type App struct {
 	eventAppendMu          sync.Mutex
 	eventSubsMu            sync.RWMutex
 	eventSubs              map[string]map[chan *threadEvent]struct{}
+	workspaceQuotaMu       sync.Mutex
+	workspaceTotalBytes    int64
+	workspaceLockShards    [workspaceLockShardCount]sync.Mutex
 	resumingTurns          sync.Map // turnID → struct{}: guards against double-resumption
 }
 
@@ -217,6 +222,19 @@ func New(cfg AppConfig) (*App, error) {
 		})
 	}
 
+	workspaceRoot, err := resolveWorkspaceRoot(cfg.WorkspaceRoot)
+	if err != nil {
+		return nil, fmt.Errorf("resolve workspace root: %w", err)
+	}
+	if err := bootstrapWorkspace(workspaceRoot); err != nil {
+		return nil, fmt.Errorf("bootstrap workspace: %w", err)
+	}
+
+	workspaceTotalBytes, err := workspaceTotalSizeBytes(workspaceRoot)
+	if err != nil {
+		return nil, fmt.Errorf("compute workspace size: %w", err)
+	}
+
 	db, err := sql.Open("sqlite", cfg.DBPath)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
@@ -248,6 +266,7 @@ func New(cfg AppConfig) (*App, error) {
 				BaseURL:       cfg.OpenRouterBaseURL,
 				PrimaryModel:  primaryModel,
 				FallbackModel: cfg.ModelFallback,
+				WorkspaceRoot: workspaceRoot,
 				UserAgent:     "pincer/0.1",
 			})
 			if err != nil {
@@ -285,6 +304,7 @@ func New(cfg AppConfig) (*App, error) {
 		db:                     db,
 		tokenHMACKey:           []byte(tokenHMACKey),
 		logger:                 logger,
+		workspaceRoot:          workspaceRoot,
 		planner:                planner,
 		kagiAPIKey:             strings.TrimSpace(cfg.KagiAPIKey),
 		webFetcher:             webFetcher,
@@ -298,6 +318,7 @@ func New(cfg AppConfig) (*App, error) {
 		doneCh:                 make(chan struct{}),
 		actionExecutorInterval: interval,
 		eventSubs:              make(map[string]map[chan *threadEvent]struct{}),
+		workspaceTotalBytes:    workspaceTotalBytes,
 	}
 
 	if !cfg.DisableBackgroundWorker {
@@ -1133,6 +1154,8 @@ func riskClassForTool(tool string) string {
 
 	switch strings.ToLower(strings.TrimSpace(tool)) {
 	case "web_search", "web_summarize", "web_fetch", "image_describe":
+		return "READ"
+	case "read_file", "write_file", "append_file", "list_dir":
 		return "READ"
 	case "gmail_search", "gmail_read", "gmail_get_thread":
 		return "READ"

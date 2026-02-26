@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -475,6 +476,7 @@ func TestExecuteApprovedActionIdempotencyConflict(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "pincer-test.db")
 	app, err := New(AppConfig{
 		DBPath:                  dbPath,
+		WorkspaceRoot:           filepath.Join(t.TempDir(), "workspace"),
 		DisableBackgroundWorker: true,
 	})
 	if err != nil {
@@ -545,6 +547,7 @@ func TestExecuteApprovedRunBashActionWritesCommandOutputToChat(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "pincer-test.db")
 	app, err := New(AppConfig{
 		DBPath:                  dbPath,
+		WorkspaceRoot:           filepath.Join(t.TempDir(), "workspace"),
 		DisableBackgroundWorker: true,
 	})
 	if err != nil {
@@ -889,6 +892,119 @@ func TestWebFetchUngrantedDomainRequiresApprovalAndGrantsDomain(t *testing.T) {
 	}
 }
 
+func TestWorkspaceFileTools(t *testing.T) {
+	t.Parallel()
+
+	app := newTestApp(t)
+	ctx := context.Background()
+
+	runTool := func(tool string, args any) (string, error) {
+		t.Helper()
+		payload, err := json.Marshal(args)
+		if err != nil {
+			t.Fatalf("marshal args for %s: %v", tool, err)
+		}
+		return app.executeInlineReadTool(ctx, agent.ProposedAction{
+			Tool: tool,
+			Args: payload,
+		})
+	}
+
+	if output, err := runTool("write_file", map[string]string{
+		"path":    "scratch/note.txt",
+		"content": "line-one\n",
+	}); err != nil {
+		t.Fatalf("write_file failed: %v (output=%q)", err, output)
+	}
+
+	if output, err := runTool("append_file", map[string]string{
+		"path":    "scratch/note.txt",
+		"content": "line-two",
+	}); err != nil {
+		t.Fatalf("append_file failed: %v (output=%q)", err, output)
+	}
+
+	readOutput, err := runTool("read_file", map[string]string{"path": "scratch/note.txt"})
+	if err != nil {
+		t.Fatalf("read_file failed: %v (output=%q)", err, readOutput)
+	}
+	if !strings.Contains(readOutput, "line-one\nline-two\n") {
+		t.Fatalf("unexpected read_file output: %q", readOutput)
+	}
+
+	listingOutput, err := runTool("list_dir", map[string]string{"path": "scratch"})
+	if err != nil {
+		t.Fatalf("list_dir failed: %v (output=%q)", err, listingOutput)
+	}
+	var listing listDirResult
+	if err := json.Unmarshal([]byte(listingOutput), &listing); err != nil {
+		t.Fatalf("decode list_dir output: %v (output=%q)", err, listingOutput)
+	}
+	var sawNote bool
+	for _, entry := range listing.Entries {
+		if entry.Name == "note.txt" && entry.Type == "file" {
+			sawNote = true
+			break
+		}
+	}
+	if !sawNote {
+		t.Fatalf("expected note.txt in directory listing, got %#v", listing.Entries)
+	}
+
+	if output, err := runTool("read_file", map[string]string{"path": "../escape.txt"}); err == nil {
+		t.Fatalf("expected traversal read_file to fail, got output=%q", output)
+	}
+
+	oversized := strings.Repeat("x", int(workspaceMaxFileBytes)+1)
+	if output, err := runTool("write_file", map[string]string{"path": "scratch/too-big.txt", "content": oversized}); err == nil {
+		t.Fatalf("expected write_file to enforce per-file quota, got output=%q", output)
+	}
+
+	app.workspaceQuotaMu.Lock()
+	app.workspaceTotalBytes = workspaceMaxTotalBytes
+	app.workspaceQuotaMu.Unlock()
+
+	if output, err := runTool("write_file", map[string]string{"path": "scratch/overflow.txt", "content": "x"}); err == nil {
+		t.Fatalf("expected write_file to enforce workspace quota, got output=%q", output)
+	}
+}
+
+func TestWorkspaceFileToolsRejectSymlinkEscape(t *testing.T) {
+	t.Parallel()
+
+	app := newTestApp(t)
+	ctx := context.Background()
+
+	runTool := func(tool string, args any) (string, error) {
+		t.Helper()
+		payload, err := json.Marshal(args)
+		if err != nil {
+			t.Fatalf("marshal args for %s: %v", tool, err)
+		}
+		return app.executeInlineReadTool(ctx, agent.ProposedAction{Tool: tool, Args: payload})
+	}
+
+	outsidePath := filepath.Join(t.TempDir(), "secret.txt")
+	if err := os.WriteFile(outsidePath, []byte("secret"), 0o644); err != nil {
+		t.Fatalf("write outside file: %v", err)
+	}
+
+	symlinkPath := filepath.Join(app.workspaceRoot, "scratch", "escape-link.txt")
+	if err := os.MkdirAll(filepath.Dir(symlinkPath), 0o755); err != nil {
+		t.Fatalf("create symlink parent dir: %v", err)
+	}
+	if err := os.Symlink(outsidePath, symlinkPath); err != nil {
+		t.Skipf("symlink unsupported in this environment: %v", err)
+	}
+
+	if output, err := runTool("read_file", map[string]string{"path": "scratch/escape-link.txt"}); err == nil {
+		t.Fatalf("expected read_file symlink escape rejection, got output=%q", output)
+	}
+	if output, err := runTool("write_file", map[string]string{"path": "scratch/escape-link.txt", "content": "overwrite"}); err == nil {
+		t.Fatalf("expected write_file symlink escape rejection, got output=%q", output)
+	}
+}
+
 // staticPlannerFunc wraps a function as a Planner.
 type staticPlannerFunc struct {
 	fn func(context.Context, agent.PlanRequest) (agent.PlanResult, error)
@@ -959,7 +1075,10 @@ type testDevicesResponse struct {
 func newTestApp(t *testing.T) *App {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "pincer-test.db")
-	app, err := New(AppConfig{DBPath: dbPath})
+	app, err := New(AppConfig{
+		DBPath:        dbPath,
+		WorkspaceRoot: filepath.Join(t.TempDir(), "workspace"),
+	})
 	if err != nil {
 		t.Fatalf("new app: %v", err)
 	}
@@ -972,8 +1091,9 @@ func newTestApp(t *testing.T) *App {
 func newTestAppWithPlanner(t *testing.T, planner agent.Planner) *App {
 	t.Helper()
 	app, err := New(AppConfig{
-		DBPath:  filepath.Join(t.TempDir(), "pincer-test.db"),
-		Planner: planner,
+		DBPath:        filepath.Join(t.TempDir(), "pincer-test.db"),
+		WorkspaceRoot: filepath.Join(t.TempDir(), "workspace"),
+		Planner:       planner,
 	})
 	if err != nil {
 		t.Fatalf("new app: %v", err)
@@ -987,9 +1107,10 @@ func newTestAppWithPlanner(t *testing.T, planner agent.Planner) *App {
 func newTestAppWithPlannerAndFetcher(t *testing.T, planner agent.Planner, fetcher *agent.WebFetcher) *App {
 	t.Helper()
 	app, err := New(AppConfig{
-		DBPath:     filepath.Join(t.TempDir(), "pincer-test.db"),
-		Planner:    planner,
-		WebFetcher: fetcher,
+		DBPath:        filepath.Join(t.TempDir(), "pincer-test.db"),
+		WorkspaceRoot: filepath.Join(t.TempDir(), "workspace"),
+		Planner:       planner,
+		WebFetcher:    fetcher,
 	})
 	if err != nil {
 		t.Fatalf("new app: %v", err)
@@ -1652,6 +1773,7 @@ func TestImageDescribeInlineExecution(t *testing.T) {
 
 	app, err := New(AppConfig{
 		DBPath:         filepath.Join(t.TempDir(), "pincer-test.db"),
+		WorkspaceRoot:  filepath.Join(t.TempDir(), "workspace"),
 		Planner:        planner,
 		ImageDescriber: agent.NewImageDescriber("test-key", visionServer.URL),
 	})
