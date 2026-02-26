@@ -339,8 +339,15 @@ private struct ChatDetailView: View {
                     .padding(.bottom, 6)
                 }
                 .scrollDismissesKeyboard(.interactively)
+                .onChange(of: model.isInitialLoadComplete) { _, complete in
+                    if complete {
+                        scrollToBottom(reader, animated: false)
+                    }
+                }
                 .onChange(of: model.timelineItems.count) { _, _ in
-                    scrollToBottom(reader)
+                    if model.isInitialLoadComplete {
+                        scrollToBottom(reader)
+                    }
                 }
                 .onChange(of: model.isAwaitingAssistantProgress) { _, isAwaiting in
                     if isAwaiting {
@@ -441,8 +448,12 @@ private struct ChatDetailView: View {
         }
     }
 
-    private func scrollToBottom(_ reader: ScrollViewProxy) {
-        withAnimation(.easeOut(duration: 0.22)) {
+    private func scrollToBottom(_ reader: ScrollViewProxy, animated: Bool = true) {
+        if animated {
+            withAnimation(.easeOut(duration: 0.22)) {
+                reader.scrollTo(chatBottomAnchorID, anchor: .bottom)
+            }
+        } else {
             reader.scrollTo(chatBottomAnchorID, anchor: .bottom)
         }
     }

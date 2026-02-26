@@ -15,6 +15,9 @@ final class ChatViewModel: ObservableObject {
     @Published var input: String = ""
     @Published var errorText: String?
     @Published var isBusy = false
+    /// True once the initial message snapshot has loaded and rendered.
+    /// Used to suppress animated scroll-to-bottom during bulk event replay.
+    @Published private(set) var isInitialLoadComplete = false
 
     private let client: APIClient
     private let approvalsStore: ApprovalsStore
@@ -57,6 +60,7 @@ final class ChatViewModel: ObservableObject {
             threadID = id
             try await refresh()
             syncInlineApprovals()
+            isInitialLoadComplete = true
             startWatchThreadIfNeeded(for: id)
         } catch {
             errorText = userFacingErrorMessage(error, fallback: "Failed to initialize chat.")
@@ -74,6 +78,7 @@ final class ChatViewModel: ObservableObject {
         do {
             try await refresh()
             syncInlineApprovals()
+            isInitialLoadComplete = true
             startWatchThreadIfNeeded(for: id)
         } catch {
             errorText = userFacingErrorMessage(error, fallback: "Failed to load thread.")
@@ -93,6 +98,7 @@ final class ChatViewModel: ObservableObject {
         input = ""
         errorText = nil
         isBusy = false
+        isInitialLoadComplete = false
         isAwaitingAssistantProgress = false
     }
 
