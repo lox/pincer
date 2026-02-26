@@ -135,6 +135,78 @@ type listDirEntry struct {
 	SizeBytes int64  `json:"size_bytes,omitempty"`
 }
 
+func (a *App) workspaceWriteAllowedInline(tool string, argsJSON json.RawMessage) bool {
+	tool = strings.ToLower(strings.TrimSpace(tool))
+
+	var path string
+	switch tool {
+	case "write_file":
+		var args writeFileArgs
+		if err := json.Unmarshal(argsJSON, &args); err != nil {
+			return false
+		}
+		path = args.Path
+	case "append_file":
+		var args appendFileArgs
+		if err := json.Unmarshal(argsJSON, &args); err != nil {
+			return false
+		}
+		path = args.Path
+	default:
+		return false
+	}
+
+	_, relPath, err := a.resolveWorkspacePath(path, false)
+	if err != nil {
+		return false
+	}
+	return isInlineWritableWorkspacePath(relPath)
+}
+
+func isInlineWritableWorkspacePath(relPath string) bool {
+	clean := strings.TrimSpace(filepath.ToSlash(relPath))
+	if clean == "memory/MEMORY.md" {
+		return true
+	}
+	if strings.HasPrefix(clean, "scratch/") {
+		return true
+	}
+	return isMemoryDailyNotePath(clean)
+}
+
+func isMemoryDailyNotePath(relPath string) bool {
+	parts := strings.Split(relPath, "/")
+	if len(parts) != 3 {
+		return false
+	}
+	if parts[0] != "memory" {
+		return false
+	}
+	month := parts[1]
+	if len(month) != 6 {
+		return false
+	}
+	for _, r := range month {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	name := parts[2]
+	if !strings.HasSuffix(name, ".md") {
+		return false
+	}
+	day := strings.TrimSuffix(name, ".md")
+	if len(day) != 8 {
+		return false
+	}
+	for _, r := range day {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 func resolveWorkspaceRoot(raw string) (string, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {

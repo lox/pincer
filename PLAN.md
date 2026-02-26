@@ -95,7 +95,7 @@ Design: `docs/autonomy.md`
 Steps:
 
 - [x] Add workspace directory with configurable root (`PINCER_WORKSPACE`, default `~/.pincer/workspace`).
-- [x] Implement `read_file`, `write_file`, `append_file`, `list_dir` tools (READ-classified, workspace-sandboxed).
+- [x] Implement `read_file`, `write_file`, `append_file`, `list_dir` tools (workspace-sandboxed, with path-based approval gating for writes).
 - [x] Bootstrap workspace layout on first start (memory/, skills/, scratch/, template HEARTBEAT.md).
 - [x] Implement two-layer file-based memory: `memory/MEMORY.md` (long-term) + `memory/YYYYMM/YYYYMMDD.md` (daily notes).
 - [x] Inject memory context into planner system prompt on every call (mtime-cached).

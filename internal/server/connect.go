@@ -1150,6 +1150,17 @@ func assignToolCallIDs(actions []agent.ProposedAction) []plannedToolCall {
 
 func (a *App) splitPlannedByRiskClass(threadID string, calls []plannedToolCall) (read, nonRead []plannedToolCall) {
 	for _, tc := range calls {
+		tool := strings.ToLower(strings.TrimSpace(tc.action.Tool))
+		if tool == "write_file" || tool == "append_file" {
+			if a.workspaceWriteAllowedInline(tool, tc.action.Args) {
+				tc.action.RiskClass = "READ"
+				read = append(read, tc)
+			} else {
+				nonRead = append(nonRead, tc)
+			}
+			continue
+		}
+
 		if !strings.EqualFold(tc.action.RiskClass, "READ") {
 			nonRead = append(nonRead, tc)
 			continue

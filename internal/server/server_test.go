@@ -893,6 +893,126 @@ func TestWebFetchUngrantedDomainRequiresApprovalAndGrantsDomain(t *testing.T) {
 	}
 }
 
+func TestWorkspaceMemoryWriteExecutesInlineWithoutApproval(t *testing.T) {
+	t.Parallel()
+
+	callCount := 0
+	planner := &callCountPlanner{
+		plans: []agent.PlanResult{
+			{
+				AssistantMessage: "Updating memory.",
+				ProposedActions: []agent.ProposedAction{{
+					Tool:          "write_file",
+					Args:          json.RawMessage(`{"path":"memory/MEMORY.md","content":"- Prefers concise summaries\n"}`),
+					Justification: "Persist stable preference.",
+					RiskClass:     "HIGH",
+				}},
+			},
+			{
+				AssistantMessage: "Saved to memory.",
+				ProposedActions:  nil,
+			},
+		},
+		callCount: &callCount,
+	}
+
+	app := newTestAppWithPlanner(t, planner)
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
+
+	token := bootstrapAuthToken(t, srv.URL)
+	threadID := createThread(t, srv.URL, token)
+
+	postMessage(t, srv.URL, token, threadID, "remember that I prefer concise summaries")
+
+	pending := listApprovals(t, srv.URL, token, "pending")
+	if len(pending) != 0 {
+		t.Fatalf("expected 0 pending approvals for memory write, got %d", len(pending))
+	}
+
+	memoryPath := filepath.Join(app.workspaceRoot, "memory", "MEMORY.md")
+	contents, err := os.ReadFile(memoryPath)
+	if err != nil {
+		t.Fatalf("read memory file: %v", err)
+	}
+	if !strings.Contains(string(contents), "Prefers concise summaries") {
+		t.Fatalf("expected memory write to persist content, got %q", string(contents))
+	}
+
+	if callCount != 2 {
+		t.Fatalf("expected planner to run twice for inline write flow, got %d", callCount)
+	}
+}
+
+func TestWorkspaceWritesToProtectedRootFilesRequireApproval(t *testing.T) {
+	t.Parallel()
+
+	protectedPaths := []string{"SOUL.md", "LAWS.md"}
+	for _, protectedPath := range protectedPaths {
+		protectedPath := protectedPath
+		t.Run(protectedPath, func(t *testing.T) {
+			t.Parallel()
+
+			planner := &staticPlannerFunc{fn: func(_ context.Context, _ agent.PlanRequest) (agent.PlanResult, error) {
+				return agent.PlanResult{
+					AssistantMessage: "Preparing a policy file update.",
+					ProposedActions: []agent.ProposedAction{{
+						Tool:          "write_file",
+						Args:          json.RawMessage(fmt.Sprintf(`{"path":%q,"content":"updated by test\n"}`, protectedPath)),
+						Justification: "Apply requested update.",
+						RiskClass:     "READ",
+					}},
+				}, nil
+			}}
+
+			app := newTestAppWithPlanner(t, planner)
+			srv := httptest.NewServer(app.Handler())
+			defer srv.Close()
+
+			token := bootstrapAuthToken(t, srv.URL)
+			threadID := createThread(t, srv.URL, token)
+
+			beforePath := filepath.Join(app.workspaceRoot, filepath.FromSlash(protectedPath))
+			before, err := os.ReadFile(beforePath)
+			if err != nil {
+				t.Fatalf("read before content: %v", err)
+			}
+
+			postMessage(t, srv.URL, token, threadID, "update protected file")
+
+			pending := listApprovals(t, srv.URL, token, "pending")
+			if len(pending) != 1 {
+				t.Fatalf("expected 1 pending approval for %s write, got %d", protectedPath, len(pending))
+			}
+			if pending[0].Tool != "write_file" {
+				t.Fatalf("expected write_file approval, got %q", pending[0].Tool)
+			}
+
+			afterUnapproved, err := os.ReadFile(beforePath)
+			if err != nil {
+				t.Fatalf("read unapproved content: %v", err)
+			}
+			if string(afterUnapproved) != string(before) {
+				t.Fatalf("expected %s to remain unchanged before approval", protectedPath)
+			}
+
+			approveAction(t, srv.URL, token, pending[0].ActionID)
+			executed := waitForApprovalStatus(t, srv.URL, token, "executed", pending[0].ActionID, 5*time.Second)
+			if len(executed) != 1 {
+				t.Fatalf("expected approved action to execute for %s", protectedPath)
+			}
+
+			afterApproved, err := os.ReadFile(beforePath)
+			if err != nil {
+				t.Fatalf("read approved content: %v", err)
+			}
+			if !strings.Contains(string(afterApproved), "updated by test") {
+				t.Fatalf("expected approved write to update %s, got %q", protectedPath, string(afterApproved))
+			}
+		})
+	}
+}
+
 func TestWorkspaceFileTools(t *testing.T) {
 	t.Parallel()
 

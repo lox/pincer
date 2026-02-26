@@ -886,6 +886,32 @@ func (a *App) executeApprovedAction(actionID string) error {
 				}
 			}
 		}
+	} else if strings.EqualFold(item.Tool, "write_file") {
+		var args writeFileArgs
+		if err := json.Unmarshal([]byte(item.ArgsJSON), &args); err != nil {
+			executionSystemMsg = fmt.Sprintf("[write_file] invalid args: %v", err)
+		} else {
+			relPath, writtenBytes, writeErr := a.writeWorkspaceFile(args.Path, args.Content)
+			if writeErr != nil {
+				executionSystemMsg = fmt.Sprintf("[write_file] error: %v", writeErr)
+			} else {
+				executionSystemMsg = fmt.Sprintf("[write_file] wrote %d bytes to %s", writtenBytes, relPath)
+				actionExecutedAuditPayload = fmt.Sprintf(`{"path":%q,"bytes":%d}`, relPath, writtenBytes)
+			}
+		}
+	} else if strings.EqualFold(item.Tool, "append_file") {
+		var args appendFileArgs
+		if err := json.Unmarshal([]byte(item.ArgsJSON), &args); err != nil {
+			executionSystemMsg = fmt.Sprintf("[append_file] invalid args: %v", err)
+		} else {
+			relPath, appendedBytes, appendErr := a.appendWorkspaceFile(args.Path, args.Content)
+			if appendErr != nil {
+				executionSystemMsg = fmt.Sprintf("[append_file] error: %v", appendErr)
+			} else {
+				executionSystemMsg = fmt.Sprintf("[append_file] appended %d bytes to %s", appendedBytes, relPath)
+				actionExecutedAuditPayload = fmt.Sprintf(`{"path":%q,"bytes":%d}`, relPath, appendedBytes)
+			}
+		}
 	}
 
 	finalizeTx, err := a.db.Begin()
@@ -1276,8 +1302,13 @@ func (a *App) planTurn(ctx context.Context, threadID, userMessage string, step, 
 		if isBashTool(tool) {
 			args = normalizeBashActionArgs(args)
 			riskClass = riskClassForBashArgs(args)
-		} else if riskClass == "" {
-			riskClass = riskClassForTool(tool)
+		} else {
+			trustedRisk := riskClassForTool(tool)
+			if trustedRisk != "" {
+				riskClass = trustedRisk
+			} else if riskClass == "" {
+				riskClass = "HIGH"
+			}
 		}
 
 		proposed = append(proposed, agent.ProposedAction{
@@ -1361,8 +1392,10 @@ func riskClassForTool(tool string) string {
 	switch strings.ToLower(strings.TrimSpace(tool)) {
 	case "web_search", "web_summarize", "web_fetch", "image_describe":
 		return "READ"
-	case "read_file", "write_file", "append_file", "list_dir", "spawn":
+	case "read_file", "list_dir", "spawn":
 		return "READ"
+	case "write_file", "append_file":
+		return "WRITE"
 	case "gmail_search", "gmail_read", "gmail_get_thread":
 		return "READ"
 	case "gmail_send_draft":
