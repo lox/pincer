@@ -1117,9 +1117,10 @@ private struct ChatComposer: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            TextField("Message...", text: $text)
+            TextField("Message...", text: $text, axis: .vertical)
                 .font(.system(.body, design: .rounded))
                 .foregroundStyle(PincerPalette.textPrimary)
+                .lineLimit(1...6)
                 .focused($isInputFocused)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
