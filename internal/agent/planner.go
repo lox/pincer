@@ -17,7 +17,7 @@ import (
 
 const defaultOpenRouterBaseURL = "https://openrouter.ai/api/v1"
 const defaultSOULPath = "templates/SOUL.md"
-const defaultIdentityPath = "templates/IDENTITY.md"
+const defaultLAWSPath = "templates/LAWS.md"
 
 var (
 	ErrInvalidModelOutput = errors.New("invalid model output")
@@ -94,31 +94,31 @@ func (p fallbackPlanner) Plan(ctx context.Context, req PlanRequest) (PlanResult,
 }
 
 type OpenAIPlannerConfig struct {
-	APIKey         string
-	BaseURL        string
-	PrimaryModel   string
-	FallbackModel  string
-	WorkspaceRoot  string
-	HTTPClient     *http.Client
-	UserAgent      string
-	SOULPrompt     string
-	SOULPath       string
-	IdentityPrompt string
-	IdentityPath   string
+	APIKey        string
+	BaseURL       string
+	PrimaryModel  string
+	FallbackModel string
+	WorkspaceRoot string
+	HTTPClient    *http.Client
+	UserAgent     string
+	SOULPrompt    string
+	SOULPath      string
+	LawsPrompt    string
+	LawsPath      string
 }
 
 type OpenAIPlanner struct {
-	apiKey         string
-	baseURL        string
-	primaryModel   string
-	fallbackModel  string
-	workspaceRoot  string
-	httpClient     *http.Client
-	userAgent      string
-	identityPrompt string
-	soulPrompt     string
-	memoryCacheMu  sync.Mutex
-	memoryCache    memoryContextCache
+	apiKey        string
+	baseURL       string
+	primaryModel  string
+	fallbackModel string
+	workspaceRoot string
+	httpClient    *http.Client
+	userAgent     string
+	lawsPrompt    string
+	soulPrompt    string
+	memoryCacheMu sync.Mutex
+	memoryCache   memoryContextCache
 }
 
 func NewOpenAIPlanner(cfg OpenAIPlannerConfig) (*OpenAIPlanner, error) {
@@ -145,22 +145,22 @@ func NewOpenAIPlanner(cfg OpenAIPlannerConfig) (*OpenAIPlanner, error) {
 
 	workspaceRoot := strings.TrimSpace(cfg.WorkspaceRoot)
 
-	identityPrompt := strings.TrimSpace(cfg.IdentityPrompt)
-	if identityPrompt == "" {
-		identityPath := strings.TrimSpace(cfg.IdentityPath)
-		if identityPath == "" {
+	lawsPrompt := strings.TrimSpace(cfg.LawsPrompt)
+	if lawsPrompt == "" {
+		lawsPath := strings.TrimSpace(cfg.LawsPath)
+		if lawsPath == "" {
 			if workspaceRoot != "" {
-				identityPath = filepath.Join(workspaceRoot, "IDENTITY.md")
+				lawsPath = filepath.Join(workspaceRoot, "LAWS.md")
 			} else {
-				identityPath = defaultIdentityPath
+				lawsPath = defaultLAWSPath
 			}
 		}
 
-		loaded, err := loadPromptFile(identityPath)
+		loaded, err := loadPromptFile(lawsPath)
 		if err != nil {
-			return nil, fmt.Errorf("read identity prompt: %w", err)
+			return nil, fmt.Errorf("read laws prompt: %w", err)
 		}
-		identityPrompt = loaded
+		lawsPrompt = loaded
 	}
 
 	soulPrompt := strings.TrimSpace(cfg.SOULPrompt)
@@ -182,15 +182,15 @@ func NewOpenAIPlanner(cfg OpenAIPlannerConfig) (*OpenAIPlanner, error) {
 	}
 
 	return &OpenAIPlanner{
-		apiKey:         strings.TrimSpace(cfg.APIKey),
-		baseURL:        baseURL,
-		primaryModel:   strings.TrimSpace(cfg.PrimaryModel),
-		fallbackModel:  strings.TrimSpace(cfg.FallbackModel),
-		workspaceRoot:  workspaceRoot,
-		httpClient:     cfg.HTTPClient,
-		userAgent:      strings.TrimSpace(cfg.UserAgent),
-		identityPrompt: identityPrompt,
-		soulPrompt:     soulPrompt,
+		apiKey:        strings.TrimSpace(cfg.APIKey),
+		baseURL:       baseURL,
+		primaryModel:  strings.TrimSpace(cfg.PrimaryModel),
+		fallbackModel: strings.TrimSpace(cfg.FallbackModel),
+		workspaceRoot: workspaceRoot,
+		httpClient:    cfg.HTTPClient,
+		userAgent:     strings.TrimSpace(cfg.UserAgent),
+		lawsPrompt:    lawsPrompt,
+		soulPrompt:    soulPrompt,
 	}, nil
 }
 
@@ -518,11 +518,11 @@ func (p *OpenAIPlanner) planWithModel(ctx context.Context, model string, req Pla
 				"- When summarizing fetched web content, preserve important source links from the original page. Include them inline next to the relevant claims so users can click through to the source.",
 		},
 	}
-	if p.identityPrompt != "" {
+	if p.lawsPrompt != "" {
 		messages = append(messages, openAIMessage{
 			Role: "system",
-			Content: "Apply the following IDENTITY guidance for role and worldview while still obeying safety constraints:\n" +
-				p.identityPrompt,
+			Content: "Apply the following LAWS guidance as non-negotiable constraints while still obeying safety constraints:\n" +
+				p.lawsPrompt,
 		})
 	}
 	if p.soulPrompt != "" {

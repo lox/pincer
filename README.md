@@ -58,7 +58,7 @@ Go Backend (single binary)
 - **Assistant thinking** — model reasoning (`reasoning_content`) is captured and streamed to the iOS app as `AssistantThinkingDelta` events, rendered as expandable thinking bubbles in the chat timeline.
 - **iOS control app** — SwiftUI chat with full markdown rendering (via Textual), approvals tab, device/session management, and settings.
 - **Audit log** — every side-effect transition (`proposed → approved → executed`) is recorded and queryable.
-- **SOUL-guided planner** — system prompt loaded from `workspace/SOUL.md` (bootstrapped from `templates/SOUL.md`) to shape assistant personality and safety posture.
+- **LAWS + SOUL prompt model** — planner loads `workspace/LAWS.md` (constraints) and `workspace/SOUL.md` (personality), bootstrapped from `templates/`.
 - **Tailscale support** — optional `tsnet` listener for tailnet-only access; transport only, does not bypass auth.
 - **E2E test coverage** — eval tests with real LLM, XCUITest for iOS UI, and reproducible API E2E scripts.
 
@@ -147,8 +147,9 @@ The Fly deployment embeds `tsnet` in the single Pincer binary — no Tailscale s
 - `docs/auth.md` - authentication and device-pairing lifecycle details.
 - `docs/protocol.md` - ConnectRPC/protobuf wire contract and streaming event model.
 - `docs/prompt-templates.md` - recommended `SOUL.md` and system prompt skeleton templates.
-- `templates/` - copyable default `SOUL.md` and `IDENTITY.md` templates.
+- `templates/` - copyable default `LAWS.md` and `SOUL.md` templates.
 - `PLAN.md` - phased implementation plan and steps.
 - `docs/ios-ui-plan.md` - iOS UI/UX planning details.
-- `workspace/SOUL.md` - runtime assistant phrasing guidance used by the planner.
+- `workspace/LAWS.md` - runtime non-negotiable constraints used by the planner.
+- `workspace/SOUL.md` - runtime assistant voice and relational guidance used by the planner.
 - `AGENTS.md` - repository-specific agent instructions.

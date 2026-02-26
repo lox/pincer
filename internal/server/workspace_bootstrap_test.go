@@ -20,8 +20,8 @@ func TestBootstrapWorkspaceSeedsTemplateFilesWithoutOverwrite(t *testing.T) {
 		mustMatch string
 	}{
 		{name: "HEARTBEAT.md", mustMatch: "# Periodic Tasks"},
+		{name: "LAWS.md", mustMatch: "# LAWS.md"},
 		{name: "SOUL.md", mustMatch: "security-first autonomous assistant"},
-		{name: "IDENTITY.md", mustMatch: "# Identity"},
 	} {
 		path := filepath.Join(root, tc.name)
 		contents, err := os.ReadFile(path)
@@ -62,8 +62,8 @@ func TestBootstrapWorkspaceUsesTemplatesDirectoryWhenPresent(t *testing.T) {
 	if err := os.WriteFile(filepath.Join("templates", "SOUL.md"), []byte("# template soul\n"), 0o644); err != nil {
 		t.Fatalf("write templates/SOUL.md: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join("templates", "IDENTITY.md"), []byte("# template identity\n"), 0o644); err != nil {
-		t.Fatalf("write templates/IDENTITY.md: %v", err)
+	if err := os.WriteFile(filepath.Join("templates", "LAWS.md"), []byte("# template laws\n"), 0o644); err != nil {
+		t.Fatalf("write templates/LAWS.md: %v", err)
 	}
 
 	root := filepath.Join(wd, "workspace")
@@ -79,11 +79,11 @@ func TestBootstrapWorkspaceUsesTemplatesDirectoryWhenPresent(t *testing.T) {
 		t.Fatalf("expected workspace SOUL.md to be copied from templates, got %q", string(soul))
 	}
 
-	identity, err := os.ReadFile(filepath.Join(root, "IDENTITY.md"))
+	laws, err := os.ReadFile(filepath.Join(root, "LAWS.md"))
 	if err != nil {
-		t.Fatalf("read workspace IDENTITY.md: %v", err)
+		t.Fatalf("read workspace LAWS.md: %v", err)
 	}
-	if string(identity) != "# template identity\n" {
-		t.Fatalf("expected workspace IDENTITY.md to be copied from templates, got %q", string(identity))
+	if string(laws) != "# template laws\n" {
+		t.Fatalf("expected workspace LAWS.md to be copied from templates, got %q", string(laws))
 	}
 }

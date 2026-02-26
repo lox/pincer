@@ -499,14 +499,14 @@ func TestOpenAIPlannerLoadsSOULPromptFromFile(t *testing.T) {
 	}
 }
 
-func TestOpenAIPlannerIncludesIdentityPromptWhenConfigured(t *testing.T) {
+func TestOpenAIPlannerIncludesLawsPromptWhenConfigured(t *testing.T) {
 	t.Parallel()
 
-	const identity = "You are Emaline. Non-human. Independent counterpart."
+	const laws = "Never claim an external action executed unless audit confirms it."
 
 	var (
-		mu          sync.Mutex
-		sawIdentity bool
+		mu      sync.Mutex
+		sawLaws bool
 	)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -517,75 +517,9 @@ func TestOpenAIPlannerIncludesIdentityPromptWhenConfigured(t *testing.T) {
 		}
 
 		for _, msg := range req.Messages {
-			if msg.Role == "system" && strings.Contains(msg.Content, identity) {
+			if msg.Role == "system" && strings.Contains(msg.Content, laws) {
 				mu.Lock()
-				sawIdentity = true
-				mu.Unlock()
-				break
-			}
-		}
-
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"choices": []map[string]any{
-				{"message": map[string]any{"content": "ok"}},
-			},
-		})
-	}))
-	defer srv.Close()
-
-	planner, err := NewOpenAIPlanner(OpenAIPlannerConfig{
-		APIKey:         "test-key",
-		BaseURL:        srv.URL,
-		PrimaryModel:   "primary-model",
-		HTTPClient:     srv.Client(),
-		IdentityPrompt: identity,
-		SOULPrompt:     "Keep it concise.",
-	})
-	if err != nil {
-		t.Fatalf("new planner: %v", err)
-	}
-
-	if _, err := planner.Plan(context.Background(), PlanRequest{
-		ThreadID:    "thr_test",
-		UserMessage: "hello",
-	}); err != nil {
-		t.Fatalf("plan: %v", err)
-	}
-
-	mu.Lock()
-	defer mu.Unlock()
-	if !sawIdentity {
-		t.Fatalf("expected planner request to include IDENTITY guidance")
-	}
-}
-
-func TestOpenAIPlannerLoadsIdentityPromptFromFile(t *testing.T) {
-	t.Parallel()
-
-	const identity = "Name: Emaline\nNature: Non-human emergent intelligence."
-
-	dir := t.TempDir()
-	identityPath := filepath.Join(dir, "IDENTITY.md")
-	if err := os.WriteFile(identityPath, []byte(identity), 0o644); err != nil {
-		t.Fatalf("write IDENTITY.md: %v", err)
-	}
-
-	var (
-		mu          sync.Mutex
-		sawIdentity bool
-	)
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req openAIChatCompletionRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-
-		for _, msg := range req.Messages {
-			if msg.Role == "system" && strings.Contains(msg.Content, identity) {
-				mu.Lock()
-				sawIdentity = true
+				sawLaws = true
 				mu.Unlock()
 				break
 			}
@@ -604,7 +538,73 @@ func TestOpenAIPlannerLoadsIdentityPromptFromFile(t *testing.T) {
 		BaseURL:      srv.URL,
 		PrimaryModel: "primary-model",
 		HTTPClient:   srv.Client(),
-		IdentityPath: identityPath,
+		LawsPrompt:   laws,
+		SOULPrompt:   "Keep it concise.",
+	})
+	if err != nil {
+		t.Fatalf("new planner: %v", err)
+	}
+
+	if _, err := planner.Plan(context.Background(), PlanRequest{
+		ThreadID:    "thr_test",
+		UserMessage: "hello",
+	}); err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !sawLaws {
+		t.Fatalf("expected planner request to include LAWS guidance")
+	}
+}
+
+func TestOpenAIPlannerLoadsLawsPromptFromFile(t *testing.T) {
+	t.Parallel()
+
+	const laws = "No silent external writes. No approval bypass."
+
+	dir := t.TempDir()
+	lawsPath := filepath.Join(dir, "LAWS.md")
+	if err := os.WriteFile(lawsPath, []byte(laws), 0o644); err != nil {
+		t.Fatalf("write LAWS.md: %v", err)
+	}
+
+	var (
+		mu      sync.Mutex
+		sawLaws bool
+	)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req openAIChatCompletionRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		for _, msg := range req.Messages {
+			if msg.Role == "system" && strings.Contains(msg.Content, laws) {
+				mu.Lock()
+				sawLaws = true
+				mu.Unlock()
+				break
+			}
+		}
+
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]any{"content": "ok"}},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	planner, err := NewOpenAIPlanner(OpenAIPlannerConfig{
+		APIKey:       "test-key",
+		BaseURL:      srv.URL,
+		PrimaryModel: "primary-model",
+		HTTPClient:   srv.Client(),
+		LawsPath:     lawsPath,
 		SOULPrompt:   "Be direct.",
 	})
 	if err != nil {
@@ -620,8 +620,8 @@ func TestOpenAIPlannerLoadsIdentityPromptFromFile(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	if !sawIdentity {
-		t.Fatalf("expected planner request to include IDENTITY prompt loaded from file")
+	if !sawLaws {
+		t.Fatalf("expected planner request to include LAWS prompt loaded from file")
 	}
 }
 
