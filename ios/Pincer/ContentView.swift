@@ -282,6 +282,7 @@ private struct ChatDetailView: View {
     let onDelete: () -> Void
     @State private var previewURL: URL?
     @State private var isDownloadingAttachment = false
+    @State private var focusedAssistantMessageID: String?
     private let chatBottomAnchorID = "chat_bottom_anchor"
 
     var body: some View {
@@ -344,14 +345,9 @@ private struct ChatDetailView: View {
                         scrollToBottom(reader, animated: false)
                     }
                 }
-                .onChange(of: model.timelineItems.count) { _, _ in
+                .onChange(of: model.messages.map(\.messageID)) { oldIDs, _ in
                     if model.isInitialLoadComplete {
-                        scrollToBottom(reader)
-                    }
-                }
-                .onChange(of: model.isAwaitingAssistantProgress) { _, isAwaiting in
-                    if isAwaiting {
-                        scrollToBottom(reader)
+                        handleMessageInsertionScroll(oldIDs: oldIDs, reader: reader)
                     }
                 }
             }
@@ -456,6 +452,31 @@ private struct ChatDetailView: View {
         } else {
             reader.scrollTo(chatBottomAnchorID, anchor: .bottom)
         }
+    }
+
+    private func scrollToMessageTop(_ messageID: String, reader: ScrollViewProxy) {
+        withAnimation(.easeOut(duration: 0.22)) {
+            reader.scrollTo("msg_\(messageID)", anchor: .top)
+        }
+    }
+
+    private func handleMessageInsertionScroll(oldIDs: [String], reader: ScrollViewProxy) {
+        let oldIDSet = Set(oldIDs)
+        let insertedMessages = model.messages.filter { !oldIDSet.contains($0.messageID) }
+        guard !insertedMessages.isEmpty else { return }
+
+        if let assistantMessage = insertedMessages.last(where: { $0.role.caseInsensitiveCompare("assistant") == .orderedSame }) {
+            if focusedAssistantMessageID != assistantMessage.messageID {
+                focusedAssistantMessageID = assistantMessage.messageID
+                scrollToMessageTop(assistantMessage.messageID, reader: reader)
+            }
+            return
+        }
+
+        if insertedMessages.contains(where: { $0.role.caseInsensitiveCompare("user") == .orderedSame }) {
+            focusedAssistantMessageID = nil
+        }
+        scrollToBottom(reader)
     }
 }
 
