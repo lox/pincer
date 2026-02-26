@@ -52,7 +52,7 @@ Content:
 - Inline approval cards for actions created from this thread.
 - Composer with send action.
 - **Proactive agent messages** from heartbeat findings, job completions, and scheduled task results.
-- **Heartbeat system thread** visible in thread list, marked with a system indicator.
+- Heartbeat system thread remains internal by default to keep Chat thread list focused.
 
 Interaction rules:
 

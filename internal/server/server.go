@@ -34,6 +34,7 @@ const (
 	defaultOwnerID                    = "owner-dev"
 	defaultTokenHMACKey               = "pincer-dev-token-hmac-key-change-me"
 	defaultPrimaryModel               = "anthropic/claude-opus-4.6"
+	defaultHeartbeatInterval          = 30 * time.Minute
 	defaultAssistantMessage           = "Message processed."
 	defaultActionJustification        = "User requested external follow-up"
 	defaultActionExpiry               = 24 * time.Hour
@@ -50,6 +51,10 @@ const (
 	maxBashSystemMessageChars         = 4 * 1024
 	maxToolResultMessageChars         = 4 * 1024
 	maxInlineToolSteps                = 10
+	heartbeatThreadID                 = "thread_heartbeat"
+	heartbeatThreadTitle              = "Heartbeat"
+	heartbeatSilentMarker             = "HEARTBEAT_OK"
+	heartbeatPromptPrefix             = "[heartbeat_prompt:"
 )
 
 var errIdempotencyConflict = errors.New("idempotency conflict")
@@ -70,6 +75,8 @@ type AppConfig struct {
 	WebFetcher              *agent.WebFetcher
 	ImageDescriber          *agent.ImageDescriber
 	ActionExecutorInterval  time.Duration
+	HeartbeatEnabled        bool
+	HeartbeatInterval       time.Duration
 	DisableBackgroundWorker bool
 }
 
@@ -91,6 +98,8 @@ type App struct {
 	doneCh                 chan struct{}
 	closeOnce              sync.Once
 	actionExecutorInterval time.Duration
+	heartbeatEnabled       bool
+	heartbeatInterval      time.Duration
 	eventAppendMu          sync.Mutex
 	eventSubsMu            sync.RWMutex
 	eventSubs              map[string]map[chan *threadEvent]struct{}
@@ -287,6 +296,10 @@ func New(cfg AppConfig) (*App, error) {
 	if interval <= 0 {
 		interval = defaultActionExecutorPollInterval
 	}
+	heartbeatInterval := cfg.HeartbeatInterval
+	if heartbeatInterval <= 0 {
+		heartbeatInterval = defaultHeartbeatInterval
+	}
 
 	webFetcher := cfg.WebFetcher
 	if webFetcher == nil {
@@ -317,12 +330,14 @@ func New(cfg AppConfig) (*App, error) {
 		stopCh:                 make(chan struct{}),
 		doneCh:                 make(chan struct{}),
 		actionExecutorInterval: interval,
+		heartbeatEnabled:       cfg.HeartbeatEnabled,
+		heartbeatInterval:      heartbeatInterval,
 		eventSubs:              make(map[string]map[chan *threadEvent]struct{}),
 		workspaceTotalBytes:    workspaceTotalBytes,
 	}
 
 	if !cfg.DisableBackgroundWorker {
-		go app.runActionExecutor()
+		go app.runBackgroundWorkers()
 	} else {
 		close(app.doneCh)
 	}
@@ -987,27 +1002,107 @@ func (a *App) maybeResumeTurn(actionID string) {
 		return
 	}
 
-	// Load the user message that initiated THIS turn, not a later message.
+	// Load the message text that initiated THIS turn, not a later message.
+	// Heartbeat turns persist prompts as internal messages to avoid user-visible
+	// prompt noise, so continuation needs a different selector.
+	resumeTriggerType := protocolv1.TriggerType_CHAT_MESSAGE
+	var inputMessageID string
 	var userText string
-	err = a.db.QueryRow(`
-		SELECT content FROM messages
-		WHERE thread_id = ? AND role = 'user'
-		AND created_at <= ?
-		ORDER BY created_at DESC LIMIT 1
-	`, threadID, turnStartedAt).Scan(&userText)
-	if err != nil {
-		userText = ""
+	if threadID == heartbeatThreadID {
+		resumeTriggerType = protocolv1.TriggerType_HEARTBEAT
+		heartbeatPromptPattern := heartbeatPromptLikeForTurn(turnID)
+		err = a.db.QueryRow(`
+			SELECT message_id, content FROM messages
+			WHERE thread_id = ? AND role = 'internal' AND content LIKE ?
+			AND created_at <= ?
+			ORDER BY created_at DESC LIMIT 1
+		`, threadID, heartbeatPromptPattern, turnStartedAt).Scan(&inputMessageID, &userText)
+		if err != nil {
+			inputMessageID = ""
+			userText = ""
+		} else {
+			parsed, ok := heartbeatPromptContentForTurn(turnID, userText)
+			if !ok {
+				inputMessageID = ""
+				userText = ""
+			} else {
+				userText = parsed
+			}
+		}
+	} else {
+		err = a.db.QueryRow(`
+			SELECT message_id, content FROM messages
+			WHERE thread_id = ? AND role = 'user'
+			AND created_at <= ?
+			ORDER BY created_at DESC LIMIT 1
+		`, threadID, turnStartedAt).Scan(&inputMessageID, &userText)
+		if err != nil {
+			inputMessageID = ""
+			userText = ""
+		}
 	}
 
 	a.logger.Info("resuming turn after approval", "turn_id", turnID, "thread_id", threadID, "steps_used", stepsUsed)
 
 	go func() {
 		defer a.resumingTurns.Delete(turnID)
-		_, err := a.executeTurnFromStep(context.Background(), threadID, userText, turnID, protocolv1.TriggerType_CHAT_MESSAGE, stepsUsed, true)
+		_, err := a.executeTurnFromStep(context.Background(), threadID, userText, turnID, resumeTriggerType, stepsUsed, inputMessageID, true)
 		if err != nil {
 			a.logger.Error("turn continuation failed", "turn_id", turnID, "thread_id", threadID, "error", err)
 		}
 	}()
+}
+
+func (a *App) ensureHeartbeatThread(ctx context.Context) (string, error) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := a.db.ExecContext(ctx, `
+		INSERT OR IGNORE INTO threads(thread_id, user_id, channel, created_at, title, updated_at)
+		VALUES(?, ?, 'system', ?, ?, ?)
+	`, heartbeatThreadID, a.ownerID, now, heartbeatThreadTitle, now); err != nil {
+		return "", fmt.Errorf("ensure heartbeat thread: %w", err)
+	}
+	return heartbeatThreadID, nil
+}
+
+func (a *App) loadHeartbeatPrompt(now time.Time) (string, error) {
+	_, tasks, err := a.readWorkspaceFile("HEARTBEAT.md")
+	if err != nil {
+		return "", fmt.Errorf("read HEARTBEAT.md: %w", err)
+	}
+	tasks = strings.TrimSpace(tasks)
+	if tasks == "" {
+		return "", nil
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "Current time: %s\n\n", now.Format(time.RFC3339))
+	b.WriteString("Execute the periodic tasks below. Use available tools to check each item.\n")
+	b.WriteString("For complex or time-consuming tasks, use the spawn tool to run them in the background.\n")
+	fmt.Fprintf(&b, "If nothing needs attention, respond with %s.\n", heartbeatSilentMarker)
+	b.WriteString("If you find something noteworthy, summarize your findings for the user.\n\n")
+	b.WriteString(tasks)
+
+	return b.String(), nil
+}
+
+func heartbeatPromptPrefixForTurn(turnID string) string {
+	return fmt.Sprintf("%s%s]\n", heartbeatPromptPrefix, turnID)
+}
+
+func heartbeatPromptLikeForTurn(turnID string) string {
+	return fmt.Sprintf("%s%s]%%", heartbeatPromptPrefix, turnID)
+}
+
+func formatHeartbeatPromptMessage(turnID, prompt string) string {
+	return heartbeatPromptPrefixForTurn(turnID) + prompt
+}
+
+func heartbeatPromptContentForTurn(turnID, raw string) (string, bool) {
+	prefix := heartbeatPromptPrefixForTurn(turnID)
+	if !strings.HasPrefix(raw, prefix) {
+		return "", false
+	}
+	return strings.TrimPrefix(raw, prefix), true
 }
 
 func (a *App) threadExists(threadID string) bool {
@@ -1031,8 +1126,8 @@ func (a *App) grantDomain(domain, threadID string) error {
 	return err
 }
 
-func (a *App) planTurn(ctx context.Context, threadID, userMessage string, step, maxSteps int) (agent.PlanResult, error) {
-	history, err := a.loadPlannerHistory(threadID, defaultPlannerHistoryLimit)
+func (a *App) planTurn(ctx context.Context, threadID, userMessage string, step, maxSteps int, excludeMessageID string) (agent.PlanResult, error) {
+	history, err := a.loadPlannerHistory(threadID, defaultPlannerHistoryLimit, excludeMessageID)
 	if err != nil {
 		return agent.PlanResult{}, fmt.Errorf("load planner history: %w", err)
 	}
@@ -1105,14 +1200,27 @@ func (a *App) planTurn(ctx context.Context, threadID, userMessage string, step, 
 	}, nil
 }
 
-func (a *App) loadPlannerHistory(threadID string, limit int) ([]agent.Message, error) {
-	rows, err := a.db.Query(`
-		SELECT role, content
-		FROM messages
-		WHERE thread_id = ? AND role != 'system'
-		ORDER BY created_at DESC
-		LIMIT ?
-	`, threadID, limit)
+func (a *App) loadPlannerHistory(threadID string, limit int, excludeMessageID string) ([]agent.Message, error) {
+	excludeMessageID = strings.TrimSpace(excludeMessageID)
+	var rows *sql.Rows
+	var err error
+	if excludeMessageID == "" {
+		rows, err = a.db.Query(`
+			SELECT role, content
+			FROM messages
+			WHERE thread_id = ? AND role != 'system'
+			ORDER BY created_at DESC
+			LIMIT ?
+		`, threadID, limit)
+	} else {
+		rows, err = a.db.Query(`
+			SELECT role, content
+			FROM messages
+			WHERE thread_id = ? AND role != 'system' AND message_id != ?
+			ORDER BY created_at DESC
+			LIMIT ?
+		`, threadID, excludeMessageID, limit)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1529,12 +1637,30 @@ func clientIP(remoteAddr string) string {
 	return host
 }
 
+func (a *App) runBackgroundWorkers() {
+	var wg sync.WaitGroup
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		a.runActionExecutor()
+	}()
+
+	if a.heartbeatEnabled {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			a.runHeartbeatService()
+		}()
+	}
+
+	wg.Wait()
+	close(a.doneCh)
+}
+
 func (a *App) runActionExecutor() {
 	ticker := time.NewTicker(a.actionExecutorInterval)
-	defer func() {
-		ticker.Stop()
-		close(a.doneCh)
-	}()
+	defer ticker.Stop()
 
 	a.processActionQueueOnce()
 
@@ -1546,6 +1672,56 @@ func (a *App) runActionExecutor() {
 			a.processActionQueueOnce()
 		}
 	}
+}
+
+func (a *App) runHeartbeatService() {
+	if !a.llmConfigured {
+		a.logger.Info("heartbeat service skipped: planner is not configured")
+		return
+	}
+
+	if _, err := a.ensureHeartbeatThread(context.Background()); err != nil {
+		a.logger.Error("heartbeat service failed to ensure system thread", "error", err)
+		return
+	}
+
+	ticker := time.NewTicker(a.heartbeatInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-a.stopCh:
+			return
+		case <-ticker.C:
+			a.runHeartbeatTurn()
+		}
+	}
+}
+
+func (a *App) runHeartbeatTurn() {
+	now := time.Now()
+	prompt, err := a.loadHeartbeatPrompt(now)
+	if err != nil {
+		a.logger.Error("heartbeat service failed to load prompt", "error", err)
+		return
+	}
+	if prompt == "" {
+		a.logger.Debug("heartbeat service skipped: empty heartbeat prompt")
+		return
+	}
+
+	threadID, err := a.ensureHeartbeatThread(context.Background())
+	if err != nil {
+		a.logger.Error("heartbeat service failed to ensure system thread", "error", err)
+		return
+	}
+
+	turnID := newID("turn")
+	if _, err := a.executeTurn(context.Background(), threadID, prompt, turnID, protocolv1.TriggerType_HEARTBEAT); err != nil {
+		a.logger.Error("heartbeat turn failed", "thread_id", threadID, "turn_id", turnID, "error", err)
+		return
+	}
+	a.logger.Debug("heartbeat turn completed", "thread_id", threadID, "turn_id", turnID)
 }
 
 func (a *App) processActionQueueOnce() {

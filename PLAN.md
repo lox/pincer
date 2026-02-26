@@ -94,13 +94,13 @@ Design: `docs/autonomy.md`
 
 Steps:
 
-- [ ] Add workspace directory with configurable root (`PINCER_WORKSPACE`, default `~/.pincer/workspace`).
-- [ ] Implement `read_file`, `write_file`, `append_file`, `list_dir` tools (READ-classified, workspace-sandboxed).
-- [ ] Bootstrap workspace layout on first start (memory/, skills/, scratch/, template HEARTBEAT.md).
-- [ ] Implement two-layer file-based memory: `memory/MEMORY.md` (long-term) + `memory/YYYYMM/YYYYMMDD.md` (daily notes).
-- [ ] Inject memory context into planner system prompt on every call (mtime-cached).
-- [ ] Update SOUL.md with memory instructions.
-- [ ] Implement heartbeat service: goroutine ticker, reads HEARTBEAT.md, runs turn in system thread.
+- [x] Add workspace directory with configurable root (`PINCER_WORKSPACE`, default `~/.pincer/workspace`).
+- [x] Implement `read_file`, `write_file`, `append_file`, `list_dir` tools (READ-classified, workspace-sandboxed).
+- [x] Bootstrap workspace layout on first start (memory/, skills/, scratch/, template HEARTBEAT.md).
+- [x] Implement two-layer file-based memory: `memory/MEMORY.md` (long-term) + `memory/YYYYMM/YYYYMMDD.md` (daily notes).
+- [x] Inject memory context into planner system prompt on every call (mtime-cached).
+- [x] Update SOUL.md with memory instructions.
+- [x] Implement heartbeat service: goroutine ticker, reads HEARTBEAT.md, runs turn in system thread.
 - [ ] Implement `spawn` tool and background job runner (goroutine per job, job-scoped budgets).
 - [ ] Post job results to originating chat thread on completion.
 - [ ] Implement `schedule_create`, `schedule_list`, `schedule_delete` tools.
@@ -109,13 +109,13 @@ Steps:
 - [ ] Define unified work item queue: all triggers (chat, heartbeat, schedule, spawn, future webhooks) produce same work item shape.
 - [ ] Add Agent Memory section to iOS Settings (view/edit MEMORY.md via RPC).
 - [ ] Add Heartbeat config to iOS Settings (toggle, interval, edit HEARTBEAT.md).
-- [ ] Surface heartbeat thread and job result messages in iOS Chat.
+- [ ] Surface heartbeat findings and job result messages in iOS Chat without adding thread-list clutter.
 - [ ] Populate iOS Jobs and Schedule tabs with real data.
 
 Exit criteria:
 
-- [ ] Agent remembers facts across sessions via file-based memory.
-- [ ] Heartbeat fires periodically and the agent can proactively report findings.
+- [x] Agent remembers facts across sessions via file-based memory.
+- [x] Heartbeat fires periodically and the agent can proactively report findings.
 - [ ] Agent can spawn background jobs that run the full planner-tool loop.
 - [ ] Agent can create its own scheduled triggers.
 - [ ] All autonomy triggers use the same approval pipeline for external side effects.
@@ -278,11 +278,12 @@ When memory and long-horizon primitives exist (Phase 4), adopt structured benchm
 - [x] Gmail integration: `gmail_search` (READ), `gmail_read` (READ), `gmail_create_draft` (WRITE), `gmail_send_draft` (EXFILTRATION/bot-only).
 - [x] Google OAuth token storage with AES-256-GCM encryption at rest (`oauth_tokens` table, `GOOGLE_OAUTH_ENCRYPTION_KEY` config).
 - [x] Thread list navigation with `ListThreads`/`DeleteThread` RPCs, auto-generated thread titles, and `...` context menu (New Chat, Copy Thread ID, Delete Thread).
+- [x] Heartbeat service: configurable background ticker (`PINCER_HEARTBEAT_ENABLED`, `PINCER_HEARTBEAT_INTERVAL`), dedicated `thread_heartbeat`, and `HEARTBEAT_OK` no-op suppression.
 - [ ] Phase 2 integrations continued.
 
 Next priority:
 
-- [ ] Phase 2.5: Workspace + file tools + memory + heartbeat (see `docs/autonomy.md`).
+- [ ] Phase 2.5: Spawn/jobs + scheduler + unified work queue + iOS autonomy surfaces (see `docs/autonomy.md`).
 - [ ] Test inline tool loop end-to-end with live Kagi API.
 - [x] Add web_fetch tool for raw URL content retrieval (with SSRF protections).
 - [x] Turn orchestration with pause/resume and bounded tool-loop planning (Phase 3 foundation).

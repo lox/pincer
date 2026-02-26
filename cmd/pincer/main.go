@@ -22,6 +22,8 @@ import (
 	"tailscale.com/tsnet"
 )
 
+const minHeartbeatIntervalMinutes = 15
+
 type cli struct {
 	LogLevel  string `name:"log-level" help:"Log level." env:"PINCER_LOG_LEVEL" default:"info" enum:"debug,info,warn,error,fatal"`
 	LogFormat string `name:"log-format" help:"Log output format." env:"PINCER_LOG_FORMAT" default:"text" enum:"text,json"`
@@ -44,6 +46,8 @@ type serveCmd struct {
 	ModelFallback      string `name:"model-fallback" help:"Fallback model ID." env:"PINCER_MODEL_FALLBACK"`
 	GoogleClientID     string `name:"google-client-id" help:"Google OAuth client ID for token refresh." env:"GOOGLE_CLIENT_ID"`
 	GoogleClientSecret string `name:"google-client-secret" help:"Google OAuth client secret for token refresh." env:"GOOGLE_CLIENT_SECRET"`
+	HeartbeatEnabled   bool   `name:"heartbeat-enabled" help:"Enable periodic heartbeat turns." env:"PINCER_HEARTBEAT_ENABLED" default:"true"`
+	HeartbeatInterval  int    `name:"heartbeat-interval" help:"Heartbeat interval in minutes (minimum 15 when enabled)." env:"PINCER_HEARTBEAT_INTERVAL" default:"30"`
 	TSHostname         string `name:"ts-hostname" help:"Tailscale hostname for tsnet." env:"TS_HOSTNAME" default:"pincer"`
 	TSServiceName      string `name:"ts-service-name" help:"Tailscale service name (svc:<name>)." env:"TS_SERVICE_NAME" default:"pincer"`
 	TSStateDir         string `name:"ts-state-dir" help:"Tailscale state directory." env:"TS_STATE_DIR" default:""`
@@ -184,6 +188,11 @@ func (cmd *serveCmd) Run(globals *cli) error {
 	cmd.OpenRouterAPIKey = firstNonEmpty(cmd.OpenRouterAPIKey, envFirst("PINCER_OPENROUTER_API_KEY"))
 	cmd.OpenRouterBaseURL = firstNonEmpty(cmd.OpenRouterBaseURL, envFirst("PINCER_OPENROUTER_BASE_URL"))
 
+	if cmd.HeartbeatEnabled && cmd.HeartbeatInterval < minHeartbeatIntervalMinutes {
+		return fmt.Errorf("heartbeat interval must be at least %d minutes", minHeartbeatIntervalMinutes)
+	}
+	heartbeatInterval := time.Duration(cmd.HeartbeatInterval) * time.Minute
+
 	app, err := server.New(server.AppConfig{
 		DBPath:             cmd.DBPath,
 		WorkspaceRoot:      cmd.WorkspaceRoot,
@@ -195,6 +204,8 @@ func (cmd *serveCmd) Run(globals *cli) error {
 		GoogleClientSecret: cmd.GoogleClientSecret,
 		ModelPrimary:       cmd.ModelPrimary,
 		ModelFallback:      cmd.ModelFallback,
+		HeartbeatEnabled:   cmd.HeartbeatEnabled,
+		HeartbeatInterval:  heartbeatInterval,
 		Logger:             logger.With("component", "server"),
 	})
 	if err != nil {

@@ -353,6 +353,52 @@ func TestListThreadsReturnsThreadsOrderedByUpdatedAt(t *testing.T) {
 	}
 }
 
+func TestListThreadsExcludesSystemChannelThreads(t *testing.T) {
+	t.Parallel()
+
+	app := newTestApp(t)
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
+
+	token := bootstrapConnectToken(t, srv.URL)
+	httpClient := newAuthorizedHTTPClient(token)
+
+	threadsClient := protocolv1connect.NewThreadsServiceClient(httpClient, srv.URL)
+
+	createResp, err := threadsClient.CreateThread(context.Background(), connect.NewRequest(&protocolv1.CreateThreadRequest{}))
+	if err != nil {
+		t.Fatalf("create thread: %v", err)
+	}
+	iosThreadID := createResp.Msg.GetThreadId()
+
+	systemThreadID := "thread_heartbeat"
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := app.db.Exec(`
+		INSERT INTO threads(thread_id, user_id, channel, created_at, title, updated_at)
+		VALUES(?, ?, 'system', ?, 'Heartbeat', ?)
+	`, systemThreadID, app.ownerID, now, now); err != nil {
+		t.Fatalf("insert system thread: %v", err)
+	}
+
+	listResp, err := threadsClient.ListThreads(context.Background(), connect.NewRequest(&protocolv1.ListThreadsRequest{}))
+	if err != nil {
+		t.Fatalf("list threads: %v", err)
+	}
+
+	var sawIOSThread bool
+	for _, item := range listResp.Msg.GetItems() {
+		if item.GetThreadId() == systemThreadID {
+			t.Fatalf("expected system thread %q to be excluded from ListThreads", systemThreadID)
+		}
+		if item.GetThreadId() == iosThreadID {
+			sawIOSThread = true
+		}
+	}
+	if !sawIOSThread {
+		t.Fatalf("expected ios thread %q to be present in ListThreads", iosThreadID)
+	}
+}
+
 func TestDeleteThreadRemovesThreadAndMessages(t *testing.T) {
 	t.Parallel()
 

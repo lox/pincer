@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -697,7 +698,7 @@ func TestPlanTurnClassifiesRunBashRiskFromCommand(t *testing.T) {
 		},
 	})
 
-	plan, err := app.planTurn(context.Background(), "thr_risk", "run command", 0, 0)
+	plan, err := app.planTurn(context.Background(), "thr_risk", "run command", 0, 0, "")
 	if err != nil {
 		t.Fatalf("plan turn: %v", err)
 	}
@@ -726,7 +727,7 @@ func TestPlanTurnNormalizesRunBashTimeoutToMaxBound(t *testing.T) {
 		},
 	})
 
-	plan, err := app.planTurn(context.Background(), "thr_timeout", "run command", 0, 0)
+	plan, err := app.planTurn(context.Background(), "thr_timeout", "run command", 0, 0, "")
 	if err != nil {
 		t.Fatalf("plan turn: %v", err)
 	}
@@ -1421,6 +1422,20 @@ func waitForAuditEvent(t *testing.T, baseURL, token, actionID, eventType string,
 	}
 }
 
+func waitForCondition(t *testing.T, timeout time.Duration, condition func() bool, message string) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		if condition() {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for condition: %s", message)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 func countAuditEvents(events []testAuditEvent, actionID, eventType string) int {
 	count := 0
 	for _, event := range events {
@@ -1809,6 +1824,205 @@ func TestImageDescribeInlineExecution(t *testing.T) {
 	}
 	if !foundToolResult {
 		t.Fatalf("expected planner history to contain [tool_result:image_describe] with vision output, got: %v", capturedHistory)
+	}
+}
+
+func TestHeartbeatWorkerCreatesSystemThreadAndRunsHeartbeatTurns(t *testing.T) {
+	t.Parallel()
+
+	app, err := New(AppConfig{
+		DBPath:                 filepath.Join(t.TempDir(), "pincer-test.db"),
+		WorkspaceRoot:          filepath.Join(t.TempDir(), "workspace"),
+		Planner:                stubPlanner{result: agent.PlanResult{AssistantMessage: "Heartbeat update."}},
+		HeartbeatEnabled:       true,
+		HeartbeatInterval:      25 * time.Millisecond,
+		ActionExecutorInterval: 100 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+	t.Cleanup(func() { _ = app.Close() })
+
+	waitForCondition(t, 2*time.Second, func() bool {
+		var count int
+		if err := app.db.QueryRow(`SELECT COUNT(*) FROM messages WHERE thread_id = ? AND role = 'assistant'`, heartbeatThreadID).Scan(&count); err != nil {
+			return false
+		}
+		return count > 0
+	}, "heartbeat assistant message")
+
+	var channel, title string
+	if err := app.db.QueryRow(`SELECT channel, title FROM threads WHERE thread_id = ?`, heartbeatThreadID).Scan(&channel, &title); err != nil {
+		t.Fatalf("query heartbeat thread: %v", err)
+	}
+	if channel != "system" {
+		t.Fatalf("expected heartbeat thread channel system, got %q", channel)
+	}
+	if title != "Heartbeat" {
+		t.Fatalf("expected heartbeat thread title Heartbeat, got %q", title)
+	}
+
+	events, err := app.listThreadEvents(context.Background(), heartbeatThreadID, 0, 200)
+	if err != nil {
+		t.Fatalf("list heartbeat thread events: %v", err)
+	}
+	var foundTurnStarted bool
+	for _, event := range events {
+		if started := event.GetTurnStarted(); started != nil && started.GetTriggerType() == protocolv1.TriggerType_HEARTBEAT {
+			foundTurnStarted = true
+			break
+		}
+	}
+	if !foundTurnStarted {
+		t.Fatalf("expected at least one heartbeat TriggerType in TurnStarted events")
+	}
+}
+
+func TestHeartbeatOKDoesNotSurfaceVisibleMessages(t *testing.T) {
+	t.Parallel()
+
+	var plannerCalls atomic.Int32
+	planner := &staticPlannerFunc{fn: func(_ context.Context, req agent.PlanRequest) (agent.PlanResult, error) {
+		plannerCalls.Add(1)
+		if !strings.Contains(req.UserMessage, "HEARTBEAT_OK") {
+			t.Fatalf("expected heartbeat prompt instructions in user message, got %q", req.UserMessage)
+		}
+		return agent.PlanResult{AssistantMessage: heartbeatSilentMarker}, nil
+	}}
+
+	app, err := New(AppConfig{
+		DBPath:                 filepath.Join(t.TempDir(), "pincer-test.db"),
+		WorkspaceRoot:          filepath.Join(t.TempDir(), "workspace"),
+		Planner:                planner,
+		HeartbeatEnabled:       true,
+		HeartbeatInterval:      25 * time.Millisecond,
+		ActionExecutorInterval: 100 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+	t.Cleanup(func() { _ = app.Close() })
+
+	waitForCondition(t, 2*time.Second, func() bool {
+		return plannerCalls.Load() > 0
+	}, "heartbeat planner call")
+
+	var visibleCount int
+	if err := app.db.QueryRow(`SELECT COUNT(*) FROM messages WHERE thread_id = ? AND role != 'internal'`, heartbeatThreadID).Scan(&visibleCount); err != nil {
+		t.Fatalf("count heartbeat visible messages: %v", err)
+	}
+	if visibleCount != 0 {
+		t.Fatalf("expected no visible heartbeat messages for HEARTBEAT_OK, got %d", visibleCount)
+	}
+
+	var internalCount int
+	if err := app.db.QueryRow(`SELECT COUNT(*) FROM messages WHERE thread_id = ? AND role = 'internal'`, heartbeatThreadID).Scan(&internalCount); err != nil {
+		t.Fatalf("count heartbeat internal messages: %v", err)
+	}
+	if internalCount != 0 {
+		t.Fatalf("expected heartbeat no-op runs to leave no persisted internal messages, got %d", internalCount)
+	}
+}
+
+func TestHeartbeatSilentTurnsDoNotAccumulatePromptHistory(t *testing.T) {
+	t.Parallel()
+
+	var plannerCalls atomic.Int32
+	var sawPromptInHistory atomic.Bool
+	planner := &staticPlannerFunc{fn: func(_ context.Context, req agent.PlanRequest) (agent.PlanResult, error) {
+		if plannerCalls.Add(1) > 1 {
+			for _, msg := range req.History {
+				if strings.HasPrefix(msg.Content, heartbeatPromptPrefix) {
+					sawPromptInHistory.Store(true)
+					break
+				}
+			}
+		}
+		return agent.PlanResult{AssistantMessage: heartbeatSilentMarker}, nil
+	}}
+
+	app, err := New(AppConfig{
+		DBPath:                 filepath.Join(t.TempDir(), "pincer-test.db"),
+		WorkspaceRoot:          filepath.Join(t.TempDir(), "workspace"),
+		Planner:                planner,
+		HeartbeatEnabled:       true,
+		HeartbeatInterval:      25 * time.Millisecond,
+		ActionExecutorInterval: 100 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+	t.Cleanup(func() { _ = app.Close() })
+
+	waitForCondition(t, 2*time.Second, func() bool {
+		return plannerCalls.Load() >= 3
+	}, "multiple heartbeat planner calls")
+
+	if sawPromptInHistory.Load() {
+		t.Fatalf("expected heartbeat prompt messages to be excluded from planner history on subsequent runs")
+	}
+
+	var promptMessageCount int
+	if err := app.db.QueryRow(`
+		SELECT COUNT(*)
+		FROM messages
+		WHERE thread_id = ? AND role = 'internal' AND content LIKE ?
+	`, heartbeatThreadID, heartbeatPromptPrefix+"%").Scan(&promptMessageCount); err != nil {
+		t.Fatalf("count persisted heartbeat prompt messages: %v", err)
+	}
+	if promptMessageCount != 0 {
+		t.Fatalf("expected no persisted heartbeat prompt messages, got %d", promptMessageCount)
+	}
+}
+
+func TestHeartbeatRiskyActionsStayApprovalGated(t *testing.T) {
+	t.Parallel()
+
+	planner := stubPlanner{result: agent.PlanResult{
+		AssistantMessage: "I need approval to run a command.",
+		ProposedActions: []agent.ProposedAction{{
+			Tool:          "run_bash",
+			Args:          json.RawMessage(`{"command":"echo from heartbeat"}`),
+			Justification: "Needs external side effect",
+			RiskClass:     "HIGH",
+		}},
+	}}
+
+	app, err := New(AppConfig{
+		DBPath:                 filepath.Join(t.TempDir(), "pincer-test.db"),
+		WorkspaceRoot:          filepath.Join(t.TempDir(), "workspace"),
+		Planner:                planner,
+		HeartbeatEnabled:       true,
+		HeartbeatInterval:      25 * time.Millisecond,
+		ActionExecutorInterval: 100 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+	t.Cleanup(func() { _ = app.Close() })
+
+	waitForCondition(t, 2*time.Second, func() bool {
+		var pending int
+		if err := app.db.QueryRow(`
+			SELECT COUNT(*)
+			FROM proposed_actions
+			WHERE source_id = ? AND tool = 'run_bash' AND status = 'PENDING'
+		`, heartbeatThreadID).Scan(&pending); err != nil {
+			return false
+		}
+		return pending > 0
+	}, "heartbeat pending approval")
+
+	var executed int
+	if err := app.db.QueryRow(`
+		SELECT COUNT(*)
+		FROM proposed_actions
+		WHERE source_id = ? AND tool = 'run_bash' AND status = 'EXECUTED'
+	`, heartbeatThreadID).Scan(&executed); err != nil {
+		t.Fatalf("count executed heartbeat approvals: %v", err)
+	}
+	if executed != 0 {
+		t.Fatalf("expected zero executed heartbeat actions without approval, got %d", executed)
 	}
 }
 

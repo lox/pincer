@@ -1,6 +1,6 @@
 # Pincer Autonomy Mechanisms
 
-Status: Ready to implement
+Status: Partially implemented (workspace + memory + heartbeat backend complete; jobs/scheduler pending)
 Date: 2026-02-26
 References: `docs/spec.md` §11, `docs/ios-ui-plan.md`, `PLAN.md`
 
@@ -151,7 +151,8 @@ If you find something noteworthy, summarize your findings for the user.
 
 ### 4.3 Heartbeat thread
 
-Heartbeat turns run in a dedicated system thread (e.g. `thread_heartbeat`). This thread is visible in the Chat tab thread list, marked with a system indicator. The user can scroll through heartbeat history to see what the agent has been checking.
+Heartbeat turns run in a dedicated system thread (e.g. `thread_heartbeat`). This thread is internal by default and not shown in the main iOS Chat thread list to avoid timeline clutter.
+Heartbeat prompts are persisted as internal messages so no-op runs can remain silent while still keeping enough context for turn continuation.
 
 ### 4.4 Configuration
 
@@ -159,6 +160,8 @@ Heartbeat turns run in a dedicated system thread (e.g. `thread_heartbeat`). This
 PINCER_HEARTBEAT_ENABLED=true
 PINCER_HEARTBEAT_INTERVAL=30        # minutes
 ```
+
+CLI startup validation enforces a minimum interval of 15 minutes when heartbeat is enabled.
 
 Editable in iOS Settings under "Heartbeat" — toggle enabled/disabled, set interval, tap to edit `HEARTBEAT.md` content.
 

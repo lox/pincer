@@ -54,10 +54,11 @@ Go Backend (single binary)
 - **Domain capability leases** — first `web_fetch` to an unknown domain requires approval (exfiltration protection); approving grants the domain for the thread, so subsequent fetches execute inline.
 - **Live streaming** — turn progress, thinking indicators, and command output stream to the iOS app in real time via `StartTurn`/`WatchThread`.
 - **Post-approval turn continuation** — after tool execution, results feed back into the LLM for re-planning. Turns pause at approval gates (`TurnPaused`) and resume automatically after all actions resolve (`TurnResumed`), enabling multi-step adaptive agent behavior.
+- **Heartbeat autonomy loop** — optional background heartbeat turns run in a dedicated `thread_heartbeat`, read `HEARTBEAT.md`, execute via the same turn pipeline, and suppress no-op `HEARTBEAT_OK` outputs.
 - **Assistant thinking** — model reasoning (`reasoning_content`) is captured and streamed to the iOS app as `AssistantThinkingDelta` events, rendered as expandable thinking bubbles in the chat timeline.
 - **iOS control app** — SwiftUI chat with full markdown rendering (via Textual), approvals tab, device/session management, and settings.
 - **Audit log** — every side-effect transition (`proposed → approved → executed`) is recorded and queryable.
-- **SOUL-guided planner** — system prompt loaded from `SOUL.md` to shape assistant personality and safety posture.
+- **SOUL-guided planner** — system prompt loaded from `workspace/SOUL.md` (bootstrapped from `templates/SOUL.md`) to shape assistant personality and safety posture.
 - **Tailscale support** — optional `tsnet` listener for tailnet-only access; transport only, does not bypass auth.
 - **E2E test coverage** — eval tests with real LLM, XCUITest for iOS UI, and reproducible API E2E scripts.
 
@@ -99,6 +100,8 @@ Backend runtime config is now CLI+env via `kong`:
 - `OPENROUTER_API_KEY` (legacy fallback: `PINCER_OPENROUTER_API_KEY`)
 - `PINCER_LOG_LEVEL` (`debug|info|warn|error|fatal`)
 - `PINCER_LOG_FORMAT` (`text|json`)
+- `PINCER_HEARTBEAT_ENABLED` (`true|false`, default `true`)
+- `PINCER_HEARTBEAT_INTERVAL` (minutes, default `30`, minimum `15` when enabled)
 
 For stream/event debugging, run with:
 
@@ -143,7 +146,9 @@ The Fly deployment embeds `tsnet` in the single Pincer binary — no Tailscale s
 - `docs/spec.md` - end-state system design and contracts.
 - `docs/auth.md` - authentication and device-pairing lifecycle details.
 - `docs/protocol.md` - ConnectRPC/protobuf wire contract and streaming event model.
+- `docs/prompt-templates.md` - recommended `SOUL.md` and system prompt skeleton templates.
+- `templates/` - copyable default `SOUL.md` and `IDENTITY.md` templates.
 - `PLAN.md` - phased implementation plan and steps.
 - `docs/ios-ui-plan.md` - iOS UI/UX planning details.
-- `SOUL.md` - assistant phrasing guidance used by the planner when present.
+- `workspace/SOUL.md` - runtime assistant phrasing guidance used by the planner.
 - `AGENTS.md` - repository-specific agent instructions.
