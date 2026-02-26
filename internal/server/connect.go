@@ -788,6 +788,17 @@ type turnExecutionResult struct {
 	Paused           bool
 }
 
+type finalizeTurnInput struct {
+	threadID         string
+	turnID           string
+	assistantMessage string
+	thinking         string
+	proposedCalls    []plannedToolCall
+	stepsUsed        int
+	triggerType      protocolv1.TriggerType
+	inputMessageID   string
+}
+
 func (a *App) executeTurn(ctx context.Context, threadID, userText, turnID string, triggerType protocolv1.TriggerType) (*turnExecutionResult, error) {
 	return a.executeTurnFromStep(ctx, threadID, userText, turnID, triggerType, 0, "", false)
 }
@@ -890,7 +901,16 @@ func (a *App) executeTurnFromStep(ctx context.Context, threadID, userText, turnI
 
 		// If no READ actions, finalize the turn with whatever we have.
 		if len(readCalls) == 0 {
-			return a.finalizeTurn(ctx, threadID, turnID, plan.AssistantMessage, plan.Thinking, nonReadCalls, step, triggerType, currentInputMessageID, result)
+			return a.finalizeTurn(ctx, finalizeTurnInput{
+				threadID:         threadID,
+				turnID:           turnID,
+				assistantMessage: plan.AssistantMessage,
+				thinking:         plan.Thinking,
+				proposedCalls:    nonReadCalls,
+				stepsUsed:        step,
+				triggerType:      triggerType,
+				inputMessageID:   currentInputMessageID,
+			}, result)
 		}
 
 		// Emit thinking from intermediate planning steps (before inline tool execution).
@@ -968,7 +988,16 @@ func (a *App) executeTurnFromStep(ctx context.Context, threadID, userText, turnI
 
 		// If there are also non-READ actions in this round, finalize with those.
 		if len(nonReadCalls) > 0 {
-			return a.finalizeTurn(ctx, threadID, turnID, plan.AssistantMessage, plan.Thinking, nonReadCalls, step, triggerType, currentInputMessageID, result)
+			return a.finalizeTurn(ctx, finalizeTurnInput{
+				threadID:         threadID,
+				turnID:           turnID,
+				assistantMessage: plan.AssistantMessage,
+				thinking:         plan.Thinking,
+				proposedCalls:    nonReadCalls,
+				stepsUsed:        step,
+				triggerType:      triggerType,
+				inputMessageID:   currentInputMessageID,
+			}, result)
 		}
 
 		// Otherwise loop — planner will see the tool results and can continue.
@@ -981,7 +1010,16 @@ func (a *App) executeTurnFromStep(ctx context.Context, threadID, userText, turnI
 	}
 	planned := assignToolCallIDs(plan.ProposedActions)
 	_, nonReadCalls := a.splitPlannedByRiskClass(threadID, planned)
-	return a.finalizeTurn(ctx, threadID, turnID, plan.AssistantMessage, plan.Thinking, nonReadCalls, maxInlineToolSteps, triggerType, currentInputMessageID, result)
+	return a.finalizeTurn(ctx, finalizeTurnInput{
+		threadID:         threadID,
+		turnID:           turnID,
+		assistantMessage: plan.AssistantMessage,
+		thinking:         plan.Thinking,
+		proposedCalls:    nonReadCalls,
+		stepsUsed:        maxInlineToolSteps,
+		triggerType:      triggerType,
+		inputMessageID:   currentInputMessageID,
+	}, result)
 }
 
 // plannedToolCall pairs a stable ID with a proposed action. The toolCallID is
@@ -1273,12 +1311,12 @@ func (a *App) emitThinkingIfPresent(ctx context.Context, threadID, turnID, think
 	})
 }
 
-func (a *App) finalizeTurn(ctx context.Context, threadID, turnID, assistantMessage, thinking string, proposedCalls []plannedToolCall, stepsUsed int, triggerType protocolv1.TriggerType, inputMessageID string, result *turnExecutionResult) (*turnExecutionResult, error) {
+func (a *App) finalizeTurn(ctx context.Context, input finalizeTurnInput, result *turnExecutionResult) (*turnExecutionResult, error) {
 	now := time.Now().UTC()
 	nowStr := now.Format(time.RFC3339Nano)
 	expiresAt := now.Add(defaultActionExpiry).Format(time.RFC3339Nano)
 	assistantMessageID := ""
-	suppressAssistantOutput := triggerType == protocolv1.TriggerType_HEARTBEAT && len(proposedCalls) == 0 && strings.EqualFold(strings.TrimSpace(assistantMessage), heartbeatSilentMarker)
+	suppressAssistantOutput := input.triggerType == protocolv1.TriggerType_HEARTBEAT && len(input.proposedCalls) == 0 && strings.EqualFold(strings.TrimSpace(input.assistantMessage), heartbeatSilentMarker)
 
 	tx, err := a.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -1286,19 +1324,19 @@ func (a *App) finalizeTurn(ctx context.Context, threadID, turnID, assistantMessa
 	}
 	defer tx.Rollback()
 
-	result.AssistantMessage = assistantMessage
+	result.AssistantMessage = input.assistantMessage
 	if !suppressAssistantOutput {
 		assistantMessageID = newID("msg")
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO messages(message_id, thread_id, role, content, created_at)
 			VALUES(?, ?, 'assistant', ?, ?)
-		`, assistantMessageID, threadID, assistantMessage, nowStr); err != nil {
+		`, assistantMessageID, input.threadID, input.assistantMessage, nowStr); err != nil {
 			return nil, fmt.Errorf("insert assistant message: %w", err)
 		}
 	}
 
-	actions := make([]*protocolv1.ProposedActionCreated, 0, len(proposedCalls))
-	for _, tc := range proposedCalls {
+	actions := make([]*protocolv1.ProposedActionCreated, 0, len(input.proposedCalls))
+	for _, tc := range input.proposedCalls {
 		actionID := tc.toolCallID // reuse the stable tool call ID as action_id
 		idempotencyKey := newID("idem")
 		argsJSON := string(tc.action.Args)
@@ -1307,7 +1345,7 @@ func (a *App) finalizeTurn(ctx context.Context, threadID, turnID, assistantMessa
 				action_id, user_id, source, source_id, tool, args_json, risk_class,
 				justification, idempotency_key, status, rejection_reason, expires_at, created_at, turn_id
 			) VALUES(?, ?, 'chat', ?, ?, ?, ?, ?, ?, 'PENDING', '', ?, ?, ?)
-		`, actionID, a.ownerID, threadID, tc.action.Tool, argsJSON, tc.action.RiskClass, tc.action.Justification, idempotencyKey, expiresAt, nowStr, turnID); err != nil {
+		`, actionID, a.ownerID, input.threadID, tc.action.Tool, argsJSON, tc.action.RiskClass, tc.action.Justification, idempotencyKey, expiresAt, nowStr, input.turnID); err != nil {
 			return nil, fmt.Errorf("insert proposed action: %w", err)
 		}
 		if err := insertAuditTx(tx, "action_proposed", actionID, argsJSON, nowStr); err != nil {
@@ -1327,19 +1365,14 @@ func (a *App) finalizeTurn(ctx context.Context, threadID, turnID, assistantMessa
 		})
 	}
 
-	if triggerType == protocolv1.TriggerType_HEARTBEAT && len(actions) == 0 {
-		inputMessageID = strings.TrimSpace(inputMessageID)
+	if input.triggerType == protocolv1.TriggerType_HEARTBEAT && len(actions) == 0 {
+		inputMessageID := strings.TrimSpace(input.inputMessageID)
 		if inputMessageID != "" {
 			if _, err := tx.ExecContext(ctx, `DELETE FROM messages WHERE message_id = ?`, inputMessageID); err != nil {
 				return nil, fmt.Errorf("delete heartbeat prompt message: %w", err)
 			}
 		} else {
-			if _, err := tx.ExecContext(ctx, `
-				DELETE FROM messages
-				WHERE thread_id = ? AND role = 'internal' AND content LIKE ?
-			`, threadID, heartbeatPromptLikeForTurn(turnID)); err != nil {
-				return nil, fmt.Errorf("delete heartbeat prompt messages: %w", err)
-			}
+			a.logger.Warn("heartbeat prompt cleanup skipped: missing input message id", "thread_id", input.threadID, "turn_id", input.turnID)
 		}
 	}
 
@@ -1348,27 +1381,27 @@ func (a *App) finalizeTurn(ctx context.Context, threadID, turnID, assistantMessa
 	}
 
 	// Emit thinking before the assistant message so the UI can show the reasoning bubble.
-	a.emitThinkingIfPresent(ctx, threadID, turnID, thinking)
+	a.emitThinkingIfPresent(ctx, input.threadID, input.turnID, input.thinking)
 
 	if !suppressAssistantOutput {
 		_, _ = a.appendThreadEvent(ctx, &protocolv1.ThreadEvent{
-			ThreadId:     threadID,
-			TurnId:       turnID,
+			ThreadId:     input.threadID,
+			TurnId:       input.turnID,
 			Source:       protocolv1.EventSource_MODEL_UNTRUSTED,
 			ContentTrust: protocolv1.ContentTrust_UNTRUSTED_MODEL,
 			Payload: &protocolv1.ThreadEvent_AssistantTextDelta{AssistantTextDelta: &protocolv1.AssistantTextDelta{
 				SegmentId: "assistant",
-				Delta:     assistantMessage,
+				Delta:     input.assistantMessage,
 			}},
 		})
 		_, _ = a.appendThreadEvent(ctx, &protocolv1.ThreadEvent{
-			ThreadId:     threadID,
-			TurnId:       turnID,
+			ThreadId:     input.threadID,
+			TurnId:       input.turnID,
 			Source:       protocolv1.EventSource_SYSTEM,
 			ContentTrust: protocolv1.ContentTrust_TRUSTED_SYSTEM,
 			Payload: &protocolv1.ThreadEvent_AssistantMessageCommitted{AssistantMessageCommitted: &protocolv1.AssistantMessageCommitted{
 				MessageId: assistantMessageID,
-				FullText:  assistantMessage,
+				FullText:  input.assistantMessage,
 			}},
 		})
 	}
@@ -1376,8 +1409,8 @@ func (a *App) finalizeTurn(ctx context.Context, threadID, turnID, assistantMessa
 	if len(actions) > 0 {
 		for _, action := range actions {
 			_, _ = a.appendThreadEvent(ctx, &protocolv1.ThreadEvent{
-				ThreadId:     threadID,
-				TurnId:       turnID,
+				ThreadId:     input.threadID,
+				TurnId:       input.turnID,
 				Source:       protocolv1.EventSource_POLICY_ENGINE,
 				ContentTrust: protocolv1.ContentTrust_TRUSTED_VALIDATED,
 				Payload: &protocolv1.ThreadEvent_PolicyDecisionMade{PolicyDecisionMade: &protocolv1.PolicyDecisionMade{
@@ -1387,8 +1420,8 @@ func (a *App) finalizeTurn(ctx context.Context, threadID, turnID, assistantMessa
 				}},
 			})
 			_, _ = a.appendThreadEvent(ctx, &protocolv1.ThreadEvent{
-				ThreadId:     threadID,
-				TurnId:       turnID,
+				ThreadId:     input.threadID,
+				TurnId:       input.turnID,
 				Source:       protocolv1.EventSource_POLICY_ENGINE,
 				ContentTrust: protocolv1.ContentTrust_TRUSTED_VALIDATED,
 				Payload:      &protocolv1.ThreadEvent_ProposedActionCreated{ProposedActionCreated: action},
@@ -1398,20 +1431,20 @@ func (a *App) finalizeTurn(ctx context.Context, threadID, turnID, assistantMessa
 		// Turn pauses — will resume when all actions are resolved.
 		result.Paused = true
 		_, _ = a.appendThreadEvent(ctx, &protocolv1.ThreadEvent{
-			ThreadId:     threadID,
-			TurnId:       turnID,
+			ThreadId:     input.threadID,
+			TurnId:       input.turnID,
 			Source:       protocolv1.EventSource_SYSTEM,
 			ContentTrust: protocolv1.ContentTrust_TRUSTED_SYSTEM,
 			Payload: &protocolv1.ThreadEvent_TurnPaused{TurnPaused: &protocolv1.TurnPaused{
 				PendingActionCount: uint32(len(actions)),
-				StepsUsed:          uint32(stepsUsed),
-				StepsRemaining:     uint32(maxInlineToolSteps - stepsUsed),
+				StepsUsed:          uint32(input.stepsUsed),
+				StepsRemaining:     uint32(maxInlineToolSteps - input.stepsUsed),
 			}},
 		})
 	} else {
 		_, _ = a.appendThreadEvent(ctx, &protocolv1.ThreadEvent{
-			ThreadId:     threadID,
-			TurnId:       turnID,
+			ThreadId:     input.threadID,
+			TurnId:       input.turnID,
 			Source:       protocolv1.EventSource_SYSTEM,
 			ContentTrust: protocolv1.ContentTrust_TRUSTED_SYSTEM,
 			Payload: &protocolv1.ThreadEvent_TurnCompleted{TurnCompleted: &protocolv1.TurnCompleted{

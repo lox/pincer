@@ -1126,6 +1126,10 @@ func (a *App) grantDomain(domain, threadID string) error {
 	return err
 }
 
+// planTurn accepts excludeMessageID so the current turn input is not sent twice
+// to the planner (once in History and again as Latest user message).
+// For heartbeat turns, this also keeps the internal heartbeat prompt wrapper out
+// of model-visible history.
 func (a *App) planTurn(ctx context.Context, threadID, userMessage string, step, maxSteps int, excludeMessageID string) (agent.PlanResult, error) {
 	history, err := a.loadPlannerHistory(threadID, defaultPlannerHistoryLimit, excludeMessageID)
 	if err != nil {
