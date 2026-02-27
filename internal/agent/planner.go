@@ -18,11 +18,18 @@ import (
 const defaultOpenRouterBaseURL = "https://openrouter.ai/api/v1"
 const defaultSOULPath = "templates/SOUL.md"
 const defaultLAWSPath = "templates/LAWS.md"
+const plannerMaxHTTPAttempts = 3
+const plannerHTTPRetryDelay = 200 * time.Millisecond
 
 var (
 	ErrInvalidModelOutput = errors.New("invalid model output")
 	ErrFailedModelOutput  = errors.New("failed model output")
 )
+
+var noArgTools = map[string]bool{
+	"jobs_list":     true,
+	"schedule_list": true,
+}
 
 type Message struct {
 	Role    string
@@ -72,16 +79,26 @@ func (staticPlanner) Plan(_ context.Context, _ PlanRequest) (PlanResult, error) 
 type fallbackPlanner struct {
 	primary  Planner
 	fallback Planner
+	onError  func(error)
+	onResult func(error) (PlanResult, bool)
 }
 
 func NewFallbackPlanner(primary, fallback Planner) Planner {
+	return NewFallbackPlannerWithErrorHook(primary, fallback, nil)
+}
+
+func NewFallbackPlannerWithErrorHook(primary, fallback Planner, onError func(error)) Planner {
+	return NewFallbackPlannerWithErrorBehavior(primary, fallback, onError, nil)
+}
+
+func NewFallbackPlannerWithErrorBehavior(primary, fallback Planner, onError func(error), onResult func(error) (PlanResult, bool)) Planner {
 	switch {
 	case primary == nil:
 		return fallback
 	case fallback == nil:
 		return primary
 	default:
-		return fallbackPlanner{primary: primary, fallback: fallback}
+		return fallbackPlanner{primary: primary, fallback: fallback, onError: onError, onResult: onResult}
 	}
 }
 
@@ -89,6 +106,14 @@ func (p fallbackPlanner) Plan(ctx context.Context, req PlanRequest) (PlanResult,
 	result, err := p.primary.Plan(ctx, req)
 	if err == nil {
 		return result, nil
+	}
+	if p.onError != nil {
+		p.onError(err)
+	}
+	if p.onResult != nil {
+		if result, ok := p.onResult(err); ok {
+			return result, nil
+		}
 	}
 	return p.fallback.Plan(ctx, req)
 }
@@ -615,28 +640,51 @@ func (p *OpenAIPlanner) planWithModel(ctx context.Context, model string, req Pla
 		return PlanResult{}, err
 	}
 
-	httpReq, err := http.NewRequestWithContext(reqCtx, http.MethodPost, p.baseURL+"/chat/completions", bytes.NewReader(body))
-	if err != nil {
-		return PlanResult{}, err
-	}
-	httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
-	httpReq.Header.Set("Content-Type", "application/json")
-	if p.userAgent != "" {
-		httpReq.Header.Set("User-Agent", p.userAgent)
-	}
+	var responseBody []byte
+	for attempt := 1; attempt <= plannerMaxHTTPAttempts; attempt++ {
+		httpReq, err := http.NewRequestWithContext(reqCtx, http.MethodPost, p.baseURL+"/chat/completions", bytes.NewReader(body))
+		if err != nil {
+			return PlanResult{}, err
+		}
+		httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
+		httpReq.Header.Set("Content-Type", "application/json")
+		if p.userAgent != "" {
+			httpReq.Header.Set("User-Agent", p.userAgent)
+		}
 
-	resp, err := p.httpClient.Do(httpReq)
-	if err != nil {
-		return PlanResult{}, err
-	}
-	defer resp.Body.Close()
+		resp, err := p.httpClient.Do(httpReq)
+		if err != nil {
+			if attempt < plannerMaxHTTPAttempts && reqCtx.Err() == nil {
+				if !sleepWithContext(reqCtx, plannerHTTPRetryDelay) {
+					return PlanResult{}, reqCtx.Err()
+				}
+				continue
+			}
+			return PlanResult{}, err
+		}
 
-	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return PlanResult{}, err
-	}
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return PlanResult{}, fmt.Errorf("chat completion status %d: %s", resp.StatusCode, strings.TrimSpace(string(responseBody)))
+		responseBody, err = io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		_ = resp.Body.Close()
+		if err != nil {
+			if attempt < plannerMaxHTTPAttempts && reqCtx.Err() == nil {
+				if !sleepWithContext(reqCtx, plannerHTTPRetryDelay) {
+					return PlanResult{}, reqCtx.Err()
+				}
+				continue
+			}
+			return PlanResult{}, err
+		}
+		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+			statusErr := fmt.Errorf("chat completion status %d: %s", resp.StatusCode, strings.TrimSpace(string(responseBody)))
+			if attempt < plannerMaxHTTPAttempts && isRetryablePlannerStatus(resp.StatusCode) && reqCtx.Err() == nil {
+				if !sleepWithContext(reqCtx, plannerHTTPRetryDelay) {
+					return PlanResult{}, reqCtx.Err()
+				}
+				continue
+			}
+			return PlanResult{}, statusErr
+		}
+		break
 	}
 
 	var parsed openAIChatCompletionResponse
@@ -662,6 +710,21 @@ func (p *OpenAIPlanner) planWithModel(ctx context.Context, model string, req Pla
 	}
 	result.Thinking = thinking
 	return result, nil
+}
+
+func isRetryablePlannerStatus(code int) bool {
+	return code == http.StatusTooManyRequests || code == http.StatusRequestTimeout || code >= http.StatusInternalServerError
+}
+
+func sleepWithContext(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
 }
 
 func buildPlannerPrompt(req PlanRequest) string {
@@ -697,18 +760,24 @@ func buildPlannerPrompt(req PlanRequest) string {
 
 func parseToolCallResponse(content string, toolCalls []openAIToolCall) (PlanResult, error) {
 	actions := make([]ProposedAction, 0, len(toolCalls))
+	droppedTools := make([]string, 0)
 	for _, tc := range toolCalls {
 		tool := strings.TrimSpace(tc.Function.Name)
 		if tool == "" {
 			continue
 		}
 		if !knownTools[tool] {
-			return PlanResult{}, fmt.Errorf("%w: unknown tool %q", ErrInvalidModelOutput, tool)
+			droppedTools = append(droppedTools, tool)
+			continue
 		}
 
-		args := json.RawMessage(tc.Function.Arguments)
+		args := json.RawMessage(strings.TrimSpace(tc.Function.Arguments))
+		if noArgTools[tool] && (len(args) == 0 || strings.EqualFold(strings.TrimSpace(string(args)), "null")) {
+			args = json.RawMessage(`{}`)
+		}
 		if !isJSONObject(args) {
-			return PlanResult{}, fmt.Errorf("%w: invalid arguments for tool %q", ErrInvalidModelOutput, tool)
+			droppedTools = append(droppedTools, tool)
+			continue
 		}
 
 		actions = append(actions, ProposedAction{
@@ -721,6 +790,9 @@ func parseToolCallResponse(content string, toolCalls []openAIToolCall) (PlanResu
 	assistant := strings.TrimSpace(content)
 	if assistant == "" && len(actions) > 0 {
 		assistant = "Working on it…"
+	}
+	if assistant == "" && len(actions) == 0 && len(droppedTools) > 0 {
+		return PlanResult{}, fmt.Errorf("%w: malformed tool calls (%s)", ErrInvalidModelOutput, strings.Join(droppedTools, ", "))
 	}
 	if assistant == "" {
 		return PlanResult{}, ErrInvalidModelOutput

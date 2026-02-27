@@ -34,6 +34,92 @@ func TestStaticPlannerReturnsNoActionsByDefault(t *testing.T) {
 	}
 }
 
+func TestFallbackPlannerCallsErrorHookOnPrimaryFailure(t *testing.T) {
+	t.Parallel()
+
+	primaryErr := errors.New("primary planner boom")
+	planner := NewFallbackPlannerWithErrorHook(
+		plannerFunc(func(context.Context, PlanRequest) (PlanResult, error) {
+			return PlanResult{}, primaryErr
+		}),
+		plannerFunc(func(context.Context, PlanRequest) (PlanResult, error) {
+			return PlanResult{AssistantMessage: "fallback"}, nil
+		}),
+		func(err error) {
+			if !errors.Is(err, primaryErr) {
+				t.Fatalf("unexpected error passed to hook: %v", err)
+			}
+		},
+	)
+
+	result, err := planner.Plan(context.Background(), PlanRequest{ThreadID: "thr_test", UserMessage: "hi"})
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	if result.AssistantMessage != "fallback" {
+		t.Fatalf("unexpected fallback result: %q", result.AssistantMessage)
+	}
+}
+
+func TestFallbackPlannerDoesNotCallErrorHookOnPrimarySuccess(t *testing.T) {
+	t.Parallel()
+
+	hookCalls := 0
+	planner := NewFallbackPlannerWithErrorHook(
+		plannerFunc(func(context.Context, PlanRequest) (PlanResult, error) {
+			return PlanResult{AssistantMessage: "primary"}, nil
+		}),
+		plannerFunc(func(context.Context, PlanRequest) (PlanResult, error) {
+			return PlanResult{AssistantMessage: "fallback"}, nil
+		}),
+		func(error) {
+			hookCalls++
+		},
+	)
+
+	result, err := planner.Plan(context.Background(), PlanRequest{ThreadID: "thr_test", UserMessage: "hi"})
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	if result.AssistantMessage != "primary" {
+		t.Fatalf("unexpected primary result: %q", result.AssistantMessage)
+	}
+	if hookCalls != 0 {
+		t.Fatalf("expected hookCalls=0, got %d", hookCalls)
+	}
+}
+
+func TestFallbackPlannerUsesErrorResultOverride(t *testing.T) {
+	t.Parallel()
+
+	planner := NewFallbackPlannerWithErrorBehavior(
+		plannerFunc(func(context.Context, PlanRequest) (PlanResult, error) {
+			return PlanResult{}, errors.New("provider bad request")
+		}),
+		plannerFunc(func(context.Context, PlanRequest) (PlanResult, error) {
+			return PlanResult{AssistantMessage: "static fallback"}, nil
+		}),
+		nil,
+		func(err error) (PlanResult, bool) {
+			return PlanResult{AssistantMessage: "Planner error: " + err.Error()}, true
+		},
+	)
+
+	result, err := planner.Plan(context.Background(), PlanRequest{ThreadID: "thr_test", UserMessage: "hi"})
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	if result.AssistantMessage != "Planner error: provider bad request" {
+		t.Fatalf("unexpected override result: %q", result.AssistantMessage)
+	}
+}
+
+type plannerFunc func(ctx context.Context, req PlanRequest) (PlanResult, error)
+
+func (f plannerFunc) Plan(ctx context.Context, req PlanRequest) (PlanResult, error) {
+	return f(ctx, req)
+}
+
 func TestOpenAIPlannerUsesRepairThenFallbackModel(t *testing.T) {
 	t.Parallel()
 
@@ -209,9 +295,15 @@ func TestParseToolCallResponse(t *testing.T) {
 				Arguments string `json:"arguments"`
 			}{Name: "web_search", Arguments: "not json"}},
 		}
-		_, err := parseToolCallResponse("ok", toolCalls)
-		if !errors.Is(err, ErrInvalidModelOutput) {
-			t.Fatalf("expected ErrInvalidModelOutput, got: %v", err)
+		result, err := parseToolCallResponse("ok", toolCalls)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.AssistantMessage != "ok" {
+			t.Fatalf("unexpected assistant message: %q", result.AssistantMessage)
+		}
+		if len(result.ProposedActions) != 0 {
+			t.Fatalf("expected 0 actions, got %d", len(result.ProposedActions))
 		}
 	})
 
@@ -222,9 +314,50 @@ func TestParseToolCallResponse(t *testing.T) {
 				Arguments string `json:"arguments"`
 			}{Name: "send_email", Arguments: `{"to":"x"}`}},
 		}
-		_, err := parseToolCallResponse("ok", toolCalls)
+		result, err := parseToolCallResponse("ok", toolCalls)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.AssistantMessage != "ok" {
+			t.Fatalf("unexpected assistant message: %q", result.AssistantMessage)
+		}
+		if len(result.ProposedActions) != 0 {
+			t.Fatalf("expected 0 actions, got %d", len(result.ProposedActions))
+		}
+	})
+
+	t.Run("no-arg tools accept null args", func(t *testing.T) {
+		toolCalls := []openAIToolCall{
+			{ID: "call_1", Type: "function", Function: struct {
+				Name      string `json:"name"`
+				Arguments string `json:"arguments"`
+			}{Name: "jobs_list", Arguments: `null`}},
+		}
+		result, err := parseToolCallResponse("", toolCalls)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result.ProposedActions) != 1 {
+			t.Fatalf("expected 1 action, got %d", len(result.ProposedActions))
+		}
+		if got := strings.TrimSpace(string(result.ProposedActions[0].Args)); got != "{}" {
+			t.Fatalf("expected normalized args {}, got %q", got)
+		}
+	})
+
+	t.Run("malformed tool calls without content produce retry message", func(t *testing.T) {
+		toolCalls := []openAIToolCall{
+			{ID: "call_1", Type: "function", Function: struct {
+				Name      string `json:"name"`
+				Arguments string `json:"arguments"`
+			}{Name: "jobs_list", Arguments: "not json"}},
+		}
+		_, err := parseToolCallResponse("", toolCalls)
 		if !errors.Is(err, ErrInvalidModelOutput) {
 			t.Fatalf("expected ErrInvalidModelOutput, got: %v", err)
+		}
+		if !strings.Contains(err.Error(), "malformed tool calls") {
+			t.Fatalf("expected malformed tool call details, got: %v", err)
 		}
 	})
 }
@@ -349,6 +482,61 @@ func TestOpenAIPlannerToolCallsWithInvalidArgsTriggersRepair(t *testing.T) {
 	defer mu.Unlock()
 	if calls != 2 {
 		t.Fatalf("expected 2 calls (original + repair), got %d", calls)
+	}
+}
+
+func TestOpenAIPlannerRetriesTransientServerError(t *testing.T) {
+	t.Parallel()
+
+	var (
+		mu    sync.Mutex
+		calls int
+	)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		calls++
+		callIndex := calls
+		mu.Unlock()
+
+		if callIndex < 3 {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":{"message":"Internal Server Error","code":500}}`))
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]any{"content": "Recovered after retry."}},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	planner, err := NewOpenAIPlanner(OpenAIPlannerConfig{
+		APIKey:       "test-key",
+		BaseURL:      srv.URL,
+		PrimaryModel: "test-model",
+		HTTPClient:   srv.Client(),
+	})
+	if err != nil {
+		t.Fatalf("new planner: %v", err)
+	}
+
+	result, err := planner.Plan(context.Background(), PlanRequest{
+		ThreadID:    "thr_test",
+		UserMessage: "hello",
+	})
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	if result.AssistantMessage != "Recovered after retry." {
+		t.Fatalf("unexpected assistant message: %q", result.AssistantMessage)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if calls != 3 {
+		t.Fatalf("expected 3 calls (2 retries + success), got %d", calls)
 	}
 }
 
