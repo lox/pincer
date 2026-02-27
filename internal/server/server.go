@@ -24,6 +24,7 @@ import (
 	"sync"
 	"time"
 
+	"connectrpc.com/connect"
 	charmLog "github.com/charmbracelet/log"
 	protocolv1 "github.com/lox/pincer/gen/proto/pincer/protocol/v1"
 	"github.com/lox/pincer/internal/agent"
@@ -530,6 +531,15 @@ func (r *statusRecorder) Push(target string, opts *http.PushOptions) error {
 }
 
 func (a *App) authMiddleware(next http.Handler) http.Handler {
+	errorWriter := connect.NewErrorWriter()
+	writeUnauthorized := func(w http.ResponseWriter, r *http.Request) {
+		if errorWriter.IsSupported(r) {
+			_ = errorWriter.Write(w, r, connect.NewError(connect.CodeUnauthenticated, errors.New("unauthorized")))
+			return
+		}
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+	}
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if a.isPublicPath(r.URL.Path) {
 			next.ServeHTTP(w, r)
@@ -538,11 +548,11 @@ func (a *App) authMiddleware(next http.Handler) http.Handler {
 
 		rawToken := bearerTokenFromHeader(r.Header.Get("Authorization"))
 		if rawToken == "" {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			writeUnauthorized(w, r)
 			return
 		}
 		if err := a.validateAndTouchToken(rawToken); err != nil {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			writeUnauthorized(w, r)
 			return
 		}
 		next.ServeHTTP(w, r)
