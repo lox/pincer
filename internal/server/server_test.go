@@ -2366,6 +2366,61 @@ func TestImageDescribeInlineExecution(t *testing.T) {
 	}
 }
 
+func TestLoadPlannerHistoryIncludesFullThreadContextInDeterministicOrder(t *testing.T) {
+	t.Parallel()
+
+	app := newTestApp(t)
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
+
+	token := bootstrapAuthToken(t, srv.URL)
+	threadID := createThread(t, srv.URL, token)
+
+	base := time.Date(2026, time.February, 1, 10, 0, 0, 0, time.UTC)
+
+	for i := 0; i < 35; i++ {
+		role := "assistant"
+		content := fmt.Sprintf("history-%02d", i)
+		if i%2 == 0 {
+			role = "user"
+		}
+		if i == 0 {
+			role = "internal"
+			content = "[tool_result:web_fetch] earliest result"
+		}
+
+		createdAt := base.Add(time.Duration(i) * time.Second).Format(time.RFC3339Nano)
+		if _, err := app.db.Exec(`
+			INSERT INTO messages(message_id, thread_id, role, content, created_at)
+			VALUES(?, ?, ?, ?, ?)
+		`, newID("msg"), threadID, role, content, createdAt); err != nil {
+			t.Fatalf("insert history message %d: %v", i, err)
+		}
+	}
+
+	// System messages are intentionally excluded from planner history.
+	if _, err := app.db.Exec(`
+		INSERT INTO messages(message_id, thread_id, role, content, created_at)
+		VALUES(?, ?, 'system', ?, ?)
+	`, newID("msg"), threadID, "system-only", base.Add(36*time.Second).Format(time.RFC3339Nano)); err != nil {
+		t.Fatalf("insert system message: %v", err)
+	}
+
+	history, err := app.loadPlannerHistory(threadID, 0, "")
+	if err != nil {
+		t.Fatalf("load planner history: %v", err)
+	}
+	if len(history) != 35 {
+		t.Fatalf("expected full history of 35 non-system messages, got %d", len(history))
+	}
+	if history[0].Role != "internal" || !strings.Contains(history[0].Content, "[tool_result:web_fetch] earliest result") {
+		t.Fatalf("expected earliest internal tool result first, got role=%q content=%q", history[0].Role, history[0].Content)
+	}
+	if history[len(history)-1].Content != "history-34" {
+		t.Fatalf("expected latest message at end, got %q", history[len(history)-1].Content)
+	}
+}
+
 func TestHeartbeatWorkerCreatesSystemThreadAndRunsHeartbeatTurns(t *testing.T) {
 	t.Parallel()
 

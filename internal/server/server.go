@@ -39,7 +39,6 @@ const (
 	defaultAssistantMessage           = "Message processed."
 	defaultActionJustification        = "User requested external follow-up"
 	defaultActionExpiry               = 24 * time.Hour
-	defaultPlannerHistoryLimit        = 30
 	maxProposedActionsPerTurn         = 3
 	defaultActionExecutorPollInterval = 250 * time.Millisecond
 	defaultTokenTTL                   = 30 * 24 * time.Hour
@@ -1339,7 +1338,7 @@ func (a *App) grantDomain(domain, threadID string) error {
 // For heartbeat turns, this also keeps the internal heartbeat prompt wrapper out
 // of model-visible history.
 func (a *App) planTurn(ctx context.Context, threadID, userMessage string, step, maxSteps int, excludeMessageID string) (agent.PlanResult, error) {
-	history, err := a.loadPlannerHistory(threadID, defaultPlannerHistoryLimit, excludeMessageID)
+	history, err := a.loadPlannerHistory(threadID, 0, excludeMessageID)
 	if err != nil {
 		return agent.PlanResult{}, fmt.Errorf("load planner history: %w", err)
 	}
@@ -1428,28 +1427,50 @@ func (a *App) loadPlannerHistory(threadID string, limit int, excludeMessageID st
 	var rows *sql.Rows
 	var err error
 	if excludeMessageID == "" {
-		rows, err = a.db.Query(`
-			SELECT role, content
-			FROM messages
-			WHERE thread_id = ? AND role != 'system'
-			ORDER BY created_at DESC
-			LIMIT ?
-		`, threadID, limit)
+		if limit > 0 {
+			rows, err = a.db.Query(`
+                               SELECT role, content
+                               FROM messages
+                               WHERE thread_id = ? AND role != 'system'
+                               ORDER BY created_at DESC, rowid DESC
+                               LIMIT ?
+                       `, threadID, limit)
+		} else {
+			rows, err = a.db.Query(`
+                               SELECT role, content
+                               FROM messages
+                               WHERE thread_id = ? AND role != 'system'
+                               ORDER BY created_at ASC, rowid ASC
+                       `, threadID)
+		}
 	} else {
-		rows, err = a.db.Query(`
-			SELECT role, content
-			FROM messages
-			WHERE thread_id = ? AND role != 'system' AND message_id != ?
-			ORDER BY created_at DESC
-			LIMIT ?
-		`, threadID, excludeMessageID, limit)
+		if limit > 0 {
+			rows, err = a.db.Query(`
+                               SELECT role, content
+                               FROM messages
+                               WHERE thread_id = ? AND role != 'system' AND message_id != ?
+                               ORDER BY created_at DESC, rowid DESC
+                               LIMIT ?
+                       `, threadID, excludeMessageID, limit)
+		} else {
+			rows, err = a.db.Query(`
+                               SELECT role, content
+                               FROM messages
+                               WHERE thread_id = ? AND role != 'system' AND message_id != ?
+                               ORDER BY created_at ASC, rowid ASC
+                       `, threadID, excludeMessageID)
+		}
 	}
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	reversed := make([]agent.Message, 0, limit)
+	capacity := limit
+	if capacity <= 0 {
+		capacity = 64
+	}
+	reversed := make([]agent.Message, 0, capacity)
 	for rows.Next() {
 		var role string
 		var content string
@@ -1460,6 +1481,14 @@ func (a *App) loadPlannerHistory(threadID string, limit int, excludeMessageID st
 			Role:    role,
 			Content: content,
 		})
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	if limit <= 0 {
+		return reversed, nil
 	}
 
 	history := make([]agent.Message, 0, len(reversed))

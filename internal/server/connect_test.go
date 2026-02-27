@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,6 +17,30 @@ import (
 	"github.com/lox/pincer/internal/agent"
 	"google.golang.org/protobuf/types/known/structpb"
 )
+
+func TestClassifyPlannerFailureContextWindow(t *testing.T) {
+	t.Parallel()
+
+	code, retryable := classifyPlannerFailure(errors.New("chat completion status 400: maximum context length exceeded"))
+	if code != "FAILED_CONTEXT_WINDOW" {
+		t.Fatalf("expected FAILED_CONTEXT_WINDOW, got %q", code)
+	}
+	if retryable {
+		t.Fatalf("expected context window failure to be non-retryable")
+	}
+}
+
+func TestClassifyPlannerFailureModelOutput(t *testing.T) {
+	t.Parallel()
+
+	code, retryable := classifyPlannerFailure(errors.New("decode completion response: unexpected EOF"))
+	if code != "FAILED_MODEL_OUTPUT" {
+		t.Fatalf("expected FAILED_MODEL_OUTPUT, got %q", code)
+	}
+	if !retryable {
+		t.Fatalf("expected generic planner failure to be retryable")
+	}
+}
 
 func TestStartTurnStreamsLifecycleEvents(t *testing.T) {
 	t.Parallel()

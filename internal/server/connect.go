@@ -1276,15 +1276,16 @@ func (a *App) executeTurnFromStep(ctx context.Context, threadID, userText, turnI
 	for step := startStep; step < settings.maxSteps; step++ {
 		plan, err := a.planTurn(ctx, threadID, userText, step, settings.maxSteps, currentInputMessageID)
 		if err != nil {
+			failureCode, retryable := classifyPlannerFailure(err)
 			_, _ = a.appendThreadEvent(ctx, &protocolv1.ThreadEvent{
 				ThreadId:     threadID,
 				TurnId:       turnID,
 				Source:       protocolv1.EventSource_MODEL_UNTRUSTED,
 				ContentTrust: protocolv1.ContentTrust_UNTRUSTED_MODEL,
 				Payload: &protocolv1.ThreadEvent_TurnFailed{TurnFailed: &protocolv1.TurnFailed{
-					Code:      "FAILED_MODEL_OUTPUT",
+					Code:      failureCode,
 					Message:   err.Error(),
-					Retryable: true,
+					Retryable: retryable,
 				}},
 			})
 			return nil, fmt.Errorf("plan turn: %w", err)
@@ -1428,6 +1429,35 @@ func (a *App) executeTurnFromStep(ctx context.Context, threadID, userText, turnI
 		proposalSource:   settings.proposalSource,
 		proposalSourceID: settings.proposalSourceID,
 	}, result)
+}
+
+func classifyPlannerFailure(err error) (code string, retryable bool) {
+	if isContextWindowError(err) {
+		return "FAILED_CONTEXT_WINDOW", false
+	}
+	return "FAILED_MODEL_OUTPUT", true
+}
+
+func isContextWindowError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		"context window",
+		"context length",
+		"maximum context",
+		"max context",
+		"too many tokens",
+		"token limit",
+		"prompt is too long",
+		"input is too long",
+	} {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // plannedToolCall pairs a stable ID with a proposed action. The toolCallID is
