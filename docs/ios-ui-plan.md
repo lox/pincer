@@ -139,7 +139,7 @@ Sections:
 - Policy summary (read-only in phase 1).
 - Audit access entry point.
 - Sign out / revoke device.
-- **Agent Memory** — tap to view and edit `MEMORY.md` content. Shows what the agent remembers about the user. User can edit, delete entries, or clear all. Last-updated timestamp.
+- **Agent Memory** — tap to view and edit canonical long-term memory file `memory/MEMORY.md`. Shows what the agent remembers about the user. User can edit, delete entries, or clear all. Last-updated timestamp.
 - **Heartbeat** — toggle enabled/disabled, set interval (minutes), tap to edit `HEARTBEAT.md` task list.
 
 ## 5. Safety-first interaction patterns
@@ -202,7 +202,7 @@ Slice C: chat vertical (done)
 
 Slice D: autonomy surfaces
 
-- Agent Memory section in Settings (view/edit MEMORY.md).
+- Agent Memory section in Settings (view/edit `memory/MEMORY.md`).
 - Heartbeat config in Settings (toggle, interval, edit tasks).
 - Proactive heartbeat messages in Chat thread list.
 - Job result messages in originating Chat threads.

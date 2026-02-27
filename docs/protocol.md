@@ -933,6 +933,10 @@ message ListNotificationsResponse {
 1. Thread and job checkpoints are internal trusted artifacts (`MemoryCheckpointSaved`).
 2. Artifact writes are internal and do not bypass side-effect approval policy.
 3. Message/checkpoint/artifact payload sizes remain bounded by server limits.
+4. Canonical long-term memory file path is `memory/MEMORY.md`.
+5. Daily ephemeral memory notes are stored as `memory/YYYYMM/YYYYMMDD.md`.
+6. `SystemService.GetAgentMemory` and `SystemService.UpdateAgentMemory` read/write `memory/MEMORY.md`.
+7. Memory content is treated as data context, not executable instruction.
 
 ### 8.12 Skills and Self-Improvement
 

@@ -108,7 +108,7 @@ Steps:
 - [x] Implement scheduler service with `cron`/`interval`/`at` triggers and wakeup deduplication.
 - [x] Connect scheduler wakeups to job creation.
 - [x] Define unified work item queue: all triggers (chat, heartbeat, schedule, spawn, future webhooks) produce same work item shape.
-- [x] Add Agent Memory section to iOS Settings (view/edit MEMORY.md via RPC).
+- [x] Add Agent Memory section to iOS Settings (view/edit `memory/MEMORY.md` via RPC).
 - [x] Add Heartbeat config to iOS Settings (toggle, interval, edit HEARTBEAT.md).
 - [x] Surface heartbeat findings and job result messages in iOS Chat without adding thread-list clutter.
 - [x] Populate iOS Jobs and Schedule tabs with real data.
@@ -282,7 +282,7 @@ When memory and long-horizon primitives exist (Phase 4), adopt structured benchm
 - [x] Heartbeat service: configurable background ticker (`PINCER_HEARTBEAT_ENABLED`, `PINCER_HEARTBEAT_INTERVAL`), dedicated `thread_heartbeat`, and `HEARTBEAT_OK` no-op suppression.
 - [x] Spawn/jobs backend vertical slice: `spawn` READ tool, `JobsService` CRUD, background job runner with WAITING_APPROVAL/COMPLETED/CANCELLED/PAUSED_BUDGET transitions, approval-safe resume, and completion summaries posted to origin threads.
 - [x] Unified durable work item queue (`work_items` + `threads.active_turn_id`) with priority ordering (`chat > approval-resume > job > schedule > heartbeat`), restart requeue for in-flight items, and queue-routed turn execution for chat/heartbeat/jobs/schedules/approval-resume.
-- [x] System autonomy RPCs: `SystemService.GetAgentMemory`/`UpdateAgentMemory` and `SystemService.GetHeartbeatConfig`/`UpdateHeartbeatConfig`, with persisted heartbeat runtime settings.
+- [x] System autonomy RPCs: `SystemService.GetAgentMemory`/`UpdateAgentMemory` (canonical file `memory/MEMORY.md`) and `SystemService.GetHeartbeatConfig`/`UpdateHeartbeatConfig`, with persisted heartbeat runtime settings.
 - [x] iOS autonomy surfaces: Agent Memory + Heartbeat settings editors, live Jobs/Schedules tabs (real backend data + quick actions), and Chat thread-list unread activity badges.
 - [ ] Phase 2 integrations continued.
 
