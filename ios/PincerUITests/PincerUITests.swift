@@ -26,7 +26,7 @@ final class PincerUITests: XCTestCase {
         let chatScreen = app.otherElements["screen_chat"]
         XCTAssertTrue(chatScreen.waitForExistence(timeout: 15), "Chat screen did not appear")
 
-        let chatInput = app.textFields["chat_input"]
+        let chatInput = chatInputElement()
         XCTAssertTrue(chatInput.waitForExistence(timeout: 10), "Chat input not found")
         chatInput.tap()
         chatInput.typeText("Please run bash command pwd")
@@ -63,7 +63,7 @@ final class PincerUITests: XCTestCase {
         let chatScreen = app.otherElements["screen_chat"]
         XCTAssertTrue(chatScreen.waitForExistence(timeout: 15), "Chat screen did not appear")
 
-        let chatInput = app.textFields["chat_input"]
+        let chatInput = chatInputElement()
         XCTAssertTrue(chatInput.waitForExistence(timeout: 10), "Chat input not found")
         chatInput.tap()
         chatInput.typeText("Please run bash command pwd")
@@ -88,8 +88,27 @@ final class PincerUITests: XCTestCase {
                           "Assistant message (y=\(assistantY)) should appear before activity card (y=\(activityY)) in the scroll view")
     }
 
+    func testChatKeyboardFocusDoesNotBlockSettingsTab() throws {
+        let chatScreen = app.otherElements["screen_chat"]
+        XCTAssertTrue(chatScreen.waitForExistence(timeout: 15), "Chat screen did not appear")
+
+        let chatInput = chatInputElement()
+        XCTAssertTrue(chatInput.waitForExistence(timeout: 10), "Chat input not found")
+        chatInput.tap()
+
+        let settingsTab = app.tabBars.buttons["tab_settings"]
+        XCTAssertTrue(settingsTab.waitForExistence(timeout: 10), "Settings tab not found")
+        XCTAssertTrue(settingsTab.isHittable, "Settings tab should remain tappable while chat input is focused")
+        settingsTab.tap()
+
+        let settingsScreen = app.otherElements["screen_settings"]
+        XCTAssertTrue(settingsScreen.waitForExistence(timeout: 10), "Settings screen did not appear after tapping Settings tab")
+    }
+
     private func dismissKeyboard() {
-        // The keyboard toolbar has a "Done" button; tap it to dismiss.
+        // Some screens (for example Settings forms) include a keyboard toolbar
+        // Done button. In chat, this may be absent; fall back to tapping the
+        // navigation bar to resign focus.
         let doneButton = app.toolbars.buttons["Done"]
         if doneButton.waitForExistence(timeout: 3) {
             doneButton.tap()
@@ -101,6 +120,51 @@ final class PincerUITests: XCTestCase {
         if navBar.exists {
             navBar.tap()
             sleep(1)
+        }
+    }
+
+    private func chatInputElement() -> XCUIElement {
+        var textField = app.textFields["chat_input"]
+        if textField.exists {
+            return textField
+        }
+        var textView = app.textViews["chat_input"]
+        if textView.exists {
+            return textView
+        }
+
+        openChatDetailIfNeeded()
+
+        textField = app.textFields["chat_input"]
+        if textField.exists {
+            return textField
+        }
+        textView = app.textViews["chat_input"]
+        if textView.exists {
+            return textView
+        }
+        return app.descendants(matching: .any)["chat_input"]
+    }
+
+    private func openChatDetailIfNeeded() {
+        let startConversation = app.buttons["Start a conversation"]
+        if startConversation.waitForExistence(timeout: 1) {
+            startConversation.tap()
+            return
+        }
+
+        let newChatCandidates = ["New Chat", "square.and.pencil"]
+        for candidate in newChatCandidates {
+            let button = app.buttons[candidate]
+            if button.exists {
+                button.tap()
+                return
+            }
+        }
+
+        let firstThread = app.scrollViews.buttons.firstMatch
+        if firstThread.exists {
+            firstThread.tap()
         }
     }
 }

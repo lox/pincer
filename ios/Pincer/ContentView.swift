@@ -340,6 +340,11 @@ private struct ChatDetailView: View {
                     .padding(.bottom, 6)
                 }
                 .scrollDismissesKeyboard(.interactively)
+                .onAppear {
+                    if model.isInitialLoadComplete {
+                        scrollToBottom(reader, animated: false)
+                    }
+                }
                 .onChange(of: model.isInitialLoadComplete) { _, complete in
                     if complete {
                         scrollToBottom(reader, animated: false)
@@ -1111,7 +1116,6 @@ private struct ChatComposer: View {
     @Binding var text: String
     let isBusy: Bool
     let onSend: () -> Void
-    @FocusState private var isInputFocused: Bool
 
     private var canSend: Bool {
         !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isBusy
@@ -1123,7 +1127,6 @@ private struct ChatComposer: View {
                 .font(.system(.body, design: .rounded))
                 .foregroundStyle(PincerPalette.textPrimary)
                 .lineLimit(1...6)
-                .focused($isInputFocused)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
                 .background(PincerPalette.card)
@@ -1158,14 +1161,6 @@ private struct ChatComposer: View {
         }
         .padding(6)
         .background(PincerPalette.page)
-        .toolbar {
-            ToolbarItemGroup(placement: .keyboard) {
-                Spacer()
-                Button("Done") {
-                    isInputFocused = false
-                }
-            }
-        }
     }
 }
 
