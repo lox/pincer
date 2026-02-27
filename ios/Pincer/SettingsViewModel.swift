@@ -35,8 +35,17 @@ final class SettingsViewModel: ObservableObject {
     @Published var isGeneratingCode = false
     @Published var manualPairingCode: String = ""
     @Published var isBindingCode = false
+    @Published var memoryContent: String = ""
+    @Published var memoryUpdatedAt: String = ""
+    @Published var isSavingMemory = false
+    @Published var heartbeatEnabled = false
+    @Published var heartbeatIntervalMinutes = 30
+    @Published var heartbeatTasksMarkdown: String = ""
+    @Published var heartbeatTasksUpdatedAt: String = ""
+    @Published var isSavingHeartbeat = false
 
     private let client: APIClient
+    private static let minHeartbeatIntervalMinutes = 15
 
     init(client: APIClient) {
         self.client = client
@@ -47,11 +56,9 @@ final class SettingsViewModel: ObservableObject {
         isBusy = true
         defer { isBusy = false }
 
-        do {
-            devices = try await client.fetchDevices()
-        } catch {
-            errorText = userFacingErrorMessage(error, fallback: "Failed to load devices.")
-        }
+        await refreshDevicesOnly()
+        await refreshAgentMemory()
+        await refreshHeartbeatConfig()
     }
 
     func revoke(_ deviceID: String) async {
@@ -60,11 +67,7 @@ final class SettingsViewModel: ObservableObject {
 
         do {
             try await client.revokeDevice(deviceID: deviceID)
-            do {
-                devices = try await client.fetchDevices()
-            } catch APIError.unauthorized {
-                devices = try await client.fetchDevices()
-            }
+            await refreshDevicesOnly()
         } catch {
             errorText = userFacingErrorMessage(error, fallback: "Failed to revoke device.")
         }
@@ -168,6 +171,76 @@ final class SettingsViewModel: ObservableObject {
             await refresh()
         } catch {
             errorText = userFacingErrorMessage(error, fallback: "Failed to bind pairing code.")
+        }
+    }
+
+    func refreshAgentMemory() async {
+        do {
+            let state = try await client.fetchAgentMemory()
+            memoryContent = state.content
+            memoryUpdatedAt = state.updatedAt
+        } catch {
+            errorText = userFacingErrorMessage(error, fallback: "Failed to load agent memory.")
+        }
+    }
+
+    func saveAgentMemory() async {
+        isSavingMemory = true
+        defer { isSavingMemory = false }
+
+        do {
+            let state = try await client.updateAgentMemory(content: memoryContent)
+            memoryUpdatedAt = state.updatedAt
+        } catch {
+            errorText = userFacingErrorMessage(error, fallback: "Failed to save agent memory.")
+        }
+    }
+
+    func clearAgentMemory() async {
+        memoryContent = ""
+        await saveAgentMemory()
+    }
+
+    func refreshHeartbeatConfig() async {
+        do {
+            let state = try await client.fetchHeartbeatConfig()
+            heartbeatEnabled = state.enabled
+            heartbeatIntervalMinutes = max(Self.minHeartbeatIntervalMinutes, state.intervalMinutes)
+            heartbeatTasksMarkdown = state.tasksMarkdown
+            heartbeatTasksUpdatedAt = state.tasksUpdatedAt
+        } catch {
+            errorText = userFacingErrorMessage(error, fallback: "Failed to load heartbeat settings.")
+        }
+    }
+
+    func saveHeartbeatConfig() async {
+        if heartbeatIntervalMinutes < Self.minHeartbeatIntervalMinutes {
+            heartbeatIntervalMinutes = Self.minHeartbeatIntervalMinutes
+        }
+
+        isSavingHeartbeat = true
+        defer { isSavingHeartbeat = false }
+
+        do {
+            let state = try await client.updateHeartbeatConfig(
+                enabled: heartbeatEnabled,
+                intervalMinutes: heartbeatIntervalMinutes,
+                tasksMarkdown: heartbeatTasksMarkdown
+            )
+            heartbeatEnabled = state.enabled
+            heartbeatIntervalMinutes = max(Self.minHeartbeatIntervalMinutes, state.intervalMinutes)
+            heartbeatTasksMarkdown = state.tasksMarkdown
+            heartbeatTasksUpdatedAt = state.tasksUpdatedAt
+        } catch {
+            errorText = userFacingErrorMessage(error, fallback: "Failed to save heartbeat settings.")
+        }
+    }
+
+    private func refreshDevicesOnly() async {
+        do {
+            devices = try await client.fetchDevices()
+        } catch {
+            errorText = userFacingErrorMessage(error, fallback: "Failed to load devices.")
         }
     }
 

@@ -31,6 +31,8 @@ struct ContentView: View {
     @StateObject private var approvalsStore: ApprovalsStore
     @StateObject private var chatModel: ChatViewModel
     @StateObject private var approvalsModel: ApprovalsViewModel
+    @StateObject private var schedulesModel: SchedulesViewModel
+    @StateObject private var jobsModel: JobsViewModel
     @StateObject private var settingsModel: SettingsViewModel
     private let client: APIClient
 
@@ -40,6 +42,8 @@ struct ContentView: View {
         _approvalsStore = StateObject(wrappedValue: approvalsStore)
         _chatModel = StateObject(wrappedValue: ChatViewModel(client: client, approvalsStore: approvalsStore))
         _approvalsModel = StateObject(wrappedValue: ApprovalsViewModel(approvalsStore: approvalsStore))
+        _schedulesModel = StateObject(wrappedValue: SchedulesViewModel(client: client))
+        _jobsModel = StateObject(wrappedValue: JobsViewModel(client: client))
         _settingsModel = StateObject(wrappedValue: SettingsViewModel(client: client))
     }
 
@@ -65,14 +69,14 @@ struct ContentView: View {
                 }
                 .badge(approvalsStore.pendingApprovals.count)
 
-            ScheduleView()
+            ScheduleView(model: schedulesModel)
                 .accessibilityIdentifier(A11y.screenSchedule)
                 .tabItem {
-                    Label("Schedule", systemImage: "calendar")
+                    Label("Schedules", systemImage: "calendar")
                         .accessibilityIdentifier(A11y.tabSchedule)
                 }
 
-            JobsView()
+            JobsView(model: jobsModel)
                 .accessibilityIdentifier(A11y.screenJobs)
                 .tabItem {
                     Label("Jobs", systemImage: "briefcase")
@@ -92,23 +96,126 @@ struct ContentView: View {
     }
 }
 
+@MainActor
+private final class JobsViewModel: ObservableObject {
+    @Published var jobs: [JobSummary] = []
+    @Published var selectedFilter: JobFilter = .running
+    @Published var isBusy = false
+    @Published var cancellingJobIDs: Set<String> = []
+    @Published var errorText: String?
+
+    private let client: APIClient
+
+    init(client: APIClient) {
+        self.client = client
+    }
+
+    var filteredJobs: [JobSummary] {
+        jobs
+            .filter { $0.filter == selectedFilter }
+            .sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    func refresh() async {
+        isBusy = true
+        defer { isBusy = false }
+
+        do {
+            jobs = try await client.fetchJobs()
+        } catch {
+            errorText = userFacingErrorMessage(error, fallback: "Failed to load jobs.")
+        }
+    }
+
+    func cancelJob(_ jobID: String) async {
+        guard !cancellingJobIDs.contains(jobID) else { return }
+        cancellingJobIDs.insert(jobID)
+        defer { cancellingJobIDs.remove(jobID) }
+
+        do {
+            try await client.cancelJob(jobID: jobID)
+            jobs = try await client.fetchJobs()
+        } catch {
+            errorText = userFacingErrorMessage(error, fallback: "Failed to cancel job.")
+        }
+    }
+}
+
+@MainActor
+private final class SchedulesViewModel: ObservableObject {
+    @Published var schedules: [ScheduleSummary] = []
+    @Published var isBusy = false
+    @Published var togglingScheduleIDs: Set<String> = []
+    @Published var runningNowScheduleIDs: Set<String> = []
+    @Published var errorText: String?
+
+    private let client: APIClient
+
+    init(client: APIClient) {
+        self.client = client
+    }
+
+    func refresh() async {
+        isBusy = true
+        defer { isBusy = false }
+
+        do {
+            schedules = try await client.fetchSchedules().sorted { $0.updatedAt > $1.updatedAt }
+        } catch {
+            errorText = userFacingErrorMessage(error, fallback: "Failed to load schedules.")
+        }
+    }
+
+    func setScheduleEnabled(_ scheduleID: String, enabled: Bool) async {
+        guard !togglingScheduleIDs.contains(scheduleID) else { return }
+        togglingScheduleIDs.insert(scheduleID)
+        defer { togglingScheduleIDs.remove(scheduleID) }
+
+        do {
+            try await client.setScheduleEnabled(scheduleID: scheduleID, enabled: enabled)
+            schedules = try await client.fetchSchedules().sorted { $0.updatedAt > $1.updatedAt }
+        } catch {
+            errorText = userFacingErrorMessage(error, fallback: "Failed to update schedule.")
+        }
+    }
+
+    func runNow(_ scheduleID: String) async {
+        guard !runningNowScheduleIDs.contains(scheduleID) else { return }
+        runningNowScheduleIDs.insert(scheduleID)
+        defer { runningNowScheduleIDs.remove(scheduleID) }
+
+        do {
+            try await client.runScheduleNow(scheduleID: scheduleID)
+            schedules = try await client.fetchSchedules().sorted { $0.updatedAt > $1.updatedAt }
+        } catch {
+            errorText = userFacingErrorMessage(error, fallback: "Failed to run schedule now.")
+        }
+    }
+}
+
 private struct ChatNavigationView: View {
     let client: APIClient
     @ObservedObject var model: ChatViewModel
     @State private var threads: [ThreadSummary] = []
+    @State private var seenThreadUpdatedAtByID: [String: String] = loadSeenThreadUpdates()
+    @State private var unreadThreadIDs: Set<String> = []
     @State private var isLoadingThreads = false
     @State private var threadListError: String?
     @State private var path = NavigationPath()
+
+    private static let seenThreadsDefaultsKey = "PINCER_THREAD_LAST_SEEN_UPDATED_AT"
 
     var body: some View {
         NavigationStack(path: $path) {
             ThreadListView(
                 threads: threads,
+                unreadThreadIDs: unreadThreadIDs,
                 isLoading: isLoadingThreads,
                 errorText: threadListError,
                 onDismissError: { threadListError = nil },
                 onSelect: { thread in
                     Task {
+                        markThreadAsSeen(thread)
                         await model.loadThread(thread.threadID, title: thread.displayTitle)
                         path.append("chat")
                     }
@@ -151,7 +258,22 @@ private struct ChatNavigationView: View {
         isLoadingThreads = true
         defer { isLoadingThreads = false }
         do {
-            threads = try await client.listThreads()
+            let fetchedThreads = try await client.listThreads()
+            let activeThreadIDs = Set(fetchedThreads.map(\.threadID))
+            let prunedSeenThreadUpdatedAtByID = seenThreadUpdatedAtByID.filter { activeThreadIDs.contains($0.key) }
+            if prunedSeenThreadUpdatedAtByID.count != seenThreadUpdatedAtByID.count {
+                seenThreadUpdatedAtByID = prunedSeenThreadUpdatedAtByID
+                persistSeenThreadUpdates(prunedSeenThreadUpdatedAtByID)
+            }
+
+            threads = fetchedThreads
+            unreadThreadIDs = Set(fetchedThreads.compactMap { thread in
+                guard thread.messageCount > 0, !thread.updatedAt.isEmpty else { return nil }
+                if prunedSeenThreadUpdatedAtByID[thread.threadID] == thread.updatedAt {
+                    return nil
+                }
+                return thread.threadID
+            })
             threadListError = nil
         } catch {
             threadListError = userFacingErrorMessage(error, fallback: "Failed to load threads.")
@@ -162,14 +284,33 @@ private struct ChatNavigationView: View {
         do {
             try await client.deleteThread(threadID: threadID)
             threads.removeAll { $0.threadID == threadID }
+            seenThreadUpdatedAtByID.removeValue(forKey: threadID)
+            unreadThreadIDs.remove(threadID)
+            persistSeenThreadUpdates(seenThreadUpdatedAtByID)
         } catch {
             threadListError = userFacingErrorMessage(error, fallback: "Failed to delete thread.")
         }
+    }
+
+    private func markThreadAsSeen(_ thread: ThreadSummary) {
+        guard !thread.updatedAt.isEmpty else { return }
+        seenThreadUpdatedAtByID[thread.threadID] = thread.updatedAt
+        unreadThreadIDs.remove(thread.threadID)
+        persistSeenThreadUpdates(seenThreadUpdatedAtByID)
+    }
+
+    private static func loadSeenThreadUpdates() -> [String: String] {
+        UserDefaults.standard.dictionary(forKey: seenThreadsDefaultsKey) as? [String: String] ?? [:]
+    }
+
+    private func persistSeenThreadUpdates(_ values: [String: String]) {
+        UserDefaults.standard.set(values, forKey: Self.seenThreadsDefaultsKey)
     }
 }
 
 private struct ThreadListView: View {
     let threads: [ThreadSummary]
+    let unreadThreadIDs: Set<String>
     let isLoading: Bool
     let errorText: String?
     let onDismissError: () -> Void
@@ -199,7 +340,11 @@ private struct ThreadListView: View {
                 ScrollView(showsIndicators: false) {
                     VStack(spacing: 10) {
                         ForEach(threads) { thread in
-                            ThreadRow(thread: thread, onTap: { onSelect(thread) })
+                            ThreadRow(
+                                thread: thread,
+                                hasUnreadProactive: unreadThreadIDs.contains(thread.threadID),
+                                onTap: { onSelect(thread) }
+                            )
                                 .contextMenu {
                                     Button(role: .destructive) {
                                         onDelete(thread)
@@ -246,15 +391,28 @@ private struct ThreadListView: View {
 
 private struct ThreadRow: View {
     let thread: ThreadSummary
+    let hasUnreadProactive: Bool
     let onTap: () -> Void
 
     var body: some View {
         Button(action: onTap) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(thread.displayTitle)
-                    .font(.system(.body, design: .rounded).weight(.medium))
-                    .foregroundStyle(PincerPalette.textPrimary)
-                    .lineLimit(2)
+                HStack(alignment: .top, spacing: 8) {
+                    Text(thread.displayTitle)
+                        .font(.system(.body, design: .rounded).weight(.medium))
+                        .foregroundStyle(PincerPalette.textPrimary)
+                        .lineLimit(2)
+
+                    if hasUnreadProactive {
+                        Text("New")
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .foregroundStyle(PincerPalette.accent)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(PincerPalette.accentSoft)
+                            .clipShape(Capsule())
+                    }
+                }
 
                 HStack(spacing: 8) {
                     if thread.messageCount > 0 {
@@ -553,25 +711,32 @@ private struct ApprovalsView: View {
 }
 
 private struct ScheduleView: View {
-    private let items: [ScheduleItem] = [
-        ScheduleItem(
-            title: "Market Report Analysis",
-            cadence: "Daily, 8:00 AM",
-            next: "Next: Tomorrow 8:00 AM"
-        ),
-        ScheduleItem(
-            title: "Research: New Tech Trends",
-            cadence: "Every Friday, 2:00 PM",
-            next: "Next: Friday 2:00 PM"
-        )
-    ]
+    @ObservedObject var model: SchedulesViewModel
 
     var body: some View {
         NavigationStack {
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 12) {
-                    ForEach(items) { item in
-                        ScheduleCard(item: item)
+                    if model.schedules.isEmpty && !model.isBusy {
+                        EmptyStateCard(
+                            icon: "calendar",
+                            title: "No schedules yet",
+                            detail: "Agent-created and user-created schedules will appear here."
+                        )
+                    } else {
+                        ForEach(model.schedules) { item in
+                            ScheduleCard(
+                                item: item,
+                                isToggling: model.togglingScheduleIDs.contains(item.scheduleID),
+                                isRunningNow: model.runningNowScheduleIDs.contains(item.scheduleID),
+                                onToggleEnabled: { enabled in
+                                    Task { await model.setScheduleEnabled(item.scheduleID, enabled: enabled) }
+                                },
+                                onRunNow: {
+                                    Task { await model.runNow(item.scheduleID) }
+                                }
+                            )
+                        }
                     }
                 }
                 .padding(.horizontal, 16)
@@ -579,58 +744,82 @@ private struct ScheduleView: View {
                 .padding(.bottom, 16)
             }
             .background(PincerPalette.page)
-            .navigationTitle("Schedule")
+            .navigationTitle("Schedules")
             .navigationBarTitleDisplayMode(.large)
-
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Image(systemName: "plus")
-                        .foregroundStyle(PincerPalette.textPrimary)
-                }
+            .task {
+                await model.refresh()
+            }
+            .refreshable {
+                await model.refresh()
+            }
+            .alert("Error", isPresented: Binding(
+                get: { model.errorText != nil },
+                set: { if !$0 { model.errorText = nil } }
+            )) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(model.errorText ?? "Unknown error")
             }
         }
     }
 }
 
 private struct JobsView: View {
-    private let items: [JobItem] = [
-        JobItem(
-            title: "Analyzing Market Data",
-            status: "In Progress",
-            detail: "Researching latest trends and forecasts",
-            footer: "Started Today, 7:30 AM",
-            isDone: false
-        ),
-        JobItem(
-            title: "Website Summarizer",
-            status: "Completed",
-            detail: "Summary of the article is ready",
-            footer: "Finished Today, 6:15 AM",
-            isDone: true
-        )
-    ]
+    @ObservedObject var model: JobsViewModel
 
     var body: some View {
         NavigationStack {
-            ScrollView(showsIndicators: false) {
-                VStack(spacing: 12) {
-                    ForEach(items) { item in
-                        JobCard(item: item)
+            VStack(spacing: 0) {
+                Picker("Jobs Filter", selection: $model.selectedFilter) {
+                    ForEach(JobFilter.allCases) { filter in
+                        Text(filter.rawValue).tag(filter)
                     }
                 }
+                .pickerStyle(.segmented)
                 .padding(.horizontal, 16)
                 .padding(.top, 10)
-                .padding(.bottom, 16)
+
+                ScrollView(showsIndicators: false) {
+                    VStack(spacing: 12) {
+                        if model.filteredJobs.isEmpty && !model.isBusy {
+                            EmptyStateCard(
+                                icon: "briefcase",
+                                title: "No jobs in \(model.selectedFilter.rawValue.lowercased())",
+                                detail: "Spawned background jobs and schedule-triggered jobs appear here."
+                            )
+                        } else {
+                            ForEach(model.filteredJobs) { item in
+                                JobCard(
+                                    item: item,
+                                    isCancelling: model.cancellingJobIDs.contains(item.jobID),
+                                    onCancel: {
+                                        Task { await model.cancelJob(item.jobID) }
+                                    }
+                                )
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 10)
+                    .padding(.bottom, 16)
+                }
             }
             .background(PincerPalette.page)
             .navigationTitle("Jobs")
             .navigationBarTitleDisplayMode(.large)
-
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Image(systemName: "ellipsis")
-                        .foregroundStyle(PincerPalette.textPrimary)
-                }
+            .task {
+                await model.refresh()
+            }
+            .refreshable {
+                await model.refresh()
+            }
+            .alert("Error", isPresented: Binding(
+                get: { model.errorText != nil },
+                set: { if !$0 { model.errorText = nil } }
+            )) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(model.errorText ?? "Unknown error")
             }
         }
     }
@@ -1180,6 +1369,26 @@ private struct EmptyApprovalsCard: View {
     }
 }
 
+private struct EmptyStateCard: View {
+    let icon: String
+    let title: String
+    let detail: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(title, systemImage: icon)
+                .font(.system(.headline, design: .rounded).weight(.semibold))
+                .foregroundStyle(PincerPalette.textPrimary)
+
+            Text(detail)
+                .font(.system(.subheadline, design: .rounded))
+                .foregroundStyle(PincerPalette.textSecondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .cardSurface()
+    }
+}
+
 private struct ApprovalCard: View {
     let item: Approval
     let isBusy: Bool
@@ -1283,6 +1492,22 @@ private struct SettingsView: View {
                             .padding(.horizontal, 16)
 
                         PairingCard(model: model)
+                            .padding(.horizontal, 16)
+
+                        Text("Agent Memory")
+                            .font(.system(.title3, design: .rounded).weight(.semibold))
+                            .foregroundStyle(PincerPalette.textPrimary)
+                            .padding(.horizontal, 16)
+
+                        AgentMemoryCard(model: model)
+                            .padding(.horizontal, 16)
+
+                        Text("Heartbeat")
+                            .font(.system(.title3, design: .rounded).weight(.semibold))
+                            .foregroundStyle(PincerPalette.textPrimary)
+                            .padding(.horizontal, 16)
+
+                        HeartbeatConfigCard(model: model)
                             .padding(.horizontal, 16)
 
                         Text("Paired Devices")
@@ -1584,6 +1809,118 @@ private struct PairingCard: View {
     }
 }
 
+private struct AgentMemoryCard: View {
+    @ObservedObject var model: SettingsViewModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Edit what the agent remembers across sessions.")
+                .font(.system(.footnote, design: .rounded))
+                .foregroundStyle(PincerPalette.textSecondary)
+
+            if !model.memoryUpdatedAt.isEmpty {
+                Text("Last updated: \(relativeTimestamp(from: model.memoryUpdatedAt))")
+                    .font(.system(.footnote, design: .rounded))
+                    .foregroundStyle(PincerPalette.textTertiary)
+            }
+
+            TextEditor(text: $model.memoryContent)
+                .font(.system(.body, design: .monospaced))
+                .foregroundStyle(PincerPalette.textPrimary)
+                .frame(minHeight: 140)
+                .padding(8)
+                .background(PincerPalette.page)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+            HStack(spacing: 12) {
+                Button(action: {
+                    Task { await model.saveAgentMemory() }
+                }) {
+                    Text(model.isSavingMemory ? "Saving..." : "Save")
+                        .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                        .foregroundStyle(PincerPalette.accent)
+                }
+                .disabled(model.isSavingMemory || model.isSavingHeartbeat)
+
+                Button(action: {
+                    Task { await model.refreshAgentMemory() }
+                }) {
+                    Text("Reload")
+                        .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                        .foregroundStyle(PincerPalette.textSecondary)
+                }
+                .disabled(model.isSavingMemory)
+
+                Button(role: .destructive, action: {
+                    Task { await model.clearAgentMemory() }
+                }) {
+                    Text("Clear")
+                        .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                }
+                .disabled(model.isSavingMemory)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .cardSurface()
+    }
+}
+
+private struct HeartbeatConfigCard: View {
+    @ObservedObject var model: SettingsViewModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Toggle(isOn: $model.heartbeatEnabled) {
+                Text("Enable Heartbeat")
+                    .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                    .foregroundStyle(PincerPalette.textPrimary)
+            }
+
+            Stepper(value: $model.heartbeatIntervalMinutes, in: 15...720, step: 5) {
+                Text("Interval: \(model.heartbeatIntervalMinutes) minutes")
+                    .font(.system(.subheadline, design: .rounded))
+                    .foregroundStyle(PincerPalette.textSecondary)
+            }
+
+            if !model.heartbeatTasksUpdatedAt.isEmpty {
+                Text("Tasks updated: \(relativeTimestamp(from: model.heartbeatTasksUpdatedAt))")
+                    .font(.system(.footnote, design: .rounded))
+                    .foregroundStyle(PincerPalette.textTertiary)
+            }
+
+            TextEditor(text: $model.heartbeatTasksMarkdown)
+                .font(.system(.body, design: .monospaced))
+                .foregroundStyle(PincerPalette.textPrimary)
+                .frame(minHeight: 120)
+                .padding(8)
+                .background(PincerPalette.page)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+            HStack(spacing: 12) {
+                Button(action: {
+                    Task { await model.saveHeartbeatConfig() }
+                }) {
+                    Text(model.isSavingHeartbeat ? "Saving..." : "Save")
+                        .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                        .foregroundStyle(PincerPalette.accent)
+                }
+                .disabled(model.isSavingHeartbeat || model.isSavingMemory)
+
+                Button(action: {
+                    Task { await model.refreshHeartbeatConfig() }
+                }) {
+                    Text("Reload")
+                        .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                        .foregroundStyle(PincerPalette.textSecondary)
+                }
+                .disabled(model.isSavingHeartbeat)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .cardSurface()
+    }
+}
+
 private struct DeviceCard: View {
     let device: Device
     let isBusy: Bool
@@ -1628,73 +1965,156 @@ private struct DeviceCard: View {
     }
 }
 
-private struct ScheduleItem: Identifiable {
-    let id = UUID()
-    let title: String
-    let cadence: String
-    let next: String
-}
-
 private struct ScheduleCard: View {
-    let item: ScheduleItem
+    let item: ScheduleSummary
+    let isToggling: Bool
+    let isRunningNow: Bool
+    let onToggleEnabled: (Bool) -> Void
+    let onRunNow: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(item.title)
-                .font(.system(.title3, design: .rounded).weight(.semibold))
-                .foregroundStyle(PincerPalette.textPrimary)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(item.name.isEmpty ? "Unnamed schedule" : item.name)
+                    .font(.system(.title3, design: .rounded).weight(.semibold))
+                    .foregroundStyle(PincerPalette.textPrimary)
 
-            Text(item.cadence)
-                .font(.system(.title3, design: .rounded))
-                .foregroundStyle(PincerPalette.textSecondary)
+                Spacer()
 
-            Text(item.next)
+                Text(item.enabled ? "Enabled" : "Disabled")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(item.enabled ? PincerPalette.success : PincerPalette.textTertiary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(item.enabled ? PincerPalette.success.opacity(0.15) : PincerPalette.page)
+                    .clipShape(Capsule())
+            }
+
+            Text(scheduleTriggerDescription(item))
                 .font(.system(.subheadline, design: .rounded))
                 .foregroundStyle(PincerPalette.textSecondary)
+
+            if !item.nextRunAt.isEmpty {
+                Text("Next run: \(relativeTimestamp(from: item.nextRunAt))")
+                    .font(.system(.footnote, design: .rounded))
+                    .foregroundStyle(PincerPalette.textSecondary)
+            }
+            if !item.lastRunAt.isEmpty {
+                Text("Last run: \(relativeTimestamp(from: item.lastRunAt))")
+                    .font(.system(.footnote, design: .rounded))
+                    .foregroundStyle(PincerPalette.textTertiary)
+            }
+
+            HStack(spacing: 12) {
+                Button(action: { onToggleEnabled(!item.enabled) }) {
+                    Text(isToggling ? "Saving..." : (item.enabled ? "Disable" : "Enable"))
+                        .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                        .foregroundStyle(PincerPalette.accent)
+                }
+                .disabled(isToggling || isRunningNow)
+
+                Button(action: onRunNow) {
+                    Text(isRunningNow ? "Running..." : "Run Now")
+                        .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                        .foregroundStyle(PincerPalette.textSecondary)
+                }
+                .disabled(isToggling || isRunningNow)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .cardSurface()
     }
 }
 
-private struct JobItem: Identifiable {
-    let id = UUID()
-    let title: String
-    let status: String
-    let detail: String
-    let footer: String
-    let isDone: Bool
-}
-
 private struct JobCard: View {
-    let item: JobItem
+    let item: JobSummary
+    let isCancelling: Bool
+    let onCancel: () -> Void
+
+    private var isTerminal: Bool {
+        switch item.status.uppercased() {
+        case "COMPLETED", "FAILED", "PAUSED_BUDGET", "CANCELLED":
+            return true
+        default:
+            return false
+        }
+    }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: item.isDone ? "checkmark.circle.fill" : "circle")
-                .font(.system(size: 20, weight: .semibold))
-                .foregroundStyle(item.isDone ? PincerPalette.success : PincerPalette.textTertiary)
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(item.title)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 8) {
+                Text(item.goal)
                     .font(.system(.title3, design: .rounded).weight(.semibold))
                     .foregroundStyle(PincerPalette.textPrimary)
 
-                Text(item.status)
-                    .font(.system(.title3, design: .rounded))
-                    .foregroundStyle(PincerPalette.textSecondary)
+                Spacer()
 
-                Text(item.detail)
-                    .font(.system(.subheadline, design: .rounded))
-                    .foregroundStyle(PincerPalette.textSecondary)
+                Text(jobStatusLabel(item.status))
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(jobStatusColor(item.status))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(jobStatusColor(item.status).opacity(0.15))
+                    .clipShape(Capsule())
+            }
 
-                Text(item.footer)
-                    .font(.system(.subheadline, design: .rounded))
-                    .foregroundStyle(PincerPalette.textSecondary)
+            Text("Updated: \(relativeTimestamp(from: item.updatedAt))")
+                .font(.system(.footnote, design: .rounded))
+                .foregroundStyle(PincerPalette.textSecondary)
+
+            if !item.lastError.isEmpty {
+                Text(item.lastError)
+                    .font(.system(.footnote, design: .rounded))
+                    .foregroundStyle(PincerPalette.danger)
+            }
+
+            Text("Trigger: \(item.triggerType.replacingOccurrences(of: "_", with: " ").capitalized)")
+                .font(.system(.footnote, design: .rounded))
+                .foregroundStyle(PincerPalette.textTertiary)
+
+            if !isTerminal {
+                Button(action: onCancel) {
+                    Text(isCancelling ? "Cancelling..." : "Cancel")
+                        .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                        .foregroundStyle(PincerPalette.danger)
+                }
+                .disabled(isCancelling)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .cardSurface()
+    }
+}
+
+private func scheduleTriggerDescription(_ item: ScheduleSummary) -> String {
+    switch item.triggerKind.uppercased() {
+    case "CRON":
+        return "Cron: \(item.triggerSpec) • \(item.timezone)"
+    case "INTERVAL":
+        return "Interval: \(item.triggerSpec)"
+    case "AT":
+        return "One-shot: \(item.triggerSpec)"
+    default:
+        return item.triggerSpec
+    }
+}
+
+private func jobStatusLabel(_ status: String) -> String {
+    status
+        .replacingOccurrences(of: "_", with: " ")
+        .capitalized
+}
+
+private func jobStatusColor(_ status: String) -> Color {
+    switch status.uppercased() {
+    case "RUNNING":
+        return PincerPalette.accent
+    case "WAITING_APPROVAL":
+        return PincerPalette.warning
+    case "COMPLETED":
+        return PincerPalette.success
+    default:
+        return PincerPalette.danger
     }
 }
 

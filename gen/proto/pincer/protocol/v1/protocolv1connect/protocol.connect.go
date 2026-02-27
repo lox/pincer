@@ -122,6 +122,18 @@ const (
 	// SystemServiceListNotificationsProcedure is the fully-qualified name of the SystemService's
 	// ListNotifications RPC.
 	SystemServiceListNotificationsProcedure = "/pincer.protocol.v1.SystemService/ListNotifications"
+	// SystemServiceGetAgentMemoryProcedure is the fully-qualified name of the SystemService's
+	// GetAgentMemory RPC.
+	SystemServiceGetAgentMemoryProcedure = "/pincer.protocol.v1.SystemService/GetAgentMemory"
+	// SystemServiceUpdateAgentMemoryProcedure is the fully-qualified name of the SystemService's
+	// UpdateAgentMemory RPC.
+	SystemServiceUpdateAgentMemoryProcedure = "/pincer.protocol.v1.SystemService/UpdateAgentMemory"
+	// SystemServiceGetHeartbeatConfigProcedure is the fully-qualified name of the SystemService's
+	// GetHeartbeatConfig RPC.
+	SystemServiceGetHeartbeatConfigProcedure = "/pincer.protocol.v1.SystemService/GetHeartbeatConfig"
+	// SystemServiceUpdateHeartbeatConfigProcedure is the fully-qualified name of the SystemService's
+	// UpdateHeartbeatConfig RPC.
+	SystemServiceUpdateHeartbeatConfigProcedure = "/pincer.protocol.v1.SystemService/UpdateHeartbeatConfig"
 )
 
 // AuthServiceClient is a client for the pincer.protocol.v1.AuthService service.
@@ -1105,6 +1117,10 @@ type SystemServiceClient interface {
 	GetPolicySummary(context.Context, *connect.Request[v1.GetPolicySummaryRequest]) (*connect.Response[v1.GetPolicySummaryResponse], error)
 	ListAudit(context.Context, *connect.Request[v1.ListAuditRequest]) (*connect.Response[v1.ListAuditResponse], error)
 	ListNotifications(context.Context, *connect.Request[v1.ListNotificationsRequest]) (*connect.Response[v1.ListNotificationsResponse], error)
+	GetAgentMemory(context.Context, *connect.Request[v1.GetAgentMemoryRequest]) (*connect.Response[v1.GetAgentMemoryResponse], error)
+	UpdateAgentMemory(context.Context, *connect.Request[v1.UpdateAgentMemoryRequest]) (*connect.Response[v1.UpdateAgentMemoryResponse], error)
+	GetHeartbeatConfig(context.Context, *connect.Request[v1.GetHeartbeatConfigRequest]) (*connect.Response[v1.GetHeartbeatConfigResponse], error)
+	UpdateHeartbeatConfig(context.Context, *connect.Request[v1.UpdateHeartbeatConfigRequest]) (*connect.Response[v1.UpdateHeartbeatConfigResponse], error)
 }
 
 // NewSystemServiceClient constructs a client for the pincer.protocol.v1.SystemService service. By
@@ -1136,14 +1152,42 @@ func NewSystemServiceClient(httpClient connect.HTTPClient, baseURL string, opts 
 			connect.WithSchema(systemServiceMethods.ByName("ListNotifications")),
 			connect.WithClientOptions(opts...),
 		),
+		getAgentMemory: connect.NewClient[v1.GetAgentMemoryRequest, v1.GetAgentMemoryResponse](
+			httpClient,
+			baseURL+SystemServiceGetAgentMemoryProcedure,
+			connect.WithSchema(systemServiceMethods.ByName("GetAgentMemory")),
+			connect.WithClientOptions(opts...),
+		),
+		updateAgentMemory: connect.NewClient[v1.UpdateAgentMemoryRequest, v1.UpdateAgentMemoryResponse](
+			httpClient,
+			baseURL+SystemServiceUpdateAgentMemoryProcedure,
+			connect.WithSchema(systemServiceMethods.ByName("UpdateAgentMemory")),
+			connect.WithClientOptions(opts...),
+		),
+		getHeartbeatConfig: connect.NewClient[v1.GetHeartbeatConfigRequest, v1.GetHeartbeatConfigResponse](
+			httpClient,
+			baseURL+SystemServiceGetHeartbeatConfigProcedure,
+			connect.WithSchema(systemServiceMethods.ByName("GetHeartbeatConfig")),
+			connect.WithClientOptions(opts...),
+		),
+		updateHeartbeatConfig: connect.NewClient[v1.UpdateHeartbeatConfigRequest, v1.UpdateHeartbeatConfigResponse](
+			httpClient,
+			baseURL+SystemServiceUpdateHeartbeatConfigProcedure,
+			connect.WithSchema(systemServiceMethods.ByName("UpdateHeartbeatConfig")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
 // systemServiceClient implements SystemServiceClient.
 type systemServiceClient struct {
-	getPolicySummary  *connect.Client[v1.GetPolicySummaryRequest, v1.GetPolicySummaryResponse]
-	listAudit         *connect.Client[v1.ListAuditRequest, v1.ListAuditResponse]
-	listNotifications *connect.Client[v1.ListNotificationsRequest, v1.ListNotificationsResponse]
+	getPolicySummary      *connect.Client[v1.GetPolicySummaryRequest, v1.GetPolicySummaryResponse]
+	listAudit             *connect.Client[v1.ListAuditRequest, v1.ListAuditResponse]
+	listNotifications     *connect.Client[v1.ListNotificationsRequest, v1.ListNotificationsResponse]
+	getAgentMemory        *connect.Client[v1.GetAgentMemoryRequest, v1.GetAgentMemoryResponse]
+	updateAgentMemory     *connect.Client[v1.UpdateAgentMemoryRequest, v1.UpdateAgentMemoryResponse]
+	getHeartbeatConfig    *connect.Client[v1.GetHeartbeatConfigRequest, v1.GetHeartbeatConfigResponse]
+	updateHeartbeatConfig *connect.Client[v1.UpdateHeartbeatConfigRequest, v1.UpdateHeartbeatConfigResponse]
 }
 
 // GetPolicySummary calls pincer.protocol.v1.SystemService.GetPolicySummary.
@@ -1161,11 +1205,35 @@ func (c *systemServiceClient) ListNotifications(ctx context.Context, req *connec
 	return c.listNotifications.CallUnary(ctx, req)
 }
 
+// GetAgentMemory calls pincer.protocol.v1.SystemService.GetAgentMemory.
+func (c *systemServiceClient) GetAgentMemory(ctx context.Context, req *connect.Request[v1.GetAgentMemoryRequest]) (*connect.Response[v1.GetAgentMemoryResponse], error) {
+	return c.getAgentMemory.CallUnary(ctx, req)
+}
+
+// UpdateAgentMemory calls pincer.protocol.v1.SystemService.UpdateAgentMemory.
+func (c *systemServiceClient) UpdateAgentMemory(ctx context.Context, req *connect.Request[v1.UpdateAgentMemoryRequest]) (*connect.Response[v1.UpdateAgentMemoryResponse], error) {
+	return c.updateAgentMemory.CallUnary(ctx, req)
+}
+
+// GetHeartbeatConfig calls pincer.protocol.v1.SystemService.GetHeartbeatConfig.
+func (c *systemServiceClient) GetHeartbeatConfig(ctx context.Context, req *connect.Request[v1.GetHeartbeatConfigRequest]) (*connect.Response[v1.GetHeartbeatConfigResponse], error) {
+	return c.getHeartbeatConfig.CallUnary(ctx, req)
+}
+
+// UpdateHeartbeatConfig calls pincer.protocol.v1.SystemService.UpdateHeartbeatConfig.
+func (c *systemServiceClient) UpdateHeartbeatConfig(ctx context.Context, req *connect.Request[v1.UpdateHeartbeatConfigRequest]) (*connect.Response[v1.UpdateHeartbeatConfigResponse], error) {
+	return c.updateHeartbeatConfig.CallUnary(ctx, req)
+}
+
 // SystemServiceHandler is an implementation of the pincer.protocol.v1.SystemService service.
 type SystemServiceHandler interface {
 	GetPolicySummary(context.Context, *connect.Request[v1.GetPolicySummaryRequest]) (*connect.Response[v1.GetPolicySummaryResponse], error)
 	ListAudit(context.Context, *connect.Request[v1.ListAuditRequest]) (*connect.Response[v1.ListAuditResponse], error)
 	ListNotifications(context.Context, *connect.Request[v1.ListNotificationsRequest]) (*connect.Response[v1.ListNotificationsResponse], error)
+	GetAgentMemory(context.Context, *connect.Request[v1.GetAgentMemoryRequest]) (*connect.Response[v1.GetAgentMemoryResponse], error)
+	UpdateAgentMemory(context.Context, *connect.Request[v1.UpdateAgentMemoryRequest]) (*connect.Response[v1.UpdateAgentMemoryResponse], error)
+	GetHeartbeatConfig(context.Context, *connect.Request[v1.GetHeartbeatConfigRequest]) (*connect.Response[v1.GetHeartbeatConfigResponse], error)
+	UpdateHeartbeatConfig(context.Context, *connect.Request[v1.UpdateHeartbeatConfigRequest]) (*connect.Response[v1.UpdateHeartbeatConfigResponse], error)
 }
 
 // NewSystemServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -1193,6 +1261,30 @@ func NewSystemServiceHandler(svc SystemServiceHandler, opts ...connect.HandlerOp
 		connect.WithSchema(systemServiceMethods.ByName("ListNotifications")),
 		connect.WithHandlerOptions(opts...),
 	)
+	systemServiceGetAgentMemoryHandler := connect.NewUnaryHandler(
+		SystemServiceGetAgentMemoryProcedure,
+		svc.GetAgentMemory,
+		connect.WithSchema(systemServiceMethods.ByName("GetAgentMemory")),
+		connect.WithHandlerOptions(opts...),
+	)
+	systemServiceUpdateAgentMemoryHandler := connect.NewUnaryHandler(
+		SystemServiceUpdateAgentMemoryProcedure,
+		svc.UpdateAgentMemory,
+		connect.WithSchema(systemServiceMethods.ByName("UpdateAgentMemory")),
+		connect.WithHandlerOptions(opts...),
+	)
+	systemServiceGetHeartbeatConfigHandler := connect.NewUnaryHandler(
+		SystemServiceGetHeartbeatConfigProcedure,
+		svc.GetHeartbeatConfig,
+		connect.WithSchema(systemServiceMethods.ByName("GetHeartbeatConfig")),
+		connect.WithHandlerOptions(opts...),
+	)
+	systemServiceUpdateHeartbeatConfigHandler := connect.NewUnaryHandler(
+		SystemServiceUpdateHeartbeatConfigProcedure,
+		svc.UpdateHeartbeatConfig,
+		connect.WithSchema(systemServiceMethods.ByName("UpdateHeartbeatConfig")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/pincer.protocol.v1.SystemService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case SystemServiceGetPolicySummaryProcedure:
@@ -1201,6 +1293,14 @@ func NewSystemServiceHandler(svc SystemServiceHandler, opts ...connect.HandlerOp
 			systemServiceListAuditHandler.ServeHTTP(w, r)
 		case SystemServiceListNotificationsProcedure:
 			systemServiceListNotificationsHandler.ServeHTTP(w, r)
+		case SystemServiceGetAgentMemoryProcedure:
+			systemServiceGetAgentMemoryHandler.ServeHTTP(w, r)
+		case SystemServiceUpdateAgentMemoryProcedure:
+			systemServiceUpdateAgentMemoryHandler.ServeHTTP(w, r)
+		case SystemServiceGetHeartbeatConfigProcedure:
+			systemServiceGetHeartbeatConfigHandler.ServeHTTP(w, r)
+		case SystemServiceUpdateHeartbeatConfigProcedure:
+			systemServiceUpdateHeartbeatConfigHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -1220,4 +1320,20 @@ func (UnimplementedSystemServiceHandler) ListAudit(context.Context, *connect.Req
 
 func (UnimplementedSystemServiceHandler) ListNotifications(context.Context, *connect.Request[v1.ListNotificationsRequest]) (*connect.Response[v1.ListNotificationsResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("pincer.protocol.v1.SystemService.ListNotifications is not implemented"))
+}
+
+func (UnimplementedSystemServiceHandler) GetAgentMemory(context.Context, *connect.Request[v1.GetAgentMemoryRequest]) (*connect.Response[v1.GetAgentMemoryResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("pincer.protocol.v1.SystemService.GetAgentMemory is not implemented"))
+}
+
+func (UnimplementedSystemServiceHandler) UpdateAgentMemory(context.Context, *connect.Request[v1.UpdateAgentMemoryRequest]) (*connect.Response[v1.UpdateAgentMemoryResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("pincer.protocol.v1.SystemService.UpdateAgentMemory is not implemented"))
+}
+
+func (UnimplementedSystemServiceHandler) GetHeartbeatConfig(context.Context, *connect.Request[v1.GetHeartbeatConfigRequest]) (*connect.Response[v1.GetHeartbeatConfigResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("pincer.protocol.v1.SystemService.GetHeartbeatConfig is not implemented"))
+}
+
+func (UnimplementedSystemServiceHandler) UpdateHeartbeatConfig(context.Context, *connect.Request[v1.UpdateHeartbeatConfigRequest]) (*connect.Response[v1.UpdateHeartbeatConfigResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("pincer.protocol.v1.SystemService.UpdateHeartbeatConfig is not implemented"))
 }

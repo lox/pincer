@@ -51,6 +51,70 @@ struct Device: Codable, Identifiable {
     var isRevoked: Bool { !revokedAt.isEmpty }
 }
 
+enum JobFilter: String, CaseIterable, Identifiable {
+    case running = "Running"
+    case waiting = "Waiting"
+    case completed = "Completed"
+    case failed = "Failed"
+
+    var id: String { rawValue }
+}
+
+struct JobSummary: Identifiable {
+    let jobID: String
+    let goal: String
+    let status: String
+    let threadID: String
+    let triggerType: String
+    let triggerSourceID: String
+    let maxWallTimeMS: UInt64
+    let lastError: String
+    let createdAt: String
+    let updatedAt: String
+
+    var id: String { jobID }
+
+    var filter: JobFilter {
+        switch status.uppercased() {
+        case "RUNNING":
+            return .running
+        case "WAITING_APPROVAL":
+            return .waiting
+        case "COMPLETED":
+            return .completed
+        default:
+            return .failed
+        }
+    }
+}
+
+struct ScheduleSummary: Identifiable {
+    let scheduleID: String
+    let name: String
+    let triggerKind: String
+    let triggerSpec: String
+    let timezone: String
+    let enabled: Bool
+    let nextRunAt: String
+    let lastRunAt: String
+    let createdAt: String
+    let updatedAt: String
+
+    var id: String { scheduleID }
+}
+
+struct AgentMemoryState {
+    let content: String
+    let updatedAt: String
+}
+
+struct HeartbeatConfigState {
+    let enabled: Bool
+    let intervalMinutes: Int
+    let tasksMarkdown: String
+    let tasksUpdatedAt: String
+}
+
 // MARK: - Activity Model
 
 enum TurnStatus {

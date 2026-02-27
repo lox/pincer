@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -1240,6 +1242,201 @@ func TestSchedulesServiceCreateListAndUpdate(t *testing.T) {
 	}
 	if updateResp.Msg.GetItem().GetNextRunAt() != nil {
 		t.Fatalf("expected disabled schedule to clear next_run_at")
+	}
+}
+
+func TestSystemServiceAgentMemoryReadAndUpdate(t *testing.T) {
+	t.Parallel()
+
+	app := newTestAppWithPlanner(t, &staticPlannerFunc{fn: func(_ context.Context, _ agent.PlanRequest) (agent.PlanResult, error) {
+		return agent.PlanResult{AssistantMessage: "ok"}, nil
+	}})
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
+
+	token := bootstrapConnectToken(t, srv.URL)
+	httpClient := newAuthorizedHTTPClient(token)
+	systemClient := protocolv1connect.NewSystemServiceClient(httpClient, srv.URL)
+
+	getBefore, err := systemClient.GetAgentMemory(context.Background(), connect.NewRequest(&protocolv1.GetAgentMemoryRequest{}))
+	if err != nil {
+		t.Fatalf("get agent memory before update: %v", err)
+	}
+	if strings.TrimSpace(getBefore.Msg.GetContent()) != "" {
+		t.Fatalf("expected empty default memory content, got %q", getBefore.Msg.GetContent())
+	}
+
+	memoryContent := "# Memory\n\n- User prefers concise responses\n"
+	updateResp, err := systemClient.UpdateAgentMemory(context.Background(), connect.NewRequest(&protocolv1.UpdateAgentMemoryRequest{
+		Content: memoryContent,
+	}))
+	if err != nil {
+		t.Fatalf("update agent memory: %v", err)
+	}
+	if updateResp.Msg.GetWrittenBytes() == 0 {
+		t.Fatalf("expected written_bytes > 0")
+	}
+	if updateResp.Msg.GetUpdatedAt() == nil {
+		t.Fatalf("expected updated_at in update response")
+	}
+
+	getAfter, err := systemClient.GetAgentMemory(context.Background(), connect.NewRequest(&protocolv1.GetAgentMemoryRequest{}))
+	if err != nil {
+		t.Fatalf("get agent memory after update: %v", err)
+	}
+	if getAfter.Msg.GetContent() != memoryContent {
+		t.Fatalf("expected updated memory content %q, got %q", memoryContent, getAfter.Msg.GetContent())
+	}
+	if getAfter.Msg.GetUpdatedAt() == nil {
+		t.Fatalf("expected updated_at in get response")
+	}
+
+	storedBytes, err := os.ReadFile(filepath.Join(app.workspaceRoot, "memory", "MEMORY.md"))
+	if err != nil {
+		t.Fatalf("read memory file from workspace: %v", err)
+	}
+	if string(storedBytes) != memoryContent {
+		t.Fatalf("expected workspace memory file content %q, got %q", memoryContent, string(storedBytes))
+	}
+}
+
+func TestSystemServiceHeartbeatConfigReadAndUpdate(t *testing.T) {
+	t.Parallel()
+
+	app := newTestAppWithPlanner(t, &staticPlannerFunc{fn: func(_ context.Context, _ agent.PlanRequest) (agent.PlanResult, error) {
+		return agent.PlanResult{AssistantMessage: "ok"}, nil
+	}})
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
+
+	token := bootstrapConnectToken(t, srv.URL)
+	httpClient := newAuthorizedHTTPClient(token)
+	systemClient := protocolv1connect.NewSystemServiceClient(httpClient, srv.URL)
+
+	getBefore, err := systemClient.GetHeartbeatConfig(context.Background(), connect.NewRequest(&protocolv1.GetHeartbeatConfigRequest{}))
+	if err != nil {
+		t.Fatalf("get heartbeat config before update: %v", err)
+	}
+	if getBefore.Msg.GetIntervalMinutes() == 0 {
+		t.Fatalf("expected non-zero heartbeat interval in config")
+	}
+	if !strings.Contains(getBefore.Msg.GetTasksMarkdown(), "# Periodic Tasks") {
+		t.Fatalf("expected default heartbeat tasks markdown, got %q", getBefore.Msg.GetTasksMarkdown())
+	}
+
+	updatedTasks := "# Periodic Tasks\n\n- Check urgent inbox messages\n"
+	updateResp, err := systemClient.UpdateHeartbeatConfig(context.Background(), connect.NewRequest(&protocolv1.UpdateHeartbeatConfigRequest{
+		Enabled:         true,
+		IntervalMinutes: uint32(minScheduleInterval / time.Minute),
+		TasksMarkdown:   updatedTasks,
+	}))
+	if err != nil {
+		t.Fatalf("update heartbeat config: %v", err)
+	}
+	if !updateResp.Msg.GetEnabled() {
+		t.Fatalf("expected heartbeat enabled after update")
+	}
+	if updateResp.Msg.GetIntervalMinutes() != uint32(minScheduleInterval/time.Minute) {
+		t.Fatalf("expected interval %d, got %d", minScheduleInterval/time.Minute, updateResp.Msg.GetIntervalMinutes())
+	}
+	if updateResp.Msg.GetTasksMarkdown() != updatedTasks {
+		t.Fatalf("expected updated tasks markdown %q, got %q", updatedTasks, updateResp.Msg.GetTasksMarkdown())
+	}
+
+	getAfter, err := systemClient.GetHeartbeatConfig(context.Background(), connect.NewRequest(&protocolv1.GetHeartbeatConfigRequest{}))
+	if err != nil {
+		t.Fatalf("get heartbeat config after update: %v", err)
+	}
+	if !getAfter.Msg.GetEnabled() {
+		t.Fatalf("expected heartbeat config to stay enabled")
+	}
+	if getAfter.Msg.GetIntervalMinutes() != uint32(minScheduleInterval/time.Minute) {
+		t.Fatalf("expected persisted interval %d, got %d", minScheduleInterval/time.Minute, getAfter.Msg.GetIntervalMinutes())
+	}
+	if getAfter.Msg.GetTasksMarkdown() != updatedTasks {
+		t.Fatalf("expected persisted tasks markdown %q, got %q", updatedTasks, getAfter.Msg.GetTasksMarkdown())
+	}
+
+	policyResp, err := systemClient.GetPolicySummary(context.Background(), connect.NewRequest(&protocolv1.GetPolicySummaryRequest{}))
+	if err != nil {
+		t.Fatalf("get policy summary: %v", err)
+	}
+	policyFields := policyResp.Msg.GetSummary().GetFields()
+	if !policyFields["heartbeat_enabled"].GetBoolValue() {
+		t.Fatalf("expected policy summary heartbeat_enabled=true after config update")
+	}
+	if got := policyFields["heartbeat_interval_minutes"].GetNumberValue(); got != float64(minScheduleInterval/time.Minute) {
+		t.Fatalf("expected policy summary heartbeat_interval_minutes=%d, got %v", minScheduleInterval/time.Minute, got)
+	}
+
+	heartbeatBytes, err := os.ReadFile(filepath.Join(app.workspaceRoot, "HEARTBEAT.md"))
+	if err != nil {
+		t.Fatalf("read heartbeat file from workspace: %v", err)
+	}
+	if string(heartbeatBytes) != updatedTasks {
+		t.Fatalf("expected heartbeat file content %q, got %q", updatedTasks, string(heartbeatBytes))
+	}
+}
+
+func TestSystemServiceHeartbeatConfigRollsBackTasksWhenPersistFails(t *testing.T) {
+	t.Parallel()
+
+	app := newTestAppWithPlanner(t, &staticPlannerFunc{fn: func(_ context.Context, _ agent.PlanRequest) (agent.PlanResult, error) {
+		return agent.PlanResult{AssistantMessage: "ok"}, nil
+	}})
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
+
+	token := bootstrapConnectToken(t, srv.URL)
+	httpClient := newAuthorizedHTTPClient(token)
+	systemClient := protocolv1connect.NewSystemServiceClient(httpClient, srv.URL)
+
+	getBefore, err := systemClient.GetHeartbeatConfig(context.Background(), connect.NewRequest(&protocolv1.GetHeartbeatConfigRequest{}))
+	if err != nil {
+		t.Fatalf("get heartbeat config before failed update: %v", err)
+	}
+	heartbeatPath := filepath.Join(app.workspaceRoot, "HEARTBEAT.md")
+	originalHeartbeatBytes, err := os.ReadFile(heartbeatPath)
+	if err != nil {
+		t.Fatalf("read heartbeat file before failed update: %v", err)
+	}
+
+	if _, err := app.db.Exec(`DROP TABLE runtime_settings`); err != nil {
+		t.Fatalf("drop runtime_settings table: %v", err)
+	}
+
+	_, err = systemClient.UpdateHeartbeatConfig(context.Background(), connect.NewRequest(&protocolv1.UpdateHeartbeatConfigRequest{
+		Enabled:         !getBefore.Msg.GetEnabled(),
+		IntervalMinutes: uint32(minScheduleInterval / time.Minute),
+		TasksMarkdown:   "# Periodic Tasks\n\n- This update should roll back\n",
+	}))
+	if err == nil {
+		t.Fatalf("expected update heartbeat config to fail when runtime_settings table is missing")
+	}
+	if code := connect.CodeOf(err); code != connect.CodeInternal {
+		t.Fatalf("expected internal error code, got %s", code)
+	}
+
+	getAfter, err := systemClient.GetHeartbeatConfig(context.Background(), connect.NewRequest(&protocolv1.GetHeartbeatConfigRequest{}))
+	if err != nil {
+		t.Fatalf("get heartbeat config after failed update: %v", err)
+	}
+	if getAfter.Msg.GetEnabled() != getBefore.Msg.GetEnabled() {
+		t.Fatalf("expected heartbeat enabled to remain %v, got %v", getBefore.Msg.GetEnabled(), getAfter.Msg.GetEnabled())
+	}
+	if getAfter.Msg.GetIntervalMinutes() != getBefore.Msg.GetIntervalMinutes() {
+		t.Fatalf("expected heartbeat interval to remain %d, got %d", getBefore.Msg.GetIntervalMinutes(), getAfter.Msg.GetIntervalMinutes())
+	}
+	if getAfter.Msg.GetTasksMarkdown() != string(originalHeartbeatBytes) {
+		t.Fatalf("expected heartbeat tasks markdown to roll back to original content")
+	}
+
+	currentHeartbeatBytes, err := os.ReadFile(heartbeatPath)
+	if err != nil {
+		t.Fatalf("read heartbeat file after failed update: %v", err)
+	}
+	if string(currentHeartbeatBytes) != string(originalHeartbeatBytes) {
+		t.Fatalf("expected heartbeat file to roll back to original content")
 	}
 }
 

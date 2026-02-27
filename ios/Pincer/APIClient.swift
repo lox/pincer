@@ -37,6 +37,9 @@ actor APIClient {
     private var eventsClient: Pincer_Protocol_V1_EventsServiceClient
     private var approvalsClient: Pincer_Protocol_V1_ApprovalsServiceClient
     private var devicesClient: Pincer_Protocol_V1_DevicesServiceClient
+    private var jobsClient: Pincer_Protocol_V1_JobsServiceClient
+    private var schedulesClient: Pincer_Protocol_V1_SchedulesServiceClient
+    private var systemClient: Pincer_Protocol_V1_SystemServiceClient
 
     private static let timestampFormatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
@@ -56,6 +59,9 @@ actor APIClient {
         self.eventsClient = Pincer_Protocol_V1_EventsServiceClient(client: streamTransport)
         self.approvalsClient = Pincer_Protocol_V1_ApprovalsServiceClient(client: unaryTransport)
         self.devicesClient = Pincer_Protocol_V1_DevicesServiceClient(client: unaryTransport)
+        self.jobsClient = Pincer_Protocol_V1_JobsServiceClient(client: unaryTransport)
+        self.schedulesClient = Pincer_Protocol_V1_SchedulesServiceClient(client: unaryTransport)
+        self.systemClient = Pincer_Protocol_V1_SystemServiceClient(client: unaryTransport)
 
         AppConfig.setBaseURL(baseURL)
     }
@@ -74,6 +80,9 @@ actor APIClient {
         self.eventsClient = Pincer_Protocol_V1_EventsServiceClient(client: streamTransport)
         self.approvalsClient = Pincer_Protocol_V1_ApprovalsServiceClient(client: unaryTransport)
         self.devicesClient = Pincer_Protocol_V1_DevicesServiceClient(client: unaryTransport)
+        self.jobsClient = Pincer_Protocol_V1_JobsServiceClient(client: unaryTransport)
+        self.schedulesClient = Pincer_Protocol_V1_SchedulesServiceClient(client: unaryTransport)
+        self.systemClient = Pincer_Protocol_V1_SystemServiceClient(client: unaryTransport)
 
         clearToken()
     }
@@ -286,6 +295,164 @@ actor APIClient {
                 headers: authHeaders()
             )
             _ = try responseMessage(response) as Pincer_Protocol_V1_RevokeDeviceResponse
+        }
+    }
+
+    func fetchJobs() async throws -> [JobSummary] {
+        try await withAuthorizedRetry {
+            let response = await jobsClient.listJobs(
+                request: .init(),
+                headers: authHeaders()
+            )
+            let message = try responseMessage(response)
+            return message.items.map { item in
+                JobSummary(
+                    jobID: item.jobID,
+                    goal: item.goal,
+                    status: jobStatusName(item.status),
+                    threadID: item.threadID,
+                    triggerType: triggerTypeName(item.triggerType),
+                    triggerSourceID: item.triggerSourceID,
+                    maxWallTimeMS: item.maxWallTimeMs,
+                    lastError: item.lastError,
+                    createdAt: timestampString(item.createdAt, hasValue: item.hasCreatedAt),
+                    updatedAt: timestampString(item.updatedAt, hasValue: item.hasUpdatedAt)
+                )
+            }
+        }
+    }
+
+    func cancelJob(jobID: String) async throws {
+        try await withAuthorizedRetry {
+            var request = Pincer_Protocol_V1_CancelJobRequest()
+            request.jobID = jobID
+            let response = await jobsClient.cancelJob(
+                request: request,
+                headers: authHeaders()
+            )
+            _ = try responseMessage(response) as Pincer_Protocol_V1_CancelJobResponse
+        }
+    }
+
+    func fetchSchedules() async throws -> [ScheduleSummary] {
+        try await withAuthorizedRetry {
+            let response = await schedulesClient.listSchedules(
+                request: .init(),
+                headers: authHeaders()
+            )
+            let message = try responseMessage(response)
+            return message.items.map { item in
+                ScheduleSummary(
+                    scheduleID: item.scheduleID,
+                    name: item.name,
+                    triggerKind: scheduleTriggerKindName(item.triggerKind),
+                    triggerSpec: item.triggerSpec,
+                    timezone: item.timezone,
+                    enabled: item.enabled,
+                    nextRunAt: timestampString(item.nextRunAt, hasValue: item.hasNextRunAt),
+                    lastRunAt: timestampString(item.lastRunAt, hasValue: item.hasLastRunAt),
+                    createdAt: timestampString(item.createdAt, hasValue: item.hasCreatedAt),
+                    updatedAt: timestampString(item.updatedAt, hasValue: item.hasUpdatedAt)
+                )
+            }
+        }
+    }
+
+    func setScheduleEnabled(scheduleID: String, enabled: Bool) async throws {
+        try await withAuthorizedRetry {
+            var enabledValue = Google_Protobuf_Value()
+            enabledValue.boolValue = enabled
+            var patch = Google_Protobuf_Struct()
+            patch.fields["enabled"] = enabledValue
+
+            var request = Pincer_Protocol_V1_UpdateScheduleRequest()
+            request.scheduleID = scheduleID
+            request.patch = patch
+
+            let response = await schedulesClient.updateSchedule(
+                request: request,
+                headers: authHeaders()
+            )
+            _ = try responseMessage(response) as Pincer_Protocol_V1_UpdateScheduleResponse
+        }
+    }
+
+    func runScheduleNow(scheduleID: String) async throws {
+        try await withAuthorizedRetry {
+            var request = Pincer_Protocol_V1_RunScheduleNowRequest()
+            request.scheduleID = scheduleID
+            let response = await schedulesClient.runScheduleNow(
+                request: request,
+                headers: authHeaders()
+            )
+            _ = try responseMessage(response) as Pincer_Protocol_V1_RunScheduleNowResponse
+        }
+    }
+
+    func fetchAgentMemory() async throws -> AgentMemoryState {
+        try await withAuthorizedRetry {
+            let response = await systemClient.getAgentMemory(
+                request: .init(),
+                headers: authHeaders()
+            )
+            let message = try responseMessage(response)
+            return AgentMemoryState(
+                content: message.content,
+                updatedAt: timestampString(message.updatedAt, hasValue: message.hasUpdatedAt)
+            )
+        }
+    }
+
+    func updateAgentMemory(content: String) async throws -> AgentMemoryState {
+        try await withAuthorizedRetry {
+            var request = Pincer_Protocol_V1_UpdateAgentMemoryRequest()
+            request.content = content
+            let response = await systemClient.updateAgentMemory(
+                request: request,
+                headers: authHeaders()
+            )
+            let message = try responseMessage(response)
+            return AgentMemoryState(
+                content: content,
+                updatedAt: timestampString(message.updatedAt, hasValue: message.hasUpdatedAt)
+            )
+        }
+    }
+
+    func fetchHeartbeatConfig() async throws -> HeartbeatConfigState {
+        try await withAuthorizedRetry {
+            let response = await systemClient.getHeartbeatConfig(
+                request: .init(),
+                headers: authHeaders()
+            )
+            let message = try responseMessage(response)
+            return HeartbeatConfigState(
+                enabled: message.enabled,
+                intervalMinutes: Int(message.intervalMinutes),
+                tasksMarkdown: message.tasksMarkdown,
+                tasksUpdatedAt: timestampString(message.tasksUpdatedAt, hasValue: message.hasTasksUpdatedAt)
+            )
+        }
+    }
+
+    func updateHeartbeatConfig(enabled: Bool, intervalMinutes: Int, tasksMarkdown: String) async throws -> HeartbeatConfigState {
+        try await withAuthorizedRetry {
+            var request = Pincer_Protocol_V1_UpdateHeartbeatConfigRequest()
+            request.enabled = enabled
+            request.intervalMinutes = UInt32(intervalMinutes)
+            request.tasksMarkdown = tasksMarkdown
+
+            let response = await systemClient.updateHeartbeatConfig(
+                request: request,
+                headers: authHeaders()
+            )
+            let message = try responseMessage(response)
+            return HeartbeatConfigState(
+                enabled: message.enabled,
+                intervalMinutes: Int(message.intervalMinutes),
+                tasksMarkdown: message.tasksMarkdown,
+                tasksUpdatedAt: timestampString(message.tasksUpdatedAt, hasValue: message.hasTasksUpdatedAt)
+            )
         }
     }
 
@@ -502,6 +669,55 @@ actor APIClient {
         }
     }
 
+    private func jobStatusName(_ value: Pincer_Protocol_V1_JobStatus) -> String {
+        switch value {
+        case .jobRunning:
+            return "RUNNING"
+        case .jobWaitingApproval:
+            return "WAITING_APPROVAL"
+        case .jobCompleted:
+            return "COMPLETED"
+        case .jobFailed:
+            return "FAILED"
+        case .jobPausedBudget:
+            return "PAUSED_BUDGET"
+        case .jobCancelled:
+            return "CANCELLED"
+        case .unspecified, .UNRECOGNIZED:
+            return "UNSPECIFIED"
+        }
+    }
+
+    private func triggerTypeName(_ value: Pincer_Protocol_V1_TriggerType) -> String {
+        switch value {
+        case .chatMessage:
+            return "CHAT_MESSAGE"
+        case .jobWakeup:
+            return "JOB_WAKEUP"
+        case .scheduleWakeup:
+            return "SCHEDULE_WAKEUP"
+        case .heartbeat:
+            return "HEARTBEAT"
+        case .delegatedCallback:
+            return "DELEGATED_CALLBACK"
+        case .unspecified, .UNRECOGNIZED:
+            return "UNSPECIFIED"
+        }
+    }
+
+    private func scheduleTriggerKindName(_ value: Pincer_Protocol_V1_ScheduleTriggerKind) -> String {
+        switch value {
+        case .scheduleTriggerCron:
+            return "CRON"
+        case .scheduleTriggerInterval:
+            return "INTERVAL"
+        case .scheduleTriggerAt:
+            return "AT"
+        case .unspecified, .UNRECOGNIZED:
+            return "UNSPECIFIED"
+        }
+    }
+
     private func clearToken() {
         token = ""
         UserDefaults.standard.removeObject(forKey: AppConfig.tokenDefaultsKey)
@@ -511,8 +727,8 @@ actor APIClient {
     // These should never mutate auth state.
     func probeBackendRPC(baseURL: URL) async -> BackendProbeResult {
         let transport = Self.makeUnaryTransport(baseURL: baseURL)
-        let systemClient = Pincer_Protocol_V1_SystemServiceClient(client: transport)
-        let response = await systemClient.getPolicySummary(request: .init(), headers: [:])
+        let probeSystemClient = Pincer_Protocol_V1_SystemServiceClient(client: transport)
+        let response = await probeSystemClient.getPolicySummary(request: .init(), headers: [:])
         return Self.probeResult(response)
     }
 

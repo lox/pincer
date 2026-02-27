@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 77;
+	objectVersion = 63;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -75,7 +75,7 @@
 		E79B8CDFD73AC6C0F7C663C7 /* ErrorText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ErrorText.swift; sourceTree = "<group>"; };
 		EDF5D76334E9002BB5DDDA04 /* ApprovalDetailFormattingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApprovalDetailFormattingTests.swift; sourceTree = "<group>"; };
 		EF493BDB69A270238281D4CC /* PincerUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PincerUITests.swift; sourceTree = "<group>"; };
-		F2C5D45D4406B02D1F6C96FB /* Pincer.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Pincer.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		F2C5D45D4406B02D1F6C96FB /* Pincer.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Pincer.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -285,7 +285,6 @@
 				E5774C441A981FEAA943D03D /* XCRemoteSwiftPackageReference "connect-swift" */,
 				4D79293C7A3B87AAD9D1A337 /* XCRemoteSwiftPackageReference "textual" */,
 			);
-			preferredProjectObjectVersion = 77;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -557,6 +556,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = A49UDW9T42;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Pincer;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -580,6 +580,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = A49UDW9T42;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Pincer;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;

@@ -345,6 +345,10 @@ Control-plane API is ConnectRPC over protobuf. Service/method groups:
   - `SystemService.GetPolicySummary`
   - `SystemService.ListAudit`
   - `SystemService.ListNotifications`
+  - `SystemService.GetAgentMemory`
+  - `SystemService.UpdateAgentMemory`
+  - `SystemService.GetHeartbeatConfig`
+  - `SystemService.UpdateHeartbeatConfig`
 
 Control-plane REST endpoints are not part of the canonical API contract.
 If temporary REST compatibility shims exist during migration, they must map to the same trusted policy/idempotency/audit paths and are removed after Connect cutover.

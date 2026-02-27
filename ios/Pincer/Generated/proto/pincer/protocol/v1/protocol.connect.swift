@@ -371,6 +371,18 @@ public protocol Pincer_Protocol_V1_SystemServiceClientInterface: Sendable {
 
     @available(iOS 13, *)
     func `listNotifications`(request: Pincer_Protocol_V1_ListNotificationsRequest, headers: Connect.Headers) async -> ResponseMessage<Pincer_Protocol_V1_ListNotificationsResponse>
+
+    @available(iOS 13, *)
+    func `getAgentMemory`(request: Pincer_Protocol_V1_GetAgentMemoryRequest, headers: Connect.Headers) async -> ResponseMessage<Pincer_Protocol_V1_GetAgentMemoryResponse>
+
+    @available(iOS 13, *)
+    func `updateAgentMemory`(request: Pincer_Protocol_V1_UpdateAgentMemoryRequest, headers: Connect.Headers) async -> ResponseMessage<Pincer_Protocol_V1_UpdateAgentMemoryResponse>
+
+    @available(iOS 13, *)
+    func `getHeartbeatConfig`(request: Pincer_Protocol_V1_GetHeartbeatConfigRequest, headers: Connect.Headers) async -> ResponseMessage<Pincer_Protocol_V1_GetHeartbeatConfigResponse>
+
+    @available(iOS 13, *)
+    func `updateHeartbeatConfig`(request: Pincer_Protocol_V1_UpdateHeartbeatConfigRequest, headers: Connect.Headers) async -> ResponseMessage<Pincer_Protocol_V1_UpdateHeartbeatConfigResponse>
 }
 
 /// Concrete implementation of `Pincer_Protocol_V1_SystemServiceClientInterface`.
@@ -396,11 +408,35 @@ public final class Pincer_Protocol_V1_SystemServiceClient: Pincer_Protocol_V1_Sy
         return await self.client.unary(path: "/pincer.protocol.v1.SystemService/ListNotifications", idempotencyLevel: .unknown, request: request, headers: headers)
     }
 
+    @available(iOS 13, *)
+    public func `getAgentMemory`(request: Pincer_Protocol_V1_GetAgentMemoryRequest, headers: Connect.Headers = [:]) async -> ResponseMessage<Pincer_Protocol_V1_GetAgentMemoryResponse> {
+        return await self.client.unary(path: "/pincer.protocol.v1.SystemService/GetAgentMemory", idempotencyLevel: .unknown, request: request, headers: headers)
+    }
+
+    @available(iOS 13, *)
+    public func `updateAgentMemory`(request: Pincer_Protocol_V1_UpdateAgentMemoryRequest, headers: Connect.Headers = [:]) async -> ResponseMessage<Pincer_Protocol_V1_UpdateAgentMemoryResponse> {
+        return await self.client.unary(path: "/pincer.protocol.v1.SystemService/UpdateAgentMemory", idempotencyLevel: .unknown, request: request, headers: headers)
+    }
+
+    @available(iOS 13, *)
+    public func `getHeartbeatConfig`(request: Pincer_Protocol_V1_GetHeartbeatConfigRequest, headers: Connect.Headers = [:]) async -> ResponseMessage<Pincer_Protocol_V1_GetHeartbeatConfigResponse> {
+        return await self.client.unary(path: "/pincer.protocol.v1.SystemService/GetHeartbeatConfig", idempotencyLevel: .unknown, request: request, headers: headers)
+    }
+
+    @available(iOS 13, *)
+    public func `updateHeartbeatConfig`(request: Pincer_Protocol_V1_UpdateHeartbeatConfigRequest, headers: Connect.Headers = [:]) async -> ResponseMessage<Pincer_Protocol_V1_UpdateHeartbeatConfigResponse> {
+        return await self.client.unary(path: "/pincer.protocol.v1.SystemService/UpdateHeartbeatConfig", idempotencyLevel: .unknown, request: request, headers: headers)
+    }
+
     public enum Metadata {
         public enum Methods {
             public static let getPolicySummary = Connect.MethodSpec(name: "GetPolicySummary", service: "pincer.protocol.v1.SystemService", type: .unary)
             public static let listAudit = Connect.MethodSpec(name: "ListAudit", service: "pincer.protocol.v1.SystemService", type: .unary)
             public static let listNotifications = Connect.MethodSpec(name: "ListNotifications", service: "pincer.protocol.v1.SystemService", type: .unary)
+            public static let getAgentMemory = Connect.MethodSpec(name: "GetAgentMemory", service: "pincer.protocol.v1.SystemService", type: .unary)
+            public static let updateAgentMemory = Connect.MethodSpec(name: "UpdateAgentMemory", service: "pincer.protocol.v1.SystemService", type: .unary)
+            public static let getHeartbeatConfig = Connect.MethodSpec(name: "GetHeartbeatConfig", service: "pincer.protocol.v1.SystemService", type: .unary)
+            public static let updateHeartbeatConfig = Connect.MethodSpec(name: "UpdateHeartbeatConfig", service: "pincer.protocol.v1.SystemService", type: .unary)
         }
     }
 }

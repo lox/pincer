@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,6 +19,11 @@ import (
 	"github.com/lox/pincer/internal/agent"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
+)
+
+const (
+	agentMemoryFilePath    = "memory/MEMORY.md"
+	heartbeatTasksFilePath = "HEARTBEAT.md"
 )
 
 func (a *App) registerConnectHandlers(mux *http.ServeMux) {
@@ -438,8 +444,30 @@ func (a *App) SendTurn(ctx context.Context, req *connect.Request[protocolv1.Send
 		return nil, connect.NewError(connect.CodeNotFound, errors.New("thread not found"))
 	}
 
+	triggerType := req.Msg.GetTriggerType()
+	if triggerType == protocolv1.TriggerType_TRIGGER_TYPE_UNSPECIFIED {
+		triggerType = protocolv1.TriggerType_CHAT_MESSAGE
+	}
 	turnID := newID("turn")
-	result, err := a.executeTurn(ctx, threadID, strings.TrimSpace(req.Msg.GetUserText()), turnID, req.Msg.GetTriggerType())
+	queued, err := a.enqueueWorkItem(ctx, workItemInput{
+		Kind:             workItemKindChat,
+		TriggerType:      triggerType,
+		ThreadID:         threadID,
+		TurnID:           turnID,
+		Prompt:           strings.TrimSpace(req.Msg.GetUserText()),
+		SourceID:         threadID,
+		MaxToolSteps:     maxInlineToolSteps,
+		ProposalSource:   "chat",
+		ProposalSourceID: threadID,
+	})
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, connect.NewError(connect.CodeNotFound, errors.New("thread not found"))
+		}
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+
+	result, err := a.waitForWorkItemTerminal(ctx, queued.WorkItemID)
 	if err != nil {
 		if strings.Contains(err.Error(), "user_text is required") {
 			return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("user_text is required"))
@@ -447,15 +475,10 @@ func (a *App) SendTurn(ctx context.Context, req *connect.Request[protocolv1.Send
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
-	firstActionID := ""
-	if len(result.ActionIDs) > 0 {
-		firstActionID = result.ActionIDs[0]
-	}
-
 	return connect.NewResponse(&protocolv1.SendTurnResponse{
 		TurnId:           turnID,
 		AssistantMessage: result.AssistantMessage,
-		ActionId:         firstActionID,
+		ActionId:         result.FirstActionID,
 	}), nil
 }
 
@@ -469,21 +492,43 @@ func (a *App) StartTurn(ctx context.Context, req *connect.Request[protocolv1.Sta
 	}
 
 	turnID := newID("turn")
+	triggerType := req.Msg.GetTriggerType()
+	if triggerType == protocolv1.TriggerType_TRIGGER_TYPE_UNSPECIFIED {
+		triggerType = protocolv1.TriggerType_CHAT_MESSAGE
+	}
 	a.logger.Debug(
 		"start turn stream opened",
 		"thread_id", threadID,
 		"turn_id", turnID,
-		"trigger_type", req.Msg.GetTriggerType().String(),
+		"trigger_type", triggerType.String(),
 		"user_text_bytes", len(req.Msg.GetUserText()),
 		"client_message_id", strings.TrimSpace(req.Msg.GetClientMessageId()),
 	)
 	sub := a.subscribeThread(threadID)
 	defer a.unsubscribeThread(threadID, sub)
 
+	queued, err := a.enqueueWorkItem(ctx, workItemInput{
+		Kind:             workItemKindChat,
+		TriggerType:      triggerType,
+		ThreadID:         threadID,
+		TurnID:           turnID,
+		Prompt:           strings.TrimSpace(req.Msg.GetUserText()),
+		SourceID:         threadID,
+		MaxToolSteps:     maxInlineToolSteps,
+		ProposalSource:   "chat",
+		ProposalSourceID: threadID,
+	})
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return connect.NewError(connect.CodeNotFound, errors.New("thread not found"))
+		}
+		return connect.NewError(connect.CodeInternal, err)
+	}
+
 	errCh := make(chan error, 1)
 	go func() {
-		_, err := a.executeTurn(ctx, threadID, strings.TrimSpace(req.Msg.GetUserText()), turnID, req.Msg.GetTriggerType())
-		errCh <- err
+		_, waitErr := a.waitForWorkItemTerminal(ctx, queued.WorkItemID)
+		errCh <- waitErr
 	}()
 
 	turnDone := false
@@ -913,13 +958,14 @@ func (a *App) RunScheduleNow(ctx context.Context, req *connect.Request[protocolv
 }
 
 func (a *App) GetPolicySummary(context.Context, *connect.Request[protocolv1.GetPolicySummaryRequest]) (*connect.Response[protocolv1.GetPolicySummaryResponse], error) {
+	heartbeatEnabled, heartbeatInterval := a.heartbeatConfig()
 	summary, err := structpb.NewStruct(map[string]any{
 		"external_write_requires_approval": true,
 		"background_jobs_propose_only":     true,
 		"run_bash_requires_approval":       true,
 		"llm_configured":                   a.llmConfigured,
-		"heartbeat_enabled":                a.heartbeatEnabled,
-		"heartbeat_interval_minutes":       int64(a.heartbeatInterval / time.Minute),
+		"heartbeat_enabled":                heartbeatEnabled,
+		"heartbeat_interval_minutes":       int64(heartbeatInterval / time.Minute),
 	})
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("build policy summary: %w", err))
@@ -973,6 +1019,136 @@ func (a *App) ListAudit(ctx context.Context, req *connect.Request[protocolv1.Lis
 
 func (a *App) ListNotifications(context.Context, *connect.Request[protocolv1.ListNotificationsRequest]) (*connect.Response[protocolv1.ListNotificationsResponse], error) {
 	return connect.NewResponse(&protocolv1.ListNotificationsResponse{}), nil
+}
+
+func (a *App) GetAgentMemory(ctx context.Context, req *connect.Request[protocolv1.GetAgentMemoryRequest]) (*connect.Response[protocolv1.GetAgentMemoryResponse], error) {
+	_ = ctx
+	_ = req
+
+	content, updatedAt, err := a.readWorkspaceContentWithUpdatedAt(agentMemoryFilePath)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("read agent memory: %w", err))
+	}
+
+	return connect.NewResponse(&protocolv1.GetAgentMemoryResponse{
+		Content:   content,
+		UpdatedAt: updatedAt,
+	}), nil
+}
+
+func (a *App) UpdateAgentMemory(ctx context.Context, req *connect.Request[protocolv1.UpdateAgentMemoryRequest]) (*connect.Response[protocolv1.UpdateAgentMemoryResponse], error) {
+	content := req.Msg.GetContent()
+	if _, writtenBytes, err := a.writeWorkspaceFile(agentMemoryFilePath, content); err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "max size") {
+			return nil, connect.NewError(connect.CodeInvalidArgument, err)
+		}
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("write agent memory: %w", err))
+	} else {
+		updatedAt, tsErr := a.workspaceFileUpdatedAt(agentMemoryFilePath)
+		if tsErr != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("read updated agent memory timestamp: %w", tsErr))
+		}
+		return connect.NewResponse(&protocolv1.UpdateAgentMemoryResponse{
+			WrittenBytes: uint64(writtenBytes),
+			UpdatedAt:    updatedAt,
+		}), nil
+	}
+}
+
+func (a *App) GetHeartbeatConfig(ctx context.Context, req *connect.Request[protocolv1.GetHeartbeatConfigRequest]) (*connect.Response[protocolv1.GetHeartbeatConfigResponse], error) {
+	_ = ctx
+	_ = req
+
+	enabled, interval := a.heartbeatConfig()
+	tasksMarkdown, tasksUpdatedAt, err := a.readWorkspaceContentWithUpdatedAt(heartbeatTasksFilePath)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("read heartbeat tasks: %w", err))
+	}
+
+	return connect.NewResponse(&protocolv1.GetHeartbeatConfigResponse{
+		Enabled:         enabled,
+		IntervalMinutes: uint32(interval / time.Minute),
+		TasksMarkdown:   tasksMarkdown,
+		TasksUpdatedAt:  tasksUpdatedAt,
+	}), nil
+}
+
+func (a *App) UpdateHeartbeatConfig(ctx context.Context, req *connect.Request[protocolv1.UpdateHeartbeatConfigRequest]) (*connect.Response[protocolv1.UpdateHeartbeatConfigResponse], error) {
+	msg := req.Msg
+	intervalMinutes := msg.GetIntervalMinutes()
+	if intervalMinutes < uint32(minHeartbeatInterval/time.Minute) {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("interval_minutes must be at least %d", minHeartbeatInterval/time.Minute))
+	}
+
+	_, previousTasksMarkdown, err := a.readWorkspaceFile(heartbeatTasksFilePath)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("read heartbeat tasks: %w", err))
+		}
+		previousTasksMarkdown = ""
+	}
+
+	if _, _, err := a.writeWorkspaceFile(heartbeatTasksFilePath, msg.GetTasksMarkdown()); err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "max size") {
+			return nil, connect.NewError(connect.CodeInvalidArgument, err)
+		}
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("write heartbeat tasks: %w", err))
+	}
+
+	interval := time.Duration(intervalMinutes) * time.Minute
+	if err := a.persistHeartbeatSettings(ctx, msg.GetEnabled(), interval); err != nil {
+		if _, _, rollbackErr := a.writeWorkspaceFile(heartbeatTasksFilePath, previousTasksMarkdown); rollbackErr != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("persist heartbeat settings: %w (rollback heartbeat tasks: %v)", err, rollbackErr))
+		}
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("persist heartbeat settings: %w", err))
+	}
+
+	updatedAt, err := a.workspaceFileUpdatedAt(heartbeatTasksFilePath)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("read heartbeat tasks timestamp: %w", err))
+	}
+
+	enabled, appliedInterval := a.heartbeatConfig()
+	return connect.NewResponse(&protocolv1.UpdateHeartbeatConfigResponse{
+		Enabled:         enabled,
+		IntervalMinutes: uint32(appliedInterval / time.Minute),
+		TasksMarkdown:   msg.GetTasksMarkdown(),
+		TasksUpdatedAt:  updatedAt,
+	}), nil
+}
+
+func (a *App) readWorkspaceContentWithUpdatedAt(path string) (string, *timestamppb.Timestamp, error) {
+	_, content, err := a.readWorkspaceFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil, nil
+		}
+		return "", nil, err
+	}
+
+	updatedAt, err := a.workspaceFileUpdatedAt(path)
+	if err != nil {
+		return "", nil, err
+	}
+	return content, updatedAt, nil
+}
+
+func (a *App) workspaceFileUpdatedAt(path string) (*timestamppb.Timestamp, error) {
+	resolvedPath, _, err := a.resolveWorkspacePath(path, false)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	info, err := os.Stat(resolvedPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return timestamppb.New(info.ModTime().UTC()), nil
 }
 
 type turnExecutionResult struct {

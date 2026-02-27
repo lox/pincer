@@ -2363,6 +2363,339 @@ func TestRunningJobsAreFailedOnStartup(t *testing.T) {
 	}
 }
 
+func TestWorkQueueClaimsChatBeforeHeartbeatByPriority(t *testing.T) {
+	t.Parallel()
+
+	app, err := New(AppConfig{
+		DBPath:                  filepath.Join(t.TempDir(), "pincer-test.db"),
+		WorkspaceRoot:           filepath.Join(t.TempDir(), "workspace"),
+		DisableBackgroundWorker: true,
+	})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+	t.Cleanup(func() { _ = app.Close() })
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	chatThreadID := "thr_work_queue_chat"
+	heartbeatThreadID := "thr_work_queue_heartbeat"
+	if _, err := app.db.Exec(`
+		INSERT INTO threads(thread_id, user_id, channel, created_at, title, updated_at)
+		VALUES(?, ?, 'ios', ?, 'Chat Queue', ?)
+	`, chatThreadID, defaultOwnerID, now, now); err != nil {
+		t.Fatalf("insert chat thread: %v", err)
+	}
+	if _, err := app.db.Exec(`
+		INSERT INTO threads(thread_id, user_id, channel, created_at, title, updated_at)
+		VALUES(?, ?, 'system', ?, 'Heartbeat Queue', ?)
+	`, heartbeatThreadID, defaultOwnerID, now, now); err != nil {
+		t.Fatalf("insert heartbeat thread: %v", err)
+	}
+
+	if _, err := app.enqueueWorkItem(context.Background(), workItemInput{
+		Kind:        workItemKindHeartbeat,
+		TriggerType: protocolv1.TriggerType_HEARTBEAT,
+		ThreadID:    heartbeatThreadID,
+		TurnID:      newID("turn"),
+		Prompt:      "heartbeat prompt",
+		SourceID:    heartbeatThreadID,
+	}); err != nil {
+		t.Fatalf("enqueue heartbeat item: %v", err)
+	}
+	if _, err := app.enqueueWorkItem(context.Background(), workItemInput{
+		Kind:        workItemKindChat,
+		TriggerType: protocolv1.TriggerType_CHAT_MESSAGE,
+		ThreadID:    chatThreadID,
+		TurnID:      newID("turn"),
+		Prompt:      "chat prompt",
+		SourceID:    chatThreadID,
+	}); err != nil {
+		t.Fatalf("enqueue chat item: %v", err)
+	}
+
+	claimed, err := app.claimNextWorkItem(context.Background())
+	if err != nil {
+		t.Fatalf("claim next work item: %v", err)
+	}
+	if claimed == nil {
+		t.Fatalf("expected claimed work item")
+	}
+	if claimed.Kind != workItemKindChat {
+		t.Fatalf("expected chat item to be claimed first, got kind=%q", claimed.Kind)
+	}
+}
+
+func TestWorkQueueProcessingItemsRequeuedOnStartup(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "pincer-test.db")
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+
+	app, err := New(AppConfig{
+		DBPath:                  dbPath,
+		WorkspaceRoot:           workspaceRoot,
+		DisableBackgroundWorker: true,
+	})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	threadID := "thr_work_queue_restart"
+	if _, err := app.db.Exec(`
+		INSERT INTO threads(thread_id, user_id, channel, created_at, title, updated_at, active_turn_id)
+		VALUES(?, ?, 'ios', ?, 'Restart Queue', ?, '')
+	`, threadID, defaultOwnerID, now, now); err != nil {
+		t.Fatalf("insert thread: %v", err)
+	}
+
+	queued, err := app.enqueueWorkItem(context.Background(), workItemInput{
+		Kind:        workItemKindChat,
+		TriggerType: protocolv1.TriggerType_CHAT_MESSAGE,
+		ThreadID:    threadID,
+		TurnID:      "turn_restart",
+		Prompt:      "resume this",
+		SourceID:    threadID,
+	})
+	if err != nil {
+		t.Fatalf("enqueue work item: %v", err)
+	}
+	if _, err := app.claimNextWorkItem(context.Background()); err != nil {
+		t.Fatalf("claim work item: %v", err)
+	}
+
+	if err := app.Close(); err != nil {
+		t.Fatalf("close app: %v", err)
+	}
+
+	restarted, err := New(AppConfig{
+		DBPath:                  dbPath,
+		WorkspaceRoot:           workspaceRoot,
+		DisableBackgroundWorker: true,
+	})
+	if err != nil {
+		t.Fatalf("new restarted app: %v", err)
+	}
+	t.Cleanup(func() { _ = restarted.Close() })
+
+	var status string
+	var startedAt string
+	var activeTurn string
+	if err := restarted.db.QueryRow(`
+		SELECT status, started_at
+		FROM work_items
+		WHERE work_item_id = ?
+	`, queued.WorkItemID).Scan(&status, &startedAt); err != nil {
+		t.Fatalf("query work item: %v", err)
+	}
+	if status != workItemStatusPending {
+		t.Fatalf("expected restarted work item status %q, got %q", workItemStatusPending, status)
+	}
+	if startedAt != "" {
+		t.Fatalf("expected restarted work item started_at to be cleared, got %q", startedAt)
+	}
+
+	if err := restarted.db.QueryRow(`SELECT active_turn_id FROM threads WHERE thread_id = ?`, threadID).Scan(&activeTurn); err != nil {
+		t.Fatalf("query thread lock: %v", err)
+	}
+	if activeTurn != "" {
+		t.Fatalf("expected thread active_turn_id to be cleared after restart, got %q", activeTurn)
+	}
+}
+
+func TestQueuedJobWorkItemKeepsApprovalConveyor(t *testing.T) {
+	t.Parallel()
+
+	planner := &staticPlannerFunc{fn: func(_ context.Context, req agent.PlanRequest) (agent.PlanResult, error) {
+		if req.UserMessage == "queued job needs approval" {
+			return agent.PlanResult{
+				AssistantMessage: "Job requires approval.",
+				ProposedActions: []agent.ProposedAction{{
+					Tool:          "run_bash",
+					Args:          json.RawMessage(`{"command":"echo queued job"}`),
+					Justification: "External side effect",
+					RiskClass:     "HIGH",
+				}},
+			}, nil
+		}
+		return agent.PlanResult{AssistantMessage: "ok"}, nil
+	}}
+
+	app, err := New(AppConfig{
+		DBPath:                  filepath.Join(t.TempDir(), "pincer-test.db"),
+		WorkspaceRoot:           filepath.Join(t.TempDir(), "workspace"),
+		Planner:                 planner,
+		DisableBackgroundWorker: true,
+	})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+	t.Cleanup(func() { _ = app.Close() })
+
+	job, err := app.createJob(context.Background(), createJobInput{
+		Goal:          "queued job needs approval",
+		TriggerType:   protocolv1.TriggerType_JOB_WAKEUP,
+		TriggerSource: "queue-test",
+	})
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	app.processJobQueueOnce()
+	app.processWorkQueueOnce()
+
+	waitForCondition(t, 3*time.Second, func() bool {
+		item, getErr := app.getJobByID(context.Background(), job.JobID)
+		if getErr != nil {
+			return false
+		}
+		return item.Status == jobStatusWaitingApproval
+	}, "queued job waiting approval")
+
+	var pending int
+	if err := app.db.QueryRow(`
+		SELECT COUNT(*)
+		FROM proposed_actions
+		WHERE source = 'job' AND source_id = ? AND status = 'PENDING'
+	`, job.ThreadID).Scan(&pending); err != nil {
+		t.Fatalf("count pending job approvals: %v", err)
+	}
+	if pending == 0 {
+		t.Fatalf("expected pending approval for queued job")
+	}
+
+	var executed int
+	if err := app.db.QueryRow(`
+		SELECT COUNT(*)
+		FROM proposed_actions
+		WHERE source = 'job' AND source_id = ? AND status = 'EXECUTED'
+	`, job.ThreadID).Scan(&executed); err != nil {
+		t.Fatalf("count executed job approvals: %v", err)
+	}
+	if executed != 0 {
+		t.Fatalf("expected zero executed actions before approval, got %d", executed)
+	}
+}
+
+func TestWorkQueueKeepsSchedulePendingWhenThreadBusy(t *testing.T) {
+	t.Parallel()
+
+	app, err := New(AppConfig{
+		DBPath:                  filepath.Join(t.TempDir(), "pincer-test.db"),
+		WorkspaceRoot:           filepath.Join(t.TempDir(), "workspace"),
+		DisableBackgroundWorker: true,
+	})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+	t.Cleanup(func() { _ = app.Close() })
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	threadID := "thr_work_queue_schedule_busy"
+	if _, err := app.db.Exec(`
+		INSERT INTO threads(thread_id, user_id, channel, created_at, title, updated_at, active_turn_id)
+		VALUES(?, ?, 'system', ?, 'Schedule Busy', ?, ?)
+	`, threadID, defaultOwnerID, now, now, "turn_busy"); err != nil {
+		t.Fatalf("insert thread: %v", err)
+	}
+
+	queued, err := app.enqueueWorkItem(context.Background(), workItemInput{
+		Kind:        workItemKindSchedule,
+		TriggerType: protocolv1.TriggerType_SCHEDULE_WAKEUP,
+		ThreadID:    threadID,
+		TurnID:      "turn_schedule",
+		Prompt:      "scheduled goal",
+		SourceID:    "schedule_123",
+		JobID:       "job_schedule",
+	})
+	if err != nil {
+		t.Fatalf("enqueue schedule work item: %v", err)
+	}
+
+	claimed, err := app.claimNextWorkItem(context.Background())
+	if err != nil {
+		t.Fatalf("claim next work item: %v", err)
+	}
+	if claimed != nil {
+		t.Fatalf("expected no claimed item while thread is busy, got %q", claimed.WorkItemID)
+	}
+
+	var status string
+	if err := app.db.QueryRow(`SELECT status FROM work_items WHERE work_item_id = ?`, queued.WorkItemID).Scan(&status); err != nil {
+		t.Fatalf("query work item status: %v", err)
+	}
+	if status != workItemStatusPending {
+		t.Fatalf("expected schedule work item to remain pending, got %q", status)
+	}
+}
+
+func TestJobRunnerStopsRequeueAfterQueuedWorkItemFailure(t *testing.T) {
+	t.Parallel()
+
+	planner := &staticPlannerFunc{fn: func(_ context.Context, req agent.PlanRequest) (agent.PlanResult, error) {
+		if req.UserMessage == "queued job always fails" {
+			return agent.PlanResult{}, errors.New("planner failed deterministically")
+		}
+		return agent.PlanResult{AssistantMessage: "ok"}, nil
+	}}
+
+	app, err := New(AppConfig{
+		DBPath:                  filepath.Join(t.TempDir(), "pincer-test.db"),
+		WorkspaceRoot:           filepath.Join(t.TempDir(), "workspace"),
+		Planner:                 planner,
+		DisableBackgroundWorker: true,
+	})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+	t.Cleanup(func() { _ = app.Close() })
+
+	job, err := app.createJob(context.Background(), createJobInput{
+		Goal:          "queued job always fails",
+		TriggerType:   protocolv1.TriggerType_JOB_WAKEUP,
+		TriggerSource: "failure-test",
+	})
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	for i := 0; i < 3; i++ {
+		app.processJobQueueOnce()
+		app.processWorkQueueOnce()
+		time.Sleep(40 * time.Millisecond)
+	}
+
+	waitForCondition(t, 3*time.Second, func() bool {
+		item, getErr := app.getJobByID(context.Background(), job.JobID)
+		if getErr != nil {
+			return false
+		}
+		return item.Status == jobStatusFailed
+	}, "queued job failed")
+
+	var initialCount int
+	if err := app.db.QueryRow(`SELECT COUNT(*) FROM work_items WHERE job_id = ?`, job.JobID).Scan(&initialCount); err != nil {
+		t.Fatalf("count initial work items: %v", err)
+	}
+	if initialCount == 0 {
+		t.Fatalf("expected at least one queued work item")
+	}
+
+	for i := 0; i < 4; i++ {
+		app.processJobQueueOnce()
+		app.processWorkQueueOnce()
+		time.Sleep(40 * time.Millisecond)
+	}
+
+	var afterCount int
+	if err := app.db.QueryRow(`SELECT COUNT(*) FROM work_items WHERE job_id = ?`, job.JobID).Scan(&afterCount); err != nil {
+		t.Fatalf("count work items after reruns: %v", err)
+	}
+	if afterCount != initialCount {
+		t.Fatalf("expected failed job to stop requeueing work items (before=%d after=%d)", initialCount, afterCount)
+	}
+}
+
 type stubPlanner struct {
 	result agent.PlanResult
 	err    error

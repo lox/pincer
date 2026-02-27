@@ -517,7 +517,90 @@ func (a *App) processJobQueueOnce() {
 		return
 	}
 	for _, jobID := range jobIDs {
-		a.startJobRun(jobID)
+		a.enqueueRunnableJob(jobID)
+	}
+}
+
+func (a *App) enqueueRunnableJob(jobID string) {
+	jobID = strings.TrimSpace(jobID)
+	if jobID == "" {
+		return
+	}
+
+	ctx := context.Background()
+	job, err := a.getJobByID(ctx, jobID)
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			a.logger.Error("job runner failed to load job", "job_id", jobID, "error", err)
+		}
+		return
+	}
+	if job.Status != jobStatusRunning {
+		return
+	}
+
+	if failedErr, hasFailed, err := a.latestFailedWorkItemError(ctx, job.JobID); err != nil {
+		a.logger.Error("job runner failed to query failed work items", "job_id", job.JobID, "error", err)
+		return
+	} else if hasFailed {
+		if strings.TrimSpace(failedErr) == "" {
+			failedErr = "queued work item failed"
+		}
+		if err := a.setJobStatus(ctx, job, jobStatusFailed, failedErr, turnIDOrCurrent(job)); err != nil {
+			a.logger.Error("job runner failed to mark job failed after work item failure", "job_id", job.JobID, "error", err)
+		}
+		_ = a.postJobSummaryToOriginThread(ctx, job, jobStatusFailed, failedErr)
+		return
+	}
+
+	remaining := a.remainingJobWallTime(job, time.Now().UTC())
+	if remaining <= 0 {
+		_ = a.setJobStatus(ctx, job, jobStatusPausedBudget, "max_wall_time_exceeded", "")
+		_ = a.postJobSummaryToOriginThread(ctx, job, jobStatusPausedBudget, "The job reached its wall-time budget before completion.")
+		return
+	}
+
+	turnID := strings.TrimSpace(job.CurrentTurnID)
+	if turnID == "" {
+		turnID = newID("turn")
+		if err := a.setJobStatus(ctx, job, jobStatusRunning, "", turnID); err != nil {
+			a.logger.Error("job runner failed to set job turn", "job_id", job.JobID, "error", err)
+			return
+		}
+	}
+
+	workKind := workItemKindJob
+	triggerType := dbTriggerTypeToProto(job.TriggerTypeRaw)
+	if triggerType == protocolv1.TriggerType_TRIGGER_TYPE_UNSPECIFIED {
+		triggerType = protocolv1.TriggerType_JOB_WAKEUP
+	}
+	if triggerType == protocolv1.TriggerType_SCHEDULE_WAKEUP {
+		workKind = workItemKindSchedule
+	}
+
+	remainingMS := uint64(remaining / time.Millisecond)
+	if remainingMS == 0 {
+		remainingMS = 1
+	}
+
+	_, err = a.enqueueWorkItem(ctx, workItemInput{
+		Kind:             workKind,
+		TriggerType:      triggerType,
+		ThreadID:         job.ThreadID,
+		TurnID:           turnID,
+		Prompt:           job.Goal,
+		SourceID:         job.JobID,
+		JobID:            job.JobID,
+		MaxToolSteps:     job.MaxToolSteps,
+		MaxWallTimeMS:    remainingMS,
+		ProposalSource:   "job",
+		ProposalSourceID: job.ThreadID,
+	})
+	if err != nil {
+		if errors.Is(err, errWorkItemAlreadyQueued) {
+			return
+		}
+		a.logger.Error("job runner failed to enqueue work item", "job_id", job.JobID, "error", err)
 	}
 }
 
@@ -690,6 +773,36 @@ func (a *App) runJob(jobID string) {
 	if err := a.postJobSummaryToOriginThread(ctx, job, jobStatusCompleted, assistantSummary); err != nil {
 		a.logger.Warn("failed posting job completion summary", "job_id", job.JobID, "error", err)
 	}
+}
+
+func turnIDOrCurrent(job *jobRecord) string {
+	if job == nil {
+		return ""
+	}
+	return strings.TrimSpace(job.CurrentTurnID)
+}
+
+func (a *App) latestFailedWorkItemError(ctx context.Context, jobID string) (string, bool, error) {
+	jobID = strings.TrimSpace(jobID)
+	if jobID == "" {
+		return "", false, nil
+	}
+
+	var errText string
+	err := a.db.QueryRowContext(ctx, `
+		SELECT error
+		FROM work_items
+		WHERE job_id = ? AND status = ?
+		ORDER BY finished_at DESC, created_at DESC
+		LIMIT 1
+	`, jobID, workItemStatusFailed).Scan(&errText)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return errText, true, nil
 }
 
 func (a *App) applyJobContinuationResult(job *jobRecord, turnID string, result *turnExecutionResult, runErr error) {

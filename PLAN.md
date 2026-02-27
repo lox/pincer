@@ -18,7 +18,7 @@ The canonical control-plane wire contract is in `docs/protocol.md`.
 
 - [x] Phase 1: Secure core conveyor
 - [ ] Phase 2: Integration reads and draft flows
-- [ ] Phase 2.5: Autonomy foundations (workspace, memory, heartbeat, jobs, scheduler)
+- [x] Phase 2.5: Autonomy foundations (workspace, memory, heartbeat, jobs, scheduler)
 - [ ] Phase 3: Long-horizon autonomy and durable execution
 - [ ] Phase 4: Skills and controlled self-improvement
 - [ ] Phase 5: Production hardening and scale
@@ -88,7 +88,7 @@ Exit criteria:
 
 Goal:
 
-- [ ] Give the agent persistent memory, proactive behavior, and background execution capability.
+- [x] Give the agent persistent memory, proactive behavior, and background execution capability.
 
 Design: `docs/autonomy.md`
 
@@ -107,11 +107,11 @@ Steps:
 - [x] Implement `schedule_create`, `schedule_list`, `schedule_delete` tools.
 - [x] Implement scheduler service with `cron`/`interval`/`at` triggers and wakeup deduplication.
 - [x] Connect scheduler wakeups to job creation.
-- [ ] Define unified work item queue: all triggers (chat, heartbeat, schedule, spawn, future webhooks) produce same work item shape.
-- [ ] Add Agent Memory section to iOS Settings (view/edit MEMORY.md via RPC).
-- [ ] Add Heartbeat config to iOS Settings (toggle, interval, edit HEARTBEAT.md).
-- [ ] Surface heartbeat findings and job result messages in iOS Chat without adding thread-list clutter.
-- [ ] Populate iOS Jobs and Schedule tabs with real data.
+- [x] Define unified work item queue: all triggers (chat, heartbeat, schedule, spawn, future webhooks) produce same work item shape.
+- [x] Add Agent Memory section to iOS Settings (view/edit MEMORY.md via RPC).
+- [x] Add Heartbeat config to iOS Settings (toggle, interval, edit HEARTBEAT.md).
+- [x] Surface heartbeat findings and job result messages in iOS Chat without adding thread-list clutter.
+- [x] Populate iOS Jobs and Schedule tabs with real data.
 
 Exit criteria:
 
@@ -281,11 +281,13 @@ When memory and long-horizon primitives exist (Phase 4), adopt structured benchm
 - [x] Thread list navigation with `ListThreads`/`DeleteThread` RPCs, auto-generated thread titles, and `...` context menu (New Chat, Copy Thread ID, Delete Thread).
 - [x] Heartbeat service: configurable background ticker (`PINCER_HEARTBEAT_ENABLED`, `PINCER_HEARTBEAT_INTERVAL`), dedicated `thread_heartbeat`, and `HEARTBEAT_OK` no-op suppression.
 - [x] Spawn/jobs backend vertical slice: `spawn` READ tool, `JobsService` CRUD, background job runner with WAITING_APPROVAL/COMPLETED/CANCELLED/PAUSED_BUDGET transitions, approval-safe resume, and completion summaries posted to origin threads.
+- [x] Unified durable work item queue (`work_items` + `threads.active_turn_id`) with priority ordering (`chat > approval-resume > job > schedule > heartbeat`), restart requeue for in-flight items, and queue-routed turn execution for chat/heartbeat/jobs/schedules/approval-resume.
+- [x] System autonomy RPCs: `SystemService.GetAgentMemory`/`UpdateAgentMemory` and `SystemService.GetHeartbeatConfig`/`UpdateHeartbeatConfig`, with persisted heartbeat runtime settings.
+- [x] iOS autonomy surfaces: Agent Memory + Heartbeat settings editors, live Jobs/Schedules tabs (real backend data + quick actions), and Chat thread-list unread activity badges.
 - [ ] Phase 2 integrations continued.
 
 Next priority:
 
-- [ ] Phase 2.5: Scheduler + unified work queue + iOS autonomy surfaces (see `docs/autonomy.md`).
 - [ ] Test inline tool loop end-to-end with live Kagi API.
 - [x] Add web_fetch tool for raw URL content retrieval (with SSRF protections).
 - [x] Turn orchestration with pause/resume and bounded tool-loop planning (Phase 3 foundation).

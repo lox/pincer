@@ -54,12 +54,14 @@ const (
 	maxInlineToolSteps                = 10
 	defaultJobRunnerPollInterval      = 500 * time.Millisecond
 	defaultSchedulerPollInterval      = time.Second
+	defaultWorkQueuePollInterval      = 200 * time.Millisecond
 	defaultJobMaxToolSteps            = 20
 	maxJobMaxToolSteps                = 100
 	defaultJobMaxWallTime             = 30 * time.Minute
 	minJobMaxWallTime                 = time.Minute
 	maxJobMaxWallTime                 = 24 * time.Hour
 	maxConcurrentJobs                 = 5
+	maxConcurrentTurnWorkers          = 3
 	minScheduleInterval               = 15 * time.Minute
 	maxActiveSchedules                = 20
 	maxPendingWakeupsPerTick          = 50
@@ -106,12 +108,15 @@ type App struct {
 	googleClientSecret     string
 	ownerID                string
 	llmConfigured          bool
+	backgroundWorkersOff   bool
 	stopCh                 chan struct{}
 	doneCh                 chan struct{}
 	closeOnce              sync.Once
 	actionExecutorInterval time.Duration
 	heartbeatEnabled       bool
 	heartbeatInterval      time.Duration
+	heartbeatMu            sync.RWMutex
+	heartbeatConfigSignal  chan struct{}
 	eventAppendMu          sync.Mutex
 	eventSubsMu            sync.RWMutex
 	eventSubs              map[string]map[chan *threadEvent]struct{}
@@ -124,6 +129,9 @@ type App struct {
 	jobSem                 chan struct{}
 	jobRunnerInterval      time.Duration
 	schedulerInterval      time.Duration
+	workSem                chan struct{}
+	workSignal             chan struct{}
+	workRunnerInterval     time.Duration
 }
 
 type threadResponse struct {
@@ -300,7 +308,19 @@ func New(cfg AppConfig) (*App, error) {
 				return nil, fmt.Errorf("init planner: %w", err)
 			}
 
-			planner = agent.NewFallbackPlanner(openAIPlanner, staticPlanner)
+			planner = agent.NewFallbackPlannerWithErrorBehavior(
+				openAIPlanner,
+				staticPlanner,
+				func(err error) {
+					logger.Warn("primary planner failed, using fallback response", "error", err)
+				},
+				func(err error) (agent.PlanResult, bool) {
+					return agent.PlanResult{
+						AssistantMessage: fmt.Sprintf("Planner error: %v", err),
+						ProposedActions:  []agent.ProposedAction{},
+					}, true
+				},
+			)
 		}
 	}
 
@@ -313,10 +333,15 @@ func New(cfg AppConfig) (*App, error) {
 	if interval <= 0 {
 		interval = defaultActionExecutorPollInterval
 	}
-	heartbeatInterval := cfg.HeartbeatInterval
-	if heartbeatInterval <= 0 {
-		heartbeatInterval = defaultHeartbeatInterval
+	heartbeatEnabled := cfg.HeartbeatEnabled
+	heartbeatInterval := normalizeHeartbeatInterval(cfg.HeartbeatInterval)
+	loadedHeartbeatEnabled, loadedHeartbeatInterval, err := loadHeartbeatSettings(context.Background(), db, heartbeatEnabled, heartbeatInterval)
+	if err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("load heartbeat settings: %w", err)
 	}
+	heartbeatEnabled = loadedHeartbeatEnabled
+	heartbeatInterval = loadedHeartbeatInterval
 	schedulerInterval := defaultSchedulerPollInterval
 
 	webFetcher := cfg.WebFetcher
@@ -345,16 +370,21 @@ func New(cfg AppConfig) (*App, error) {
 		googleClientSecret:     cfg.GoogleClientSecret,
 		ownerID:                defaultOwnerID,
 		llmConfigured:          cfg.OpenRouterAPIKey != "" || cfg.Planner != nil,
+		backgroundWorkersOff:   cfg.DisableBackgroundWorker,
 		stopCh:                 make(chan struct{}),
 		doneCh:                 make(chan struct{}),
 		actionExecutorInterval: interval,
-		heartbeatEnabled:       cfg.HeartbeatEnabled,
+		heartbeatEnabled:       heartbeatEnabled,
 		heartbeatInterval:      heartbeatInterval,
+		heartbeatConfigSignal:  make(chan struct{}, 1),
 		eventSubs:              make(map[string]map[chan *threadEvent]struct{}),
 		workspaceTotalBytes:    workspaceTotalBytes,
 		jobSem:                 make(chan struct{}, maxConcurrentJobs),
 		jobRunnerInterval:      defaultJobRunnerPollInterval,
 		schedulerInterval:      schedulerInterval,
+		workSem:                make(chan struct{}, maxConcurrentTurnWorkers),
+		workSignal:             make(chan struct{}, 1),
+		workRunnerInterval:     defaultWorkQueuePollInterval,
 	}
 
 	if err := app.failRunningJobsOnStartup(context.Background()); err != nil {
@@ -364,6 +394,10 @@ func New(cfg AppConfig) (*App, error) {
 	if err := app.requeueInFlightWakeupsOnStartup(context.Background()); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("requeue wakeups on startup: %w", err)
+	}
+	if err := app.requeueInFlightWorkItemsOnStartup(context.Background()); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("requeue work items on startup: %w", err)
 	}
 
 	if !cfg.DisableBackgroundWorker {
@@ -1152,44 +1186,65 @@ func (a *App) maybeResumeTurn(actionID string) {
 	}
 
 	a.logger.Info("resuming turn after approval", "turn_id", turnID, "thread_id", threadID, "steps_used", stepsUsed, "source", source)
+	maxWallTimeMS := uint64(0)
+	if sourceJob != nil {
+		remaining := a.remainingJobWallTime(sourceJob, time.Now().UTC())
+		if remaining > 0 {
+			maxWallTimeMS = uint64(remaining / time.Millisecond)
+			if maxWallTimeMS == 0 {
+				maxWallTimeMS = 1
+			}
+		}
+	}
+
+	workItem := workItemInput{
+		Kind:             workItemKindApprovalResume,
+		TriggerType:      resumeTriggerType,
+		ThreadID:         threadID,
+		TurnID:           turnID,
+		Prompt:           userText,
+		SourceID:         turnID,
+		JobID:            "",
+		StartStep:        stepsUsed,
+		InputMessageID:   inputMessageID,
+		IsContinuation:   true,
+		MaxToolSteps:     maxSteps,
+		MaxWallTimeMS:    maxWallTimeMS,
+		ProposalSource:   proposalSource,
+		ProposalSourceID: proposalSourceID,
+	}
+	if sourceJob != nil {
+		workItem.JobID = sourceJob.JobID
+	}
 
 	go func() {
 		defer a.resumingTurns.Delete(turnID)
-		runCtx := context.Background()
-		cancel := context.CancelFunc(func() {})
-		if sourceJob != nil {
-			remaining := a.remainingJobWallTime(sourceJob, time.Now().UTC())
-			runCtx, cancel = context.WithTimeout(context.Background(), remaining)
-			a.jobCancels.Store(sourceJob.JobID, cancel)
-		}
-		defer cancel()
-		if sourceJob != nil {
-			defer a.jobCancels.Delete(sourceJob.JobID)
-		}
-
-		result, err := a.executeTurnFromStep(
-			runCtx,
-			threadID,
-			userText,
-			turnID,
-			resumeTriggerType,
-			stepsUsed,
-			inputMessageID,
-			true,
-			maxSteps,
-			proposalSource,
-			proposalSourceID,
-		)
-		if sourceJob != nil {
-			a.applyJobContinuationResult(sourceJob, turnID, result, err)
-			if err != nil {
-				a.logger.Error("job turn continuation failed", "job_id", sourceJob.JobID, "turn_id", turnID, "thread_id", threadID, "error", err)
+		item, err := a.enqueueWorkItem(context.Background(), workItem)
+		if err != nil {
+			if sourceJob != nil && !errors.Is(err, errWorkItemAlreadyQueued) {
+				_ = a.setJobStatus(context.Background(), sourceJob, jobStatusFailed, fmt.Sprintf("continuation enqueue failed: %v", err), turnID)
+				_ = a.postJobSummaryToOriginThread(context.Background(), sourceJob, jobStatusFailed, fmt.Sprintf("Continuation enqueue failed: %v", err))
+			}
+			if !errors.Is(err, errWorkItemAlreadyQueued) {
+				a.logger.Error("turn continuation enqueue failed", "turn_id", turnID, "thread_id", threadID, "error", err)
 			}
 			return
 		}
 
-		if err != nil {
-			a.logger.Error("turn continuation failed", "turn_id", turnID, "thread_id", threadID, "error", err)
+		waitCtx := context.Background()
+		waitCancel := func() {}
+		if sourceJob != nil {
+			remaining := a.remainingJobWallTime(sourceJob, time.Now().UTC())
+			if remaining > 0 {
+				waitCtx, waitCancel = context.WithTimeout(context.Background(), remaining)
+			}
+		} else {
+			waitCtx, waitCancel = context.WithTimeout(context.Background(), defaultJobMaxWallTime)
+		}
+		defer waitCancel()
+
+		if _, waitErr := a.waitForWorkItemTerminal(waitCtx, item.WorkItemID); waitErr != nil {
+			a.logger.Error("turn continuation failed", "turn_id", turnID, "thread_id", threadID, "error", waitErr)
 		}
 	}()
 }
@@ -1824,6 +1879,12 @@ func (a *App) runBackgroundWorkers() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		a.runWorkQueue()
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
 		a.runActionExecutor()
 	}()
 
@@ -1839,13 +1900,11 @@ func (a *App) runBackgroundWorkers() {
 		a.runSchedulerService()
 	}()
 
-	if a.heartbeatEnabled {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			a.runHeartbeatService()
-		}()
-	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		a.runHeartbeatService()
+	}()
 
 	wg.Wait()
 	close(a.doneCh)
@@ -1878,16 +1937,29 @@ func (a *App) runHeartbeatService() {
 		return
 	}
 
-	timer := time.NewTimer(a.heartbeatInterval)
+	_, interval := a.heartbeatConfig()
+	timer := time.NewTimer(interval)
 	defer timer.Stop()
 
 	for {
 		select {
 		case <-a.stopCh:
 			return
+		case <-a.heartbeatConfigSignal:
+			_, nextInterval := a.heartbeatConfig()
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(nextInterval)
 		case <-timer.C:
-			a.runHeartbeatTurn()
-			timer.Reset(a.heartbeatInterval)
+			enabled, nextInterval := a.heartbeatConfig()
+			if enabled {
+				a.runHeartbeatTurn()
+			}
+			timer.Reset(nextInterval)
 		}
 	}
 }
@@ -1911,11 +1983,27 @@ func (a *App) runHeartbeatTurn() {
 	}
 
 	turnID := newID("turn")
-	if _, err := a.executeTurn(context.Background(), threadID, prompt, turnID, protocolv1.TriggerType_HEARTBEAT); err != nil {
-		a.logger.Error("heartbeat turn failed", "thread_id", threadID, "turn_id", turnID, "error", err)
+	if _, err := a.enqueueWorkItem(context.Background(), workItemInput{
+		Kind:             workItemKindHeartbeat,
+		TriggerType:      protocolv1.TriggerType_HEARTBEAT,
+		ThreadID:         threadID,
+		TurnID:           turnID,
+		Prompt:           prompt,
+		SourceID:         threadID,
+		MaxToolSteps:     maxInlineToolSteps,
+		ProposalSource:   "chat",
+		ProposalSourceID: threadID,
+		SkipIfThreadBusy: true,
+	}); err != nil {
+		switch {
+		case errors.Is(err, errWorkItemSkippedBusy), errors.Is(err, errWorkItemAlreadyQueued):
+			a.logger.Debug("heartbeat turn skipped while thread busy", "thread_id", threadID, "turn_id", turnID)
+		default:
+			a.logger.Error("heartbeat turn enqueue failed", "thread_id", threadID, "turn_id", turnID, "error", err)
+		}
 		return
 	}
-	a.logger.Debug("heartbeat turn completed", "thread_id", threadID, "turn_id", turnID)
+	a.logger.Debug("heartbeat turn enqueued", "thread_id", threadID, "turn_id", turnID)
 }
 
 func (a *App) processActionQueueOnce() {
@@ -2179,7 +2267,8 @@ func migrate(db *sql.DB) error {
 			thread_id TEXT PRIMARY KEY,
 			user_id TEXT NOT NULL,
 			channel TEXT NOT NULL,
-			created_at TEXT NOT NULL
+			created_at TEXT NOT NULL,
+			active_turn_id TEXT NOT NULL DEFAULT ''
 		);`,
 		`CREATE TABLE IF NOT EXISTS messages(
 			message_id TEXT PRIMARY KEY,
@@ -2283,6 +2372,32 @@ func migrate(db *sql.DB) error {
 				processed_at TEXT NOT NULL,
 				UNIQUE(schedule_id, scheduled_for_utc)
 		);`,
+		`CREATE TABLE IF NOT EXISTS work_items(
+				work_item_id TEXT PRIMARY KEY,
+				kind TEXT NOT NULL,
+				priority INTEGER NOT NULL,
+				trigger_type TEXT NOT NULL,
+				thread_id TEXT NOT NULL,
+				turn_id TEXT NOT NULL,
+				prompt TEXT NOT NULL,
+				source_id TEXT NOT NULL,
+				job_id TEXT NOT NULL,
+				wakeup_event_id TEXT NOT NULL,
+				start_step INTEGER NOT NULL,
+				input_message_id TEXT NOT NULL,
+				is_continuation INTEGER NOT NULL,
+				max_tool_steps INTEGER NOT NULL,
+				max_wall_time_ms INTEGER NOT NULL,
+				proposal_source TEXT NOT NULL,
+				proposal_source_id TEXT NOT NULL,
+				status TEXT NOT NULL,
+				assistant_message TEXT NOT NULL,
+				first_action_id TEXT NOT NULL,
+				error TEXT NOT NULL,
+				created_at TEXT NOT NULL,
+				started_at TEXT NOT NULL,
+				finished_at TEXT NOT NULL
+		);`,
 		`CREATE TABLE IF NOT EXISTS domain_grants(
 				domain TEXT NOT NULL,
 				thread_id TEXT NOT NULL,
@@ -2298,9 +2413,14 @@ func migrate(db *sql.DB) error {
 			updated_at TEXT NOT NULL,
 			PRIMARY KEY(user_id, identity, provider)
 		);`,
+		`CREATE TABLE IF NOT EXISTS runtime_settings(
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL,
+				updated_at TEXT NOT NULL
+		);`,
 		`CREATE TABLE IF NOT EXISTS cached_images(
-			url_hash TEXT PRIMARY KEY,
-			original_url TEXT NOT NULL,
+				url_hash TEXT PRIMARY KEY,
+				original_url TEXT NOT NULL,
 			content_type TEXT NOT NULL,
 			data BLOB NOT NULL,
 			created_at TEXT NOT NULL
@@ -2310,6 +2430,9 @@ func migrate(db *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_schedules_enabled_next_run ON schedules(enabled, next_run_at);`,
 		`CREATE INDEX IF NOT EXISTS idx_wakeup_events_status_scheduled ON wakeup_events(status, scheduled_for_utc);`,
 		`CREATE INDEX IF NOT EXISTS idx_wakeup_events_schedule_created ON wakeup_events(schedule_id, created_at);`,
+		`CREATE INDEX IF NOT EXISTS idx_work_items_status_priority_created ON work_items(status, priority, created_at);`,
+		`CREATE INDEX IF NOT EXISTS idx_work_items_thread_status ON work_items(thread_id, status);`,
+		`CREATE INDEX IF NOT EXISTS idx_work_items_job_status ON work_items(job_id, status);`,
 	}
 	for _, stmt := range stmts {
 		if _, err := db.Exec(stmt); err != nil {
@@ -2322,6 +2445,7 @@ func migrate(db *sql.DB) error {
 		{"proposed_actions", "turn_id", "TEXT NOT NULL DEFAULT ''"},
 		{"threads", "title", "TEXT NOT NULL DEFAULT ''"},
 		{"threads", "updated_at", "TEXT NOT NULL DEFAULT ''"},
+		{"threads", "active_turn_id", "TEXT NOT NULL DEFAULT ''"},
 		{"jobs", "origin_thread_id", "TEXT NOT NULL DEFAULT ''"},
 		{"jobs", "trigger_type", "TEXT NOT NULL DEFAULT ''"},
 		{"jobs", "trigger_source_id", "TEXT NOT NULL DEFAULT ''"},

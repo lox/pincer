@@ -84,7 +84,7 @@ Connect-only scope:
 6. `ApprovalsService`: list pending/executed/rejected approvals and mutate approval state.
 7. `JobsService`: list/create/get/cancel jobs; job state updates stream via `EventsService`.
 8. `SchedulesService`: list/create/update/run-now schedules.
-9. `SystemService`: policy summary, audit listing, notifications listing.
+9. `SystemService`: policy summary, audit listing, notifications listing, agent memory read/write, and heartbeat config read/update.
 
 ### 5.2 REST-to-RPC Replacement Map
 
@@ -279,6 +279,10 @@ service SystemService {
   rpc GetPolicySummary(GetPolicySummaryRequest) returns (GetPolicySummaryResponse);
   rpc ListAudit(ListAuditRequest) returns (ListAuditResponse);
   rpc ListNotifications(ListNotificationsRequest) returns (ListNotificationsResponse);
+  rpc GetAgentMemory(GetAgentMemoryRequest) returns (GetAgentMemoryResponse);
+  rpc UpdateAgentMemory(UpdateAgentMemoryRequest) returns (UpdateAgentMemoryResponse);
+  rpc GetHeartbeatConfig(GetHeartbeatConfigRequest) returns (GetHeartbeatConfigResponse);
+  rpc UpdateHeartbeatConfig(UpdateHeartbeatConfigRequest) returns (UpdateHeartbeatConfigResponse);
 }
 
 message CreatePairingCodeRequest {}
@@ -769,6 +773,40 @@ message RunScheduleNowResponse {
   string wakeup_event_id = 2;
   string job_id = 3;
   string turn_id = 4;
+}
+
+message GetAgentMemoryRequest {}
+message GetAgentMemoryResponse {
+  string content = 1;
+  google.protobuf.Timestamp updated_at = 2;
+}
+
+message UpdateAgentMemoryRequest {
+  string content = 1;
+}
+message UpdateAgentMemoryResponse {
+  uint64 written_bytes = 1;
+  google.protobuf.Timestamp updated_at = 2;
+}
+
+message GetHeartbeatConfigRequest {}
+message GetHeartbeatConfigResponse {
+  bool enabled = 1;
+  uint32 interval_minutes = 2;
+  string tasks_markdown = 3;
+  google.protobuf.Timestamp tasks_updated_at = 4;
+}
+
+message UpdateHeartbeatConfigRequest {
+  bool enabled = 1;
+  uint32 interval_minutes = 2;
+  string tasks_markdown = 3;
+}
+message UpdateHeartbeatConfigResponse {
+  bool enabled = 1;
+  uint32 interval_minutes = 2;
+  string tasks_markdown = 3;
+  google.protobuf.Timestamp tasks_updated_at = 4;
 }
 
 message GetPolicySummaryRequest {}

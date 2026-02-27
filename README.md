@@ -58,6 +58,7 @@ Go Backend (single binary)
 - **Spawned background jobs** — the READ-classified `spawn` tool creates background jobs that run through the same planner/tool and approval conveyor, publish job states (`RUNNING`, `WAITING_APPROVAL`, `COMPLETED`, `FAILED`, `PAUSED_BUDGET`, `CANCELLED`), and post completion summaries back to originating chat threads.
 - **Autonomous schedules** — READ-classified `schedule_create`, `schedule_list`, and `schedule_delete` tools create durable `cron`/`interval`/`at` schedules with dedicated schedule threads.
 - **Scheduler wakeups with dedupe** — a restart-safe scheduler worker persists wakeups, deduplicates when a prior schedule run is still active, and routes wakeups into the existing job pipeline (`SCHEDULE_WAKEUP -> job -> approval conveyor`).
+- **Unified durable work queue** — all turn triggers (chat, heartbeat, job, schedule, approval-resume) enqueue into `work_items` and execute via the same orchestrator with deterministic priority (`chat > approval-resume > job > schedule > heartbeat`) and one active turn per thread (`threads.active_turn_id`).
 - **Assistant thinking** — model reasoning (`reasoning_content`) is captured and streamed to the iOS app as `AssistantThinkingDelta` events, rendered as expandable thinking bubbles in the chat timeline.
 - **iOS control app** — SwiftUI chat with full markdown rendering (via Textual), approvals tab, device/session management, and settings.
 - **Audit log** — every side-effect transition (`proposed → approved → executed`) is recorded and queryable.

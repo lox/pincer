@@ -1,6 +1,6 @@
 # Pincer Autonomy Mechanisms
 
-Status: Partially implemented (workspace + memory + heartbeat + jobs + scheduler backend complete; iOS autonomy surfaces pending)
+Status: Implemented through Phase 2.5 (workspace + memory + heartbeat + jobs + scheduler + unified work queue backend, plus iOS autonomy surfaces)
 Date: 2026-02-27
 References: `docs/spec.md` §11, `docs/ios-ui-plan.md`, `PLAN.md`
 
@@ -363,7 +363,7 @@ All autonomy mechanisms preserve Pincer's security model:
 4. **Schedules cannot bypass policy.** A cron job that fires at 3am still requires approval for external actions — the approval queues and waits.
 5. **All triggers use the same pipeline.** `triggered turns must use the same proposal pipeline` (spec §8, cross-phase non-negotiable).
 6. **Soft limits prevent runaway autonomy.** Max concurrent jobs, max active schedules, min schedule interval, and global worker limits are enforced as config values. The agent gets errors and adapts; it doesn't need approval to hit them.
-7. **Restart safety.** In-flight jobs are marked `FAILED_RESTART` on process startup. No silent resumption of partially-completed work.
+7. **Restart safety.** In-flight jobs are marked `FAILED_RESTART` and in-flight `work_items` are requeued on process startup. No silent, unaudited side-effect resumption.
 
 ## 10. Implementation sequence
 
@@ -410,3 +410,13 @@ Implemented (backend):
 2. Scheduler service runs as a background worker with SQLite-persisted schedules and wakeup deduplication.
 3. Scheduler wakeups are routed into the existing job creation path (`SCHEDULE_WAKEUP` trigger).
 4. Restart safety is covered by persisted wakeups and requeue of in-flight wakeups on startup.
+
+### 10.6 Unified work queue
+
+Implemented (backend):
+
+1. A durable `work_items` table now backs turn execution for chat, heartbeat, job/schedule-triggered work, and approval-resume continuations.
+2. Queue priority is deterministic: `chat > approval-resume > job > schedule > heartbeat`.
+3. Single active turn per thread is enforced with `threads.active_turn_id`; chat/job work queues behind active turns, while heartbeat/schedule triggers are deduplicated/skipped when busy.
+4. Queue workers execute turns only through the existing orchestrator (`executeTurnFromStep`), preserving the same policy/approval/idempotency/audit conveyor.
+5. Restart safety requeues `PROCESSING` work items and clears stale thread turn locks.
