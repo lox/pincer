@@ -50,7 +50,6 @@ const (
 	maxBashExecTimeout                = 15 * time.Minute
 	maxBashOutputBytes                = 8 * 1024
 	maxBashSystemMessageChars         = 4 * 1024
-	maxToolResultMessageChars         = 4 * 1024
 	maxInlineToolSteps                = 10
 	defaultChatTurnMaxWallTime        = 2 * time.Minute
 	defaultJobRunnerPollInterval      = 500 * time.Millisecond
@@ -880,15 +879,24 @@ func (a *App) executeApprovedAction(actionID string) error {
 	} else if isBashTool(item.Tool) {
 		executionID := newID("exec")
 		displayCommand := strings.TrimSpace(item.ArgsJSON)
+		bashArgsJSON := item.ArgsJSON
 		var parsedArgs bashActionArgs
-		if err := json.Unmarshal([]byte(item.ArgsJSON), &parsedArgs); err == nil && strings.TrimSpace(parsedArgs.Command) != "" {
-			displayCommand = strings.TrimSpace(parsedArgs.Command)
+		if err := json.Unmarshal([]byte(item.ArgsJSON), &parsedArgs); err == nil {
+			if strings.TrimSpace(parsedArgs.Command) != "" {
+				displayCommand = strings.TrimSpace(parsedArgs.Command)
+			}
+			if strings.TrimSpace(parsedArgs.CWD) == "" {
+				parsedArgs.CWD = a.workspaceRoot
+				if encoded, marshalErr := json.Marshal(parsedArgs); marshalErr == nil {
+					bashArgsJSON = string(encoded)
+				}
+			}
 		}
 		if sourceUsesThread {
 			a.emitToolExecutionStarted(streamCtx, item.SourceID, "", executionID, item.ActionID, item.Tool, displayCommand)
 		}
 
-		result := executeBashActionStreaming(item.ArgsJSON, func(stream protocolv1.OutputStream, chunk []byte, offset uint64) {
+		result := executeBashActionStreaming(bashArgsJSON, func(stream protocolv1.OutputStream, chunk []byte, offset uint64) {
 			if sourceUsesThread {
 				a.emitToolExecutionOutputDelta(streamCtx, item.SourceID, "", executionID, stream, chunk, offset)
 			}
@@ -997,12 +1005,7 @@ func (a *App) executeApprovedAction(actionID string) error {
 			return err
 		}
 		// Also persist as internal message so the planner sees the result on continuation.
-		// Truncate to keep planner context manageable.
-		plannerResult := executionSystemMsg
-		if len(plannerResult) > maxToolResultMessageChars {
-			plannerResult = plannerResult[:maxToolResultMessageChars] + "\n[truncated]"
-		}
-		toolResultMsg := fmt.Sprintf("[tool_result:%s] %s", item.Tool, plannerResult)
+		toolResultMsg := fmt.Sprintf("[tool_result:%s] %s", item.Tool, executionSystemMsg)
 		if _, err := finalizeTx.Exec(`
 			INSERT INTO messages(message_id, thread_id, role, content, created_at)
 			VALUES(?, ?, 'internal', ?, ?)

@@ -618,6 +618,79 @@ func TestExecuteApprovedRunBashActionWritesCommandOutputToChat(t *testing.T) {
 	}
 }
 
+func TestExecuteApprovedRunBashActionDefaultsCWDToWorkspace(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "pincer-test.db")
+	app, err := New(AppConfig{
+		DBPath:                  dbPath,
+		WorkspaceRoot:           filepath.Join(t.TempDir(), "workspace"),
+		DisableBackgroundWorker: true,
+	})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = app.Close()
+	})
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	expiresAt := time.Now().UTC().Add(24 * time.Hour).Format(time.RFC3339Nano)
+	threadID := "thr_bash_workspace"
+
+	if _, err := app.db.Exec(`
+		INSERT INTO threads(thread_id, user_id, channel, created_at)
+		VALUES(?, ?, 'ios', ?)
+	`, threadID, defaultOwnerID, now); err != nil {
+		t.Fatalf("insert thread: %v", err)
+	}
+
+	workspaceFile := filepath.Join(app.workspaceRoot, "memory", "delete-me.md")
+	if err := os.MkdirAll(filepath.Dir(workspaceFile), 0o755); err != nil {
+		t.Fatalf("create workspace file dir: %v", err)
+	}
+	if err := os.WriteFile(workspaceFile, []byte("delete me"), 0o644); err != nil {
+		t.Fatalf("seed workspace file: %v", err)
+	}
+
+	if err := insertApprovedActionWithFieldsForTest(
+		app,
+		"act_bash_workspace",
+		"idem_bash_workspace",
+		"chat",
+		threadID,
+		"run_bash",
+		`{"command":"rm memory/delete-me.md && echo done"}`,
+		"HIGH",
+		expiresAt,
+		now,
+	); err != nil {
+		t.Fatalf("insert bash action: %v", err)
+	}
+
+	if err := app.executeApprovedAction("act_bash_workspace"); err != nil {
+		t.Fatalf("execute bash action: %v", err)
+	}
+
+	if _, err := os.Stat(workspaceFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected workspace file to be deleted, stat err=%v", err)
+	}
+
+	var systemContent string
+	if err := app.db.QueryRow(`
+		SELECT content
+		FROM messages
+		WHERE thread_id = ? AND role = 'system'
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, threadID).Scan(&systemContent); err != nil {
+		t.Fatalf("load system message: %v", err)
+	}
+	if !strings.Contains(systemContent, "CWD: "+app.workspaceRoot) {
+		t.Fatalf("expected system message to include workspace cwd %q, got %q", app.workspaceRoot, systemContent)
+	}
+}
+
 func TestMaybeResumeTurnChatResetsContinuationBudget(t *testing.T) {
 	t.Parallel()
 
