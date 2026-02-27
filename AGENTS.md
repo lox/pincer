@@ -209,11 +209,18 @@ XCUITests use the accessibility identifiers defined in `ios/Pincer/ContentView.s
 
 ### 11.6 Debugging threads
 
-Use the `thread` subcommand to inspect a thread's messages:
+Thread IDs in Pincer look like `thr_<hex>` (example: `thr_10bcf584f4556c77`).
+
+Use the `thread` subcommand to inspect a Pincer thread's messages:
 
 - `go run ./cmd/pincer thread <thread-id>` — render as markdown
 - `go run ./cmd/pincer thread <thread-id> --format=json` — structured JSON
 - `go run ./cmd/pincer thread <thread-id> --all` — include internal messages
+
+Notes:
+
+- `--all` is required when you need tool-call/tool-result messages (`role=internal`).
+- Amp thread IDs (`T-...`) are a different system from Pincer thread IDs (`thr_...`). Use `go run ./cmd/pincer thread ...` for Pincer threads.
 
 ### 11.7 Environment overrides
 

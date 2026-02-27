@@ -618,6 +618,217 @@ func TestExecuteApprovedRunBashActionWritesCommandOutputToChat(t *testing.T) {
 	}
 }
 
+func TestMaybeResumeTurnChatResetsContinuationBudget(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "pincer-test.db")
+	app, err := New(AppConfig{
+		DBPath:                  dbPath,
+		WorkspaceRoot:           filepath.Join(t.TempDir(), "workspace"),
+		DisableBackgroundWorker: true,
+	})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = app.Close()
+	})
+
+	threadID := "thr_budget_chat"
+	turnID := "turn_budget_chat"
+	actionID := "act_budget_chat"
+	now := time.Now().UTC()
+	nowRaw := now.Format(time.RFC3339Nano)
+	expiresAt := now.Add(24 * time.Hour).Format(time.RFC3339Nano)
+
+	if _, err := app.db.Exec(`
+		INSERT INTO threads(thread_id, user_id, channel, created_at)
+		VALUES(?, ?, 'ios', ?)
+	`, threadID, defaultOwnerID, nowRaw); err != nil {
+		t.Fatalf("insert thread: %v", err)
+	}
+
+	if _, err := app.db.Exec(`
+		INSERT INTO proposed_actions(
+			action_id, user_id, source, source_id, tool, args_json, risk_class,
+			justification, idempotency_key, status, rejection_reason, expires_at,
+			created_at, turn_id
+		) VALUES(?, ?, 'chat', ?, 'run_bash', ?, 'HIGH', ?, ?, 'EXECUTED', '', ?, ?, ?)
+	`, actionID, defaultOwnerID, threadID, `{"command":"echo budget"}`, "budget test", "idem_budget_chat", expiresAt, nowRaw, turnID); err != nil {
+		t.Fatalf("insert executed action: %v", err)
+	}
+
+	if _, err := app.appendThreadEvent(context.Background(), &protocolv1.ThreadEvent{
+		ThreadId:     threadID,
+		TurnId:       turnID,
+		Source:       protocolv1.EventSource_SYSTEM,
+		ContentTrust: protocolv1.ContentTrust_TRUSTED_SYSTEM,
+		OccurredAt:   timestamppb.New(now),
+		Payload: &protocolv1.ThreadEvent_TurnStarted{TurnStarted: &protocolv1.TurnStarted{
+			TriggerType: protocolv1.TriggerType_CHAT_MESSAGE,
+		}},
+	}); err != nil {
+		t.Fatalf("append turn started event: %v", err)
+	}
+
+	for i := 0; i < maxInlineToolSteps; i++ {
+		createdAt := now.Add(time.Second + time.Duration(i)*time.Millisecond).Format(time.RFC3339Nano)
+		if _, err := app.db.Exec(`
+			INSERT INTO messages(message_id, thread_id, role, content, created_at)
+			VALUES(?, ?, 'internal', ?, ?)
+		`, newID("msg"), threadID, fmt.Sprintf("[tool_call:read_file] {\"path\":\"memory/%d.md\"}", i), createdAt); err != nil {
+			t.Fatalf("insert internal tool call message %d: %v", i, err)
+		}
+	}
+
+	app.maybeResumeTurn(actionID)
+
+	waitForCondition(t, time.Second, func() bool {
+		var continuationCount int
+		if err := app.db.QueryRow(`
+			SELECT COUNT(*)
+			FROM work_items
+			WHERE turn_id = ? AND kind = 'approval_resume'
+		`, turnID).Scan(&continuationCount); err != nil {
+			return false
+		}
+		return continuationCount > 0
+	}, "expected approval_resume work item for chat continuation")
+
+	var startStep int
+	var maxSteps int
+	var maxWallTimeMS int64
+	if err := app.db.QueryRow(`
+		SELECT start_step, max_tool_steps, max_wall_time_ms
+		FROM work_items
+		WHERE turn_id = ? AND kind = 'approval_resume'
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, turnID).Scan(&startStep, &maxSteps, &maxWallTimeMS); err != nil {
+		t.Fatalf("load approval_resume work item: %v", err)
+	}
+	if startStep != 0 {
+		t.Fatalf("expected chat continuation start_step to reset to 0, got %d", startStep)
+	}
+	if maxSteps != maxInlineToolSteps {
+		t.Fatalf("expected chat continuation max_tool_steps=%d, got %d", maxInlineToolSteps, maxSteps)
+	}
+	wantWallMS := int64(defaultChatTurnMaxWallTime / time.Millisecond)
+	if maxWallTimeMS != wantWallMS {
+		t.Fatalf("expected chat continuation max_wall_time_ms=%d, got %d", wantWallMS, maxWallTimeMS)
+	}
+}
+
+func TestMaybeResumeTurnJobStopsWhenMaxToolStepsExhausted(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "pincer-test.db")
+	app, err := New(AppConfig{
+		DBPath:                  dbPath,
+		WorkspaceRoot:           filepath.Join(t.TempDir(), "workspace"),
+		DisableBackgroundWorker: true,
+	})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = app.Close()
+	})
+
+	originThreadID := "thr_budget_origin"
+	jobThreadID := "thr_budget_job"
+	turnID := "turn_budget_job"
+	actionID := "act_budget_job"
+	jobID := "job_budget_job"
+	now := time.Now().UTC()
+	nowRaw := now.Format(time.RFC3339Nano)
+	expiresAt := now.Add(24 * time.Hour).Format(time.RFC3339Nano)
+
+	for _, threadID := range []string{originThreadID, jobThreadID} {
+		if _, err := app.db.Exec(`
+			INSERT INTO threads(thread_id, user_id, channel, created_at)
+			VALUES(?, ?, 'ios', ?)
+		`, threadID, defaultOwnerID, nowRaw); err != nil {
+			t.Fatalf("insert thread %s: %v", threadID, err)
+		}
+	}
+
+	if _, err := app.db.Exec(`
+		INSERT INTO jobs(
+			job_id, user_id, goal, status, thread_id, origin_thread_id,
+			trigger_type, trigger_source_id, max_tool_steps, max_wall_time_ms,
+			current_turn_id, started_at, last_error, created_at, updated_at
+		) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, jobID, defaultOwnerID, "budget test", jobStatusWaitingApproval, jobThreadID, originThreadID,
+		protocolv1.TriggerType_JOB_WAKEUP.String(), originThreadID, 3, int64(defaultJobMaxWallTime/time.Millisecond),
+		turnID, nowRaw, "", nowRaw, nowRaw); err != nil {
+		t.Fatalf("insert job: %v", err)
+	}
+
+	if _, err := app.db.Exec(`
+		INSERT INTO proposed_actions(
+			action_id, user_id, source, source_id, tool, args_json, risk_class,
+			justification, idempotency_key, status, rejection_reason, expires_at,
+			created_at, turn_id
+		) VALUES(?, ?, 'job', ?, 'run_bash', ?, 'HIGH', ?, ?, 'EXECUTED', '', ?, ?, ?)
+	`, actionID, defaultOwnerID, jobThreadID, `{"command":"echo budget"}`, "budget test", "idem_budget_job", expiresAt, nowRaw, turnID); err != nil {
+		t.Fatalf("insert executed job action: %v", err)
+	}
+
+	if _, err := app.appendThreadEvent(context.Background(), &protocolv1.ThreadEvent{
+		ThreadId:     jobThreadID,
+		TurnId:       turnID,
+		Source:       protocolv1.EventSource_SYSTEM,
+		ContentTrust: protocolv1.ContentTrust_TRUSTED_SYSTEM,
+		OccurredAt:   timestamppb.New(now),
+		Payload: &protocolv1.ThreadEvent_TurnStarted{TurnStarted: &protocolv1.TurnStarted{
+			TriggerType: protocolv1.TriggerType_JOB_WAKEUP,
+		}},
+	}); err != nil {
+		t.Fatalf("append job turn started event: %v", err)
+	}
+
+	for i := 0; i < 3; i++ {
+		createdAt := now.Add(time.Second + time.Duration(i)*time.Millisecond).Format(time.RFC3339Nano)
+		if _, err := app.db.Exec(`
+			INSERT INTO messages(message_id, thread_id, role, content, created_at)
+			VALUES(?, ?, 'internal', ?, ?)
+		`, newID("msg"), jobThreadID, fmt.Sprintf("[tool_call:read_file] {\"path\":\"memory/%d.md\"}", i), createdAt); err != nil {
+			t.Fatalf("insert internal job tool call %d: %v", i, err)
+		}
+	}
+
+	app.maybeResumeTurn(actionID)
+
+	var continuationCount int
+	if err := app.db.QueryRow(`
+		SELECT COUNT(*)
+		FROM work_items
+		WHERE turn_id = ? AND kind = 'approval_resume'
+	`, turnID).Scan(&continuationCount); err != nil {
+		t.Fatalf("count approval_resume work items: %v", err)
+	}
+	if continuationCount != 0 {
+		t.Fatalf("expected no approval_resume work item when job budget is exhausted, got %d", continuationCount)
+	}
+
+	var status string
+	var lastError string
+	if err := app.db.QueryRow(`
+		SELECT status, last_error
+		FROM jobs
+		WHERE job_id = ?
+	`, jobID).Scan(&status, &lastError); err != nil {
+		t.Fatalf("load job status: %v", err)
+	}
+	if status != jobStatusPausedBudget {
+		t.Fatalf("expected job status %q, got %q", jobStatusPausedBudget, status)
+	}
+	if lastError != "max_tool_steps_exhausted" {
+		t.Fatalf("expected job last_error max_tool_steps_exhausted, got %q", lastError)
+	}
+}
+
 func TestExecuteBashActionStreamingHonorsTimeoutMs(t *testing.T) {
 	t.Parallel()
 

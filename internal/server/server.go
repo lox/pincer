@@ -52,6 +52,7 @@ const (
 	maxBashSystemMessageChars         = 4 * 1024
 	maxToolResultMessageChars         = 4 * 1024
 	maxInlineToolSteps                = 10
+	defaultChatTurnMaxWallTime        = 2 * time.Minute
 	defaultJobRunnerPollInterval      = 500 * time.Millisecond
 	defaultSchedulerPollInterval      = time.Second
 	defaultWorkQueuePollInterval      = 200 * time.Millisecond
@@ -1114,7 +1115,8 @@ func (a *App) maybeResumeTurn(actionID string) {
 	}
 
 	stepsUsed := internalToolMessages + resolvedActions
-	if stepsUsed >= maxSteps {
+	startStep := stepsUsed
+	if source == "job" && stepsUsed >= maxSteps {
 		// Budget exhausted — complete the turn without re-planning.
 		_, _ = a.appendThreadEvent(context.Background(), &protocolv1.ThreadEvent{
 			ThreadId:     threadID,
@@ -1129,6 +1131,11 @@ func (a *App) maybeResumeTurn(actionID string) {
 		}
 		a.resumingTurns.Delete(turnID)
 		return
+	}
+	if source == "chat" {
+		// Start a fresh continuation budget for user-driven chat turns so earlier
+		// exploratory tool calls do not prevent post-approval follow-up.
+		startStep = 0
 	}
 
 	// Load the message text that initiated THIS turn, not a later message.
@@ -1186,7 +1193,7 @@ func (a *App) maybeResumeTurn(actionID string) {
 	}
 
 	a.logger.Info("resuming turn after approval", "turn_id", turnID, "thread_id", threadID, "steps_used", stepsUsed, "source", source)
-	maxWallTimeMS := uint64(0)
+	maxWallTimeMS := uint64(defaultChatTurnMaxWallTime / time.Millisecond)
 	if sourceJob != nil {
 		remaining := a.remainingJobWallTime(sourceJob, time.Now().UTC())
 		if remaining > 0 {
@@ -1205,7 +1212,7 @@ func (a *App) maybeResumeTurn(actionID string) {
 		Prompt:           userText,
 		SourceID:         turnID,
 		JobID:            "",
-		StartStep:        stepsUsed,
+		StartStep:        startStep,
 		InputMessageID:   inputMessageID,
 		IsContinuation:   true,
 		MaxToolSteps:     maxSteps,
@@ -1239,7 +1246,7 @@ func (a *App) maybeResumeTurn(actionID string) {
 				waitCtx, waitCancel = context.WithTimeout(context.Background(), remaining)
 			}
 		} else {
-			waitCtx, waitCancel = context.WithTimeout(context.Background(), defaultJobMaxWallTime)
+			waitCtx, waitCancel = context.WithTimeout(context.Background(), defaultChatTurnMaxWallTime)
 		}
 		defer waitCancel()
 

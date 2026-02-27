@@ -457,6 +457,7 @@ func (a *App) SendTurn(ctx context.Context, req *connect.Request[protocolv1.Send
 		Prompt:           strings.TrimSpace(req.Msg.GetUserText()),
 		SourceID:         threadID,
 		MaxToolSteps:     maxInlineToolSteps,
+		MaxWallTimeMS:    uint64(defaultChatTurnMaxWallTime / time.Millisecond),
 		ProposalSource:   "chat",
 		ProposalSourceID: threadID,
 	})
@@ -515,6 +516,7 @@ func (a *App) StartTurn(ctx context.Context, req *connect.Request[protocolv1.Sta
 		Prompt:           strings.TrimSpace(req.Msg.GetUserText()),
 		SourceID:         threadID,
 		MaxToolSteps:     maxInlineToolSteps,
+		MaxWallTimeMS:    uint64(defaultChatTurnMaxWallTime / time.Millisecond),
 		ProposalSource:   "chat",
 		ProposalSourceID: threadID,
 	})
