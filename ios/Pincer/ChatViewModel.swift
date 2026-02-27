@@ -106,12 +106,11 @@ final class ChatViewModel: ObservableObject {
         guard let threadID else { return }
 
         let snapshot = try await client.fetchMessagesSnapshot(threadID: threadID)
-        // Initialize with lastSequence: 0 so the watch loop replays all persisted
-        // thread events from the beginning, reconstructing tool call activities
-        // and streaming output that aren't stored as messages.
+        // Resume from the latest snapshot sequence so historical thread content
+        // renders immediately instead of replaying old events as live updates.
         threadEventState = ThreadEventReducerState(
             messages: snapshot.messages,
-            lastSequence: 0
+            lastSequence: snapshot.lastSequence
         )
         rebuildTimeline()
 

@@ -346,9 +346,11 @@ private struct ChatDetailView: View {
                     }
                 }
                 .onChange(of: model.messages.map(\.messageID)) { oldIDs, _ in
-                    if model.isInitialLoadComplete {
-                        handleMessageInsertionScroll(oldIDs: oldIDs, reader: reader)
+                    if !model.isInitialLoadComplete {
+                        scrollToBottom(reader, animated: false)
+                        return
                     }
+                    handleMessageInsertionScroll(oldIDs: oldIDs, reader: reader)
                 }
             }
 
