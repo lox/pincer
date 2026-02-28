@@ -128,6 +128,7 @@ type OpenAIPlannerConfig struct {
 	UserAgent     string
 	SOULPath      string
 	LawsPath      string
+	Timezone      string // IANA timezone name (e.g. "Australia/Sydney"); defaults to UTC
 }
 
 type OpenAIPlanner struct {
@@ -140,6 +141,7 @@ type OpenAIPlanner struct {
 	userAgent     string
 	lawsPath      string
 	soulPath      string
+	timezone      *time.Location
 	memoryCacheMu sync.Mutex
 	memoryCache   memoryContextCache
 }
@@ -186,6 +188,15 @@ func NewOpenAIPlanner(cfg OpenAIPlannerConfig) (*OpenAIPlanner, error) {
 		}
 	}
 
+	tz := time.UTC
+	if tzName := strings.TrimSpace(cfg.Timezone); tzName != "" {
+		loc, err := time.LoadLocation(tzName)
+		if err != nil {
+			return nil, fmt.Errorf("invalid timezone %q: %w", tzName, err)
+		}
+		tz = loc
+	}
+
 	return &OpenAIPlanner{
 		apiKey:        strings.TrimSpace(cfg.APIKey),
 		baseURL:       baseURL,
@@ -196,6 +207,7 @@ func NewOpenAIPlanner(cfg OpenAIPlannerConfig) (*OpenAIPlanner, error) {
 		userAgent:     strings.TrimSpace(cfg.UserAgent),
 		lawsPath:      lawsPath,
 		soulPath:      soulPath,
+		timezone:      tz,
 	}, nil
 }
 
@@ -607,6 +619,11 @@ func (p *OpenAIPlanner) planWithModel(ctx context.Context, model string, req Pla
 				soulPrompt,
 		})
 	}
+	now := time.Now().In(p.timezone)
+	messages = append(messages, openAIMessage{
+		Role:    "system",
+		Content: fmt.Sprintf("Current date and time: %s", now.Format("Mon, 02 Jan 2006 3:04 PM MST")),
+	})
 	memoryContext, err := p.GetMemoryContext()
 	if err != nil {
 		return PlanResult{}, fmt.Errorf("load memory context: %w", err)

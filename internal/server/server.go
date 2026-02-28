@@ -87,6 +87,7 @@ type AppConfig struct {
 	Planner                 agent.Planner
 	WebFetcher              *agent.WebFetcher
 	ImageDescriber          *agent.ImageDescriber
+	Timezone                string
 	ActionExecutorInterval  time.Duration
 	HeartbeatEnabled        bool
 	HeartbeatInterval       time.Duration
@@ -301,6 +302,7 @@ func New(cfg AppConfig) (*App, error) {
 				FallbackModel: cfg.ModelFallback,
 				WorkspaceRoot: workspaceRoot,
 				UserAgent:     "pincer/0.1",
+				Timezone:      cfg.Timezone,
 			})
 			if err != nil {
 				_ = db.Close()

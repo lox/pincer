@@ -46,6 +46,7 @@ type serveCmd struct {
 	ModelFallback      string `name:"model-fallback" help:"Fallback model ID." env:"PINCER_MODEL_FALLBACK"`
 	GoogleClientID     string `name:"google-client-id" help:"Google OAuth client ID for token refresh." env:"GOOGLE_CLIENT_ID"`
 	GoogleClientSecret string `name:"google-client-secret" help:"Google OAuth client secret for token refresh." env:"GOOGLE_CLIENT_SECRET"`
+	Timezone           string `name:"timezone" help:"IANA timezone for date/time context (e.g. Australia/Sydney)." env:"PINCER_TIMEZONE" default:"Australia/Sydney"`
 	HeartbeatEnabled   bool   `name:"heartbeat-enabled" help:"Enable periodic heartbeat turns." env:"PINCER_HEARTBEAT_ENABLED" default:"true"`
 	HeartbeatInterval  int    `name:"heartbeat-interval" help:"Heartbeat interval in minutes (minimum 15 when enabled)." env:"PINCER_HEARTBEAT_INTERVAL" default:"30"`
 	TSHostname         string `name:"ts-hostname" help:"Tailscale hostname for tsnet." env:"TS_HOSTNAME" default:"pincer"`
@@ -204,6 +205,7 @@ func (cmd *serveCmd) Run(globals *cli) error {
 		GoogleClientSecret: cmd.GoogleClientSecret,
 		ModelPrimary:       cmd.ModelPrimary,
 		ModelFallback:      cmd.ModelFallback,
+		Timezone:           cmd.Timezone,
 		HeartbeatEnabled:   cmd.HeartbeatEnabled,
 		HeartbeatInterval:  heartbeatInterval,
 		Logger:             logger.With("component", "server"),
