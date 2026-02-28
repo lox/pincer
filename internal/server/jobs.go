@@ -367,6 +367,12 @@ func (a *App) postJobSummaryToOriginThread(ctx context.Context, job *jobRecord, 
 		return err
 	}
 	_, _ = a.db.ExecContext(ctx, `UPDATE threads SET updated_at = ? WHERE thread_id = ?`, now, originThreadID)
+	_, _ = a.appendThreadEvent(ctx, &protocolv1.ThreadEvent{
+		ThreadId:     originThreadID,
+		Source:       protocolv1.EventSource_SYSTEM,
+		ContentTrust: protocolv1.ContentTrust_TRUSTED_SYSTEM,
+		Payload:      &protocolv1.ThreadEvent_StreamGap{StreamGap: &protocolv1.StreamGap{}},
+	})
 	return nil
 }
 

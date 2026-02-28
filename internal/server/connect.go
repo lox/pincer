@@ -2077,7 +2077,7 @@ func (a *App) loadThreadMessages(ctx context.Context, threadID string, offset in
 	rows, err := a.db.QueryContext(ctx, `
 		SELECT message_id, role, content, created_at
 		FROM messages
-		WHERE thread_id = ? AND role != 'internal'
+		WHERE thread_id = ? AND (role != 'internal' OR (role = 'internal' AND content LIKE '[tool_result:%'))
 		ORDER BY created_at ASC
 		LIMIT 500 OFFSET ?
 	`, threadID, offset)
@@ -2095,6 +2095,10 @@ func (a *App) loadThreadMessages(ctx context.Context, threadID string, offset in
 		if err := rows.Scan(&messageID, &role, &content, &createdAtRaw); err != nil {
 			return nil, fmt.Errorf("scan message: %w", err)
 		}
+		if role == "internal" {
+			role = "tool"
+			content = reformatInternalToolMessage(content)
+		}
 		items = append(items, &protocolv1.ThreadMessage{
 			MessageId:    messageID,
 			Role:         role,
@@ -2107,6 +2111,17 @@ func (a *App) loadThreadMessages(ctx context.Context, threadID string, offset in
 		return nil, fmt.Errorf("iterate messages: %w", err)
 	}
 	return items, nil
+}
+
+func reformatInternalToolMessage(content string) string {
+	if after, ok := strings.CutPrefix(content, "[tool_result:"); ok {
+		if idx := strings.Index(after, "]"); idx >= 0 {
+			toolName := after[:idx]
+			result := strings.TrimSpace(after[idx+1:])
+			return "$ " + toolName + "\n" + result + "\nresult: exit 0 (0ms)"
+		}
+	}
+	return content
 }
 
 func roleToContentTrust(role string) protocolv1.ContentTrust {

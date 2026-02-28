@@ -76,7 +76,7 @@ struct ContentView: View {
                         .accessibilityIdentifier(A11y.tabSchedule)
                 }
 
-            JobsView(model: jobsModel)
+            JobsView(model: jobsModel, client: client)
                 .accessibilityIdentifier(A11y.screenJobs)
                 .tabItem {
                     Label("Jobs", systemImage: "briefcase")
@@ -766,6 +766,7 @@ private struct ScheduleView: View {
 
 private struct JobsView: View {
     @ObservedObject var model: JobsViewModel
+    let client: APIClient
 
     var body: some View {
         NavigationStack {
@@ -789,13 +790,20 @@ private struct JobsView: View {
                             )
                         } else {
                             ForEach(model.filteredJobs) { item in
-                                JobCard(
-                                    item: item,
-                                    isCancelling: model.cancellingJobIDs.contains(item.jobID),
-                                    onCancel: {
-                                        Task { await model.cancelJob(item.jobID) }
-                                    }
-                                )
+                                NavigationLink(destination: JobThreadView(
+                                    client: client,
+                                    threadID: item.threadID,
+                                    title: item.goal
+                                )) {
+                                    JobCard(
+                                        item: item,
+                                        isCancelling: model.cancellingJobIDs.contains(item.jobID),
+                                        onCancel: {
+                                            Task { await model.cancelJob(item.jobID) }
+                                        }
+                                    )
+                                }
+                                .buttonStyle(.plain)
                             }
                         }
                     }
@@ -821,6 +829,59 @@ private struct JobsView: View {
             } message: {
                 Text(model.errorText ?? "Unknown error")
             }
+        }
+    }
+}
+
+private struct JobThreadView: View {
+    let client: APIClient
+    let threadID: String
+    let title: String
+    @State private var messages: [Message] = []
+    @State private var isLoading = false
+    @State private var errorText: String?
+
+    var body: some View {
+        ScrollView(showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 10) {
+                if messages.isEmpty && !isLoading {
+                    EmptyStateCard(
+                        icon: "text.bubble",
+                        title: "No messages yet",
+                        detail: "This job hasn't produced any messages."
+                    )
+                } else {
+                    ForEach(messages) { message in
+                        ChatMessageRow(message: message)
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 10)
+            .padding(.bottom, 16)
+        }
+        .background(PincerPalette.page)
+        .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
+        .task { await loadMessages() }
+        .refreshable { await loadMessages() }
+        .alert("Error", isPresented: Binding(
+            get: { errorText != nil },
+            set: { if !$0 { errorText = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(errorText ?? "Unknown error")
+        }
+    }
+
+    private func loadMessages() async {
+        isLoading = true
+        defer { isLoading = false }
+        do {
+            messages = try await client.fetchMessages(threadID: threadID)
+        } catch {
+            errorText = userFacingErrorMessage(error, fallback: "Failed to load job thread.")
         }
     }
 }
@@ -871,11 +932,15 @@ private struct ChatMessageRow: View {
 
     var body: some View {
         if isSystem {
-            Text(message.content)
-                .font(.system(.caption, design: .rounded).weight(.medium))
-                .foregroundStyle(PincerPalette.textTertiary)
-                .frame(maxWidth: .infinity, alignment: .center)
-                .padding(.vertical, 2)
+            if let jobInfo = parseJobCompletion(message.content) {
+                JobCompletionCard(info: jobInfo)
+            } else {
+                Text(message.content)
+                    .font(.system(.caption, design: .rounded).weight(.medium))
+                    .foregroundStyle(PincerPalette.textTertiary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, 2)
+            }
         } else if isThinking {
             HStack {
                 FallbackThinkingRow(text: message.content)
@@ -2183,4 +2248,71 @@ private func relativeTimestamp(from iso: String) -> String {
     let formatter = RelativeDateTimeFormatter()
     formatter.unitsStyle = .abbreviated
     return formatter.localizedString(for: date, relativeTo: Date())
+}
+
+private struct JobCompletionInfo {
+    let headline: String
+    let summary: String
+    let icon: String
+    let color: Color
+}
+
+private func parseJobCompletion(_ content: String) -> JobCompletionInfo? {
+    guard content.hasPrefix("Background job ") else { return nil }
+    let parts = content.split(separator: "\n\n", maxSplits: 1)
+    let headline = String(parts[0])
+    let summary = parts.count > 1 ? String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines) : ""
+
+    let icon: String
+    let color: Color
+    if headline.contains("completed") {
+        icon = "checkmark.circle.fill"
+        color = PincerPalette.success
+    } else if headline.contains("failed") {
+        icon = "xmark.circle.fill"
+        color = PincerPalette.danger
+    } else if headline.contains("paused") {
+        icon = "pause.circle.fill"
+        color = PincerPalette.warning
+    } else if headline.contains("cancelled") {
+        icon = "slash.circle.fill"
+        color = PincerPalette.danger
+    } else {
+        return nil
+    }
+    return JobCompletionInfo(headline: headline, summary: summary, icon: icon, color: color)
+}
+
+private struct JobCompletionCard: View {
+    let info: JobCompletionInfo
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: info.icon)
+                .font(.system(size: 14))
+                .foregroundStyle(info.color)
+                .padding(.top, 1)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(info.headline)
+                    .font(.system(.caption, design: .rounded).weight(.medium))
+                    .foregroundStyle(PincerPalette.textSecondary)
+
+                if !info.summary.isEmpty {
+                    Text(info.summary)
+                        .font(.system(.caption2, design: .rounded))
+                        .foregroundStyle(PincerPalette.textTertiary)
+                        .lineLimit(2)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(PincerPalette.card)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(PincerPalette.border, lineWidth: 1)
+        )
+    }
 }
