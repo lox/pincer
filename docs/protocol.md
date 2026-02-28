@@ -11,9 +11,9 @@ It targets full coverage of the canonical system contract in `docs/spec.md`.
 
 1. Backend control-plane APIs are served via protobuf-defined ConnectRPC handlers.
 2. Turn/thread streaming is implemented for `TurnsService.StartTurn` and `EventsService.WatchThread`, including incremental command output events.
-3. iOS uses generated Connect Swift unary clients for current chat/approvals/settings surfaces.
+3. iOS uses generated Connect Swift unary clients for chat/approvals/jobs/schedules/settings/autonomy surfaces.
 4. Proto/Go/Swift generation is wired through `buf` and checked into the repo.
-5. Remaining work includes stream-first iOS chat consumption and iOS scheduler/job surfaces.
+5. Remaining work includes stream-first iOS chat consumption and richer iOS detail/notification surfaces.
 
 ## 1. Goals
 
@@ -984,9 +984,9 @@ Approvals:
 3. Deterministic summary + preview fields back approval detail UX.
 4. Approval UI confirms actions via explicit approve/reject controls.
 
-Work and Schedules:
+Jobs and Schedules:
 
-1. `JobStatusChanged` supports Work tab timelines.
+1. `JobStatusChanged` supports Jobs tab timelines.
 2. `ScheduleTriggered` supports Schedules visibility.
 
 Settings:

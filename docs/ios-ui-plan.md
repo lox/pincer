@@ -1,7 +1,7 @@
 # Pincer iOS UI/UX Plan (v0.2)
 
 Status: Active
-Date: 2026-02-26
+Date: 2026-02-28
 Scope: Control plane for a single-owner backend with autonomy surfaces
 
 ## 1. Product posture
@@ -18,8 +18,8 @@ Bottom tab bar with five tabs:
 
 1. Chat
 2. Approvals
-3. Work
-4. Schedules
+3. Schedules
+4. Jobs
 5. Settings
 
 Global UI behaviors:
@@ -59,7 +59,7 @@ Interaction rules:
 - Message send triggers immediate optimistic insert + streaming assistant response.
 - Proposed external actions render as "pending approval" until resolved.
 - Approval card tap opens Approval Detail.
-- **Badge for unread proactive threads** (heartbeat findings, job completions).
+- **Unread marker for updated threads** in the thread list.
 - Job completion messages posted to the originating thread, not buried in a separate view.
 
 Empty state:
@@ -89,7 +89,7 @@ Expiry behavior:
 - Expired items move to rejected state with reason `expired`.
 - Detail shows immutable audit timestamps.
 
-### 4.3 Work (Jobs)
+### 4.3 Jobs
 
 Purpose: monitor autonomous background work.
 
@@ -99,12 +99,11 @@ List behavior:
 - Each row shows goal, last update time, and state chip.
 - **Spawned jobs** created by the agent appear here automatically.
 
-Job detail:
+Current implementation:
 
-- Event timeline (system messages + job events).
-- Artifacts list with preview.
-- Controls: `Cancel`, no pause/resume control unless backend supports it.
-- **Link to originating thread** where the user's request started.
+- List-only surface with state chips, trigger labels, and last-error text.
+- Control: `Cancel` for non-terminal jobs.
+- Pull-to-refresh support.
 
 ### 4.4 Schedules
 
@@ -116,17 +115,11 @@ List behavior:
 - Quick actions: enable/disable, run now.
 - **Agent-created schedules** appear here alongside user-created ones, marked with origin.
 
-Create/edit flow:
+Current implementation:
 
-- Trigger types: `cron`, `interval`, `one-shot`.
-- Timezone is explicit and visible.
-- Confirmation screen shows next two expected runs in local time.
-
-Schedule detail:
-
-- History of past runs with result summaries.
-- Edit trigger and goal prompt.
-- Link to the schedule's thread in Chat.
+- List-only surface with trigger summary, next/last run timestamps, and enabled state.
+- Quick actions: enable/disable and run now.
+- Pull-to-refresh support.
 
 ### 4.5 Settings
 
@@ -204,14 +197,14 @@ Slice D: autonomy surfaces
 
 - Agent Memory section in Settings (view/edit `memory/MEMORY.md`).
 - Heartbeat config in Settings (toggle, interval, edit tasks).
-- Proactive heartbeat messages in Chat thread list.
+- Thread-list unread markers for updated conversations.
 - Job result messages in originating Chat threads.
 
 Slice E: work and schedules
 
-- Job list/detail with real data from spawned background work.
-- Schedule list with agent-created and user-created schedules.
-- Schedule detail with run history.
+- Jobs list with real data from spawned background work and cancel controls.
+- Schedules list with agent-created and user-created schedules.
+- Schedule enable/disable and run-now controls.
 
 Slice F: settings and trust surfaces (done)
 

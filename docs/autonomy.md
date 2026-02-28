@@ -1,7 +1,7 @@
 # Pincer Autonomy Mechanisms
 
 Status: Implemented through Phase 2.5 (workspace + memory + heartbeat + jobs + scheduler + unified work queue backend, plus iOS autonomy surfaces)
-Date: 2026-02-27
+Date: 2026-02-28
 References: `docs/spec.md` §11, `docs/ios-ui-plan.md`, `PLAN.md`
 
 This document defines the autonomy primitives that make Pincer proactive and useful over long time horizons. The design draws from [picoclaw](https://github.com/sipeed/picoclaw) and [openclaw](https://github.com/openclaw/openclaw) while preserving Pincer's security-first approval model.
@@ -39,21 +39,21 @@ The agent gets a persistent filesystem workspace for memory, skills, notes, and 
 | Tool | Risk class | Description |
 |------|-----------|-------------|
 | `read_file` | READ | Read a file from the workspace. Path must be within workspace root. |
-| `write_file` | READ | Write/overwrite a file in the workspace. Creates parent dirs. |
-| `append_file` | READ | Append content to a file (used for daily notes). |
+| `write_file` | WRITE (default), READ (allowlisted internal paths) | Write/overwrite a file in the workspace. Creates parent dirs. |
+| `append_file` | WRITE (default), READ (allowlisted internal paths) | Append content to a file (used for daily notes). |
 | `list_dir` | READ | List directory contents within workspace. |
 
-All file tools are READ-classified (internal actions, no approval required). The workspace boundary is enforced server-side — paths outside the workspace root are rejected.
+`read_file` and `list_dir` are always READ-classified. `write_file` and `append_file` are WRITE by default, but are reclassified to READ for allowlisted internal-only paths (`memory/MEMORY.md`, `memory/YYYYMM/YYYYMMDD.md`, and `scratch/*`). The workspace boundary is enforced server-side — paths outside the workspace root are rejected.
 
 ### 2.3 Correctness guardrails
 
 - **Atomic writes**: `write_file` writes to a temp file + fsync + rename. No partial writes on crash.
-- **Per-file mutex**: backend holds a `sync.Mutex` keyed by resolved absolute path. Prevents interleaving from concurrent heartbeat/job/chat turns.
+- **Per-path lock with sharded mutexes**: backend hashes each resolved absolute path to a lock shard, preventing interleaving for operations targeting the same path while keeping lock overhead bounded.
 - **Workspace quotas**: max single file size (1 MB), max total workspace size (50 MB). Enforced on write. Agent gets a clear error and can prune/compact.
 
-### 2.4 Why READ classification?
+### 2.4 Why conditional READ/WRITE classification?
 
-Writing to the agent's own workspace is an internal action with no external side effect. The agent is managing its own scratchpad, not the user's filesystem. This matches picoclaw's approach where file tools operate freely within the sandboxed workspace.
+Writes to autonomy-owned memory/scratch files are internal actions with no external side effect, so they can execute inline as READ. Writes outside that allowlist stay WRITE and go through approvals, preserving the trusted conveyor while still allowing efficient autonomous note-taking.
 
 ## 3. Memory
 
@@ -152,7 +152,7 @@ If you find something noteworthy, summarize your findings for the user.
 ### 4.3 Heartbeat thread
 
 Heartbeat turns run in a dedicated system thread (e.g. `thread_heartbeat`). This thread is internal by default and not shown in the main iOS Chat thread list to avoid timeline clutter.
-Heartbeat prompts are persisted as internal messages so no-op runs can remain silent while still keeping enough context for turn continuation.
+During execution, heartbeat prompts are wrapped in internal messages for turn continuity. For no-op `HEARTBEAT_OK` runs with no proposals, the prompt wrapper is cleaned up so these runs remain silent and do not accumulate history noise.
 
 ### 4.4 Configuration
 
@@ -189,11 +189,11 @@ RUNNING → COMPLETED
         → CANCELLED
 ```
 
-On process restart, any job in `RUNNING` state is marked `FAILED_RESTART` with an audit event. The user or agent can re-spawn it.
+On process restart, any job in `RUNNING` state is marked `FAILED` with `last_error=failed_restart`, plus `job_failed_restart` audit/job events. The user or agent can re-spawn it.
 
 ### 5.3 How spawn works
 
-1. Agent calls `spawn(goal: "Research competing products in the CRM space", budget: { max_steps: 20, timeout_minutes: 30 })`.
+1. Agent calls `spawn(goal: "Research competing products in the CRM space", max_tool_steps: 20, max_wall_time_ms: 1800000)`.
 2. Backend creates a `jobs` row with state `RUNNING` and a dedicated system thread for the job.
 3. A background goroutine picks up the job and runs `executeTurnFromStep` against the job's thread.
 4. The job runs through the normal planner-tool loop. READ tools execute inline. Non-READ tools create proposals and pause the job (same TurnPaused mechanism).
@@ -204,8 +204,8 @@ On process restart, any job in `RUNNING` state is marked `FAILED_RESTART` with a
 
 Every job has bounded execution:
 
-- `max_steps` — tool call limit (default: 20)
-- `timeout_minutes` — wall clock limit (default: 30)
+- `max_tool_steps` — tool call limit (default: 20)
+- `max_wall_time_ms` — wall clock limit in milliseconds (default: 30 minutes)
 - Jobs that exceed their budget enter `PAUSED_BUDGET` state with a clear message.
 
 Global soft limits (config values, not approval gates):
@@ -272,8 +272,8 @@ When a schedule fires:
 The existing Schedule tab shows:
 
 - List of active schedules with name, trigger description, next run time, enabled toggle.
-- Tap to view schedule detail: history of past runs, edit trigger, edit goal.
-- Quick actions: enable/disable, run now, delete.
+- Quick actions: enable/disable and run now.
+- Error states and refresh are surfaced in-place.
 
 ## 7. Unified work item queue
 
@@ -315,7 +315,7 @@ The turn orchestrator doesn't care where the work came from. It runs the same pl
 
 All proactive agent output appears in Chat threads:
 
-- Heartbeat findings → heartbeat system thread
+- Heartbeat findings → heartbeat system thread (internal/system channel; hidden from the default iOS thread list)
 - Job completions → originating conversation thread
 - Schedule run results → schedule-specific thread
 - Proactive observations → relevant thread or new thread
@@ -326,11 +326,11 @@ The user opens the app and sees what the agent has been doing, presented as a co
 
 | Tab | Role | Autonomy additions |
 |-----|------|--------------------|
-| **Chat** | Narrative surface — all output lands here | Heartbeat thread, job result messages, proactive reach-outs. Badge for unread proactive threads |
+| **Chat** | Narrative surface | Job result messages in conversation threads; per-thread "New" marker for unseen updates |
 | **Approvals** | Decision gate — unchanged | Proposals from heartbeats, jobs, and schedules appear here too |
-| **Schedule** | Trigger management | Schedule list with next-run times. Agent-created schedules visible. Enable/disable/run-now controls |
-| **Jobs** | Work monitoring | Running/completed/failed job list. Job detail with event timeline. Cancel control |
-| **Settings** | Configuration + transparency | Agent Memory section (view/edit MEMORY.md). Heartbeat config (toggle, interval, edit tasks). Workspace path |
+| **Schedules** | Trigger management | Schedule list with next-run times. Agent-created schedules visible. Enable/disable/run-now controls |
+| **Jobs** | Work monitoring | Running/waiting/completed/failed segmented list, status chips, and cancel control |
+| **Settings** | Configuration + transparency | Agent Memory section (view/edit `memory/MEMORY.md`). Heartbeat config (toggle, interval, edit tasks) |
 
 ### 8.3 Settings: Agent Memory section
 
@@ -343,7 +343,9 @@ New section in Settings:
   - Shows last-updated timestamp
 - **Heartbeat** — toggle enabled, set interval, tap to edit `HEARTBEAT.md`
 
-### 8.4 Notifications
+### 8.4 Notifications (planned)
+
+Push notifications are planned but not yet implemented in the current Phase 2.5 app.
 
 | Event | Notification | Tap target |
 |-------|-------------|------------|
@@ -363,7 +365,7 @@ All autonomy mechanisms preserve Pincer's security model:
 4. **Schedules cannot bypass policy.** A cron job that fires at 3am still requires approval for external actions — the approval queues and waits.
 5. **All triggers use the same pipeline.** `triggered turns must use the same proposal pipeline` (spec §8, cross-phase non-negotiable).
 6. **Soft limits prevent runaway autonomy.** Max concurrent jobs, max active schedules, min schedule interval, and global worker limits are enforced as config values. The agent gets errors and adapts; it doesn't need approval to hit them.
-7. **Restart safety.** In-flight jobs are marked `FAILED_RESTART` and in-flight `work_items` are requeued on process startup. No silent, unaudited side-effect resumption.
+7. **Restart safety.** In-flight jobs are marked `FAILED` with `failed_restart` diagnostics and `job_failed_restart` audit events; in-flight `work_items` are requeued on process startup. No silent, unaudited side-effect resumption.
 
 ## 10. Implementation sequence
 
@@ -374,7 +376,7 @@ Each step should be a working vertical slice — implement backend, register too
 ### 10.1 Workspace and file tools (start here)
 
 1. Add workspace directory config (`PINCER_WORKSPACE`, default `~/.pincer/workspace`).
-2. Implement `read_file`, `write_file`, `append_file`, `list_dir` tools with workspace sandboxing, atomic writes, per-file locking, and quota enforcement.
+2. Implement `read_file`, `write_file`, `append_file`, `list_dir` tools with workspace sandboxing, atomic writes, per-path locking, and quota enforcement.
 3. Bootstrap workspace layout on first start (create dirs, template `HEARTBEAT.md`).
 4. Register tools in planner tool definitions.
 5. Test: agent can read/write files in workspace, paths outside workspace are rejected.
@@ -399,7 +401,7 @@ Each step should be a working vertical slice — implement backend, register too
 2. Add background goroutine job runner with budget enforcement.
 3. Wire job turns through `executeTurnFromStep` with job-scoped budgets.
 4. Post job completion message to originating thread.
-5. Mark in-flight jobs as `FAILED_RESTART` on process startup.
+5. Mark in-flight jobs as `FAILED` with `failed_restart` diagnostics on process startup.
 6. Test: agent spawns a research job, job runs in background, result appears in chat.
 
 ### 10.5 Scheduler

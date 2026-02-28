@@ -151,7 +151,7 @@ The Fly deployment embeds `tsnet` in the single Pincer binary — no Tailscale s
 - `docs/spec.md` - end-state system design and contracts.
 - `docs/auth.md` - authentication and device-pairing lifecycle details.
 - `docs/protocol.md` - ConnectRPC/protobuf wire contract and streaming event model.
-- `docs/prompt-templates.md` - recommended `SOUL.md` and system prompt skeleton templates.
+- `docs/autonomy.md` - autonomy primitives (workspace, memory, heartbeat, jobs, scheduler, work queue).
 - `templates/` - copyable default `LAWS.md` and `SOUL.md` templates.
 - `PLAN.md` - phased implementation plan and steps.
 - `docs/ios-ui-plan.md` - iOS UI/UX planning details.

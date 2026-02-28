@@ -4,7 +4,9 @@ This folder contains the SwiftUI control app:
 
 - `Chat` screen (send messages, render timeline)
 - `Approvals` screen (list pending approvals, approve action)
-- `Settings` screen (list paired devices, revoke session)
+- `Schedules` screen (list schedules, enable/disable, run-now)
+- `Jobs` screen (list background jobs, cancel non-terminal jobs)
+- `Settings` screen (devices/session, agent memory, heartbeat config)
 
 Project files:
 
@@ -37,7 +39,7 @@ Project files:
 
 ## Notes
 
-- This is intentionally minimal for current Phase 1 implementation.
+- This reflects the current Phase 2.5 control-plane surface and remains intentionally lightweight.
 - RPC clients and protobuf models are generated into `ios/Pincer/Generated` from `proto/pincer/protocol/v1/protocol.proto` (`go run github.com/bufbuild/buf/cmd/buf@v1.57.0 generate`).
 - The app uses opaque bearer tokens from pairing (`AuthService.CreatePairingCode` + `AuthService.BindPairingCode`).
 - Token is stored in `UserDefaults` under `PINCER_BEARER_TOKEN` for simulator/dev flows.
