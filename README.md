@@ -3,158 +3,49 @@
   Pincer
 </h1>
 
-A security-first autonomous assistant with a Go backend and an iOS control app. High autonomy, strict control over side effects. Inspired by [OpenClaw](https://github.com/openclaw/openclaw) and [Nanobot](https://github.com/HKUDS/nanobot).
+Pincer is now an iOS-first OpenClaw companion app.
 
-## Core idea
+The old standalone Go backend/runtime has been removed from the product direction. The repository now focuses on:
 
-- The model is untrusted.
-- The model may propose actions.
-- Trusted code evaluates policy and executes actions.
-- External side effects are never silent.
+1. native iPhone operator UX,
+2. OpenClaw sessions as the core chat model,
+3. approvals as a first-class mobile surface,
+4. direct OpenClaw Gateway integration instead of a separate Pincer control plane.
 
-All external actions follow:
+## Current state
 
-`proposed -> approved -> executed -> audited`
+The iOS app currently provides:
 
-- Triggered turns are executed as bounded planner/tool loops, with each tool result written back into context before the final response.
+- a native session-based app shell,
+- approvals and settings surfaces,
+- local session persistence while the transport layer is replaced,
+- Gateway URL/token/session configuration,
+- Gateway reachability probing over WebSocket.
 
-## Why this architecture
+The next implementation slice is the direct OpenClaw Gateway client:
 
-Pincer is explicitly designed to mitigate Simon Willison's ["the lethal trifecta"](https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/):
+1. connect/challenge handling,
+2. device-auth pairing,
+3. real session list/history/send,
+4. approval listing and resolution.
 
-1. Planner and executor are separated.
-2. Tool arguments are schema-validated by trusted code.
-3. External writes/sends require explicit approval.
+## Local development
 
-## High-level architecture
-
-```text
-iOS App
-   |
-   v
-Go Backend (single binary)
-   |- Trigger queue (chat/messages, jobs, wakeups, callbacks)
-   |- Policy Engine
-   |- Approval Queue
-   |- Turn Orchestrator (planner -> bounded tool loop)
-   |- Action Executor
-   |- Job Runner + Scheduler + Wakeups
-   |- Tool Registry
-   |- SQLite (state + audit)
-   |- Provider Client (OpenRouter/OpenAI-compatible)
-```
-
-## What's working
-
-- **Device pairing & auth** — pairing codes, opaque bearer tokens (`pnr_` prefix), HMAC-signed, device revocation.
-- **Chat with tool use** — threaded conversations via ConnectRPC; the planner calls tools using native OpenAI function calling.
-- **Approval-gated execution** — all external actions (e.g. `run_bash`) require explicit user approval before execution. Results are audited and rendered inline in chat.
-- **Inline read tools** — READ-classified tools (`web_search`, `web_summarize`, `web_fetch`) execute during the turn without approval; results feed back into planner context.
-- **Web fetch with SSRF protections** — `web_fetch` retrieves raw URL content with private/loopback IP blocking, redirect caps, response size limits, and HTML-to-markdown conversion. Prefers Cloudflare Markdown for Agents via content negotiation.
-- **Domain capability leases** — first `web_fetch` to an unknown domain requires approval (exfiltration protection); approving grants the domain for the thread, so subsequent fetches execute inline.
-- **Live streaming** — turn progress, thinking indicators, and command output stream to the iOS app in real time via `StartTurn`/`WatchThread`.
-- **Post-approval turn continuation** — after tool execution, results feed back into the LLM for re-planning. Turns pause at approval gates (`TurnPaused`) and resume automatically after all actions resolve (`TurnResumed`), enabling multi-step adaptive agent behavior.
-- **Heartbeat autonomy loop** — optional background heartbeat turns run in a dedicated `thread_heartbeat`, read `HEARTBEAT.md`, execute via the same turn pipeline, and suppress no-op `HEARTBEAT_OK` outputs.
-- **Spawned background jobs** — the READ-classified `spawn` tool creates background jobs that run through the same planner/tool and approval conveyor, publish job states (`RUNNING`, `WAITING_APPROVAL`, `COMPLETED`, `FAILED`, `PAUSED_BUDGET`, `CANCELLED`), and post completion summaries back to originating chat threads.
-- **Autonomous schedules** — READ-classified `schedule_create`, `schedule_list`, and `schedule_delete` tools create durable `cron`/`interval`/`at` schedules with dedicated schedule threads.
-- **Scheduler wakeups with dedupe** — a restart-safe scheduler worker persists wakeups, deduplicates when a prior schedule run is still active, and routes wakeups into the existing job pipeline (`SCHEDULE_WAKEUP -> job -> approval conveyor`).
-- **Unified durable work queue** — all turn triggers (chat, heartbeat, job, schedule, approval-resume) enqueue into `work_items` and execute via the same orchestrator with deterministic priority (`chat > approval-resume > job > schedule > heartbeat`) and one active turn per thread (`threads.active_turn_id`).
-- **Two-layer agent memory** — canonical long-term memory is `memory/MEMORY.md`; ephemeral session notes live in `memory/YYYYMM/YYYYMMDD.md`. Memory context is injected into planner system prompts on every call (mtime-cached).
-- **Assistant thinking** — model reasoning (`reasoning_content`) is captured and streamed to the iOS app as `AssistantThinkingDelta` events, rendered as expandable thinking bubbles in the chat timeline.
-- **iOS control app** — SwiftUI chat with full markdown rendering (via Textual), approvals tab, device/session management, and settings.
-- **Audit log** — every side-effect transition (`proposed → approved → executed`) is recorded and queryable.
-- **LAWS + SOUL prompt model** — planner loads `workspace/LAWS.md` (constraints) and `workspace/SOUL.md` (personality), bootstrapped from `templates/`.
-- **Tailscale support** — optional `tsnet` listener for tailnet-only access; transport only, does not bypass auth.
-- **E2E test coverage** — eval tests with real LLM, XCUITest for iOS UI, and reproducible API E2E scripts.
-
-See `PLAN.md` for the full roadmap. Phase 1 (secure core conveyor) is complete; Phase 2 (real integrations) is in progress.
-
-<p align="center">
-  <img src="assets/ios-mockup.png" alt="iOS app mockup — Chat, Approvals, Schedule, Jobs" width="800" />
-</p>
-
-## Local end-to-end
-
-- `mise run dev`
-- `mise run reset-db`
-- `mise run ios-simulator-reset-token`
+- `mise run ios-build`
 - `mise run ios-run-simulator`
 - `mise run ios-run-device`
-- `mise run eval`
-- `mise run e2e-api`
-- `mise run e2e-xcuitest`
 
 Useful overrides:
 
-- `PINCER_BASE_URL`
-- `PINCER_DB_PATH`
-- `PINCER_AUTH_TOKEN`
-- `PINCER_TOKEN_HMAC_KEY`
-- `PINCER_E2E_RESET_DB=0`
+- `OPENCLAW_IOS_GATEWAY_URL`
+- `OPENCLAW_GATEWAY_URL`
+- `OPENCLAW_GATEWAY_TOKEN`
+- `OPENCLAW_PRIMARY_SESSION_KEY`
 
-Database/session defaults:
+Default Gateway URL in the app is `ws://127.0.0.1:18789`.
 
-- `mise run dev` uses `./pincer.db` by default and `PINCER_TOKEN_HMAC_KEY='pincer-dev-token-hmac-key-change-me'`.
-- `mise run reset-db` clears `./pincer.db` and associated SQLite journal files.
-- `mise run eval` runs eval tests in-process (requires `OPENROUTER_API_KEY`). `mise run e2e-api` is an alias.
-- `mise run e2e-xcuitest` starts a fresh backend and runs native XCUITest E2E.
+## Docs
 
-Backend runtime config is now CLI+env via `kong`:
-
-- `go run ./cmd/pincer --help`
-- `OPENROUTER_API_KEY` (legacy fallback: `PINCER_OPENROUTER_API_KEY`)
-- `PINCER_LOG_LEVEL` (`debug|info|warn|error|fatal`)
-- `PINCER_LOG_FORMAT` (`text|json`)
-- `PINCER_HEARTBEAT_ENABLED` (`true|false`, default `true`)
-- `PINCER_HEARTBEAT_INTERVAL` (minutes, default `30`, minimum `15` when enabled)
-
-For stream/event debugging, run with:
-
-- `PINCER_LOG_LEVEL=debug PINCER_LOG_FORMAT=text mise run run`
-
-## Run with Tailscale
-
-Pincer embeds a `tsnet` listener — no external `tailscaled` process or `tailscale serve` needed. When `TS_AUTHKEY` is set, the backend registers itself as a Tailscale service (`svc:pincer`) and serves HTTPS on port 443 directly on the tailnet, alongside the normal HTTP listener.
-
-Tailscale is transport only; Pincer still requires normal device pairing and bearer-token auth.
-
-1. Run Pincer with tsnet enabled:
-   - `TS_AUTHKEY='tskey-...' PINCER_TOKEN_HMAC_KEY='<strong-random-key>' mise run run`
-2. In the iOS app, set `Settings -> Backend -> Address` to your tailnet HTTPS URL (e.g. `https://pincer.<tailnet>.ts.net`).
-3. Pair the app as usual; tailnet reachability does not bypass pairing/token auth.
-
-Tailscale-related env/flags:
-
-- `TS_AUTHKEY` — Tailscale auth key; tsnet is only started when this is set.
-- `TS_HOSTNAME` — tailnet hostname (default: `pincer`).
-- `TS_SERVICE_NAME` — service name registered as `svc:<name>` (default: `pincer`).
-- `TS_STATE_DIR` — directory for persistent Tailscale identity state.
-
-## Deploy to Fly.io with embedded tsnet
-
-The Fly deployment embeds `tsnet` in the single Pincer binary — no Tailscale sidecar or extra processes.
-
-1. Create the app (or edit `fly.toml` if `pincer` is unavailable):
-   - `flyctl apps create pincer`
-2. Create a persistent volume for SQLite and Tailscale state:
-   - `flyctl volumes create pincer_data --region syd --size 3 -a pincer`
-3. Set required secrets:
-   - `flyctl secrets set TS_AUTHKEY='tskey-...' PINCER_TOKEN_HMAC_KEY="$(openssl rand -hex 32)" -a pincer`
-   - Optional model access: `flyctl secrets set OPENROUTER_API_KEY='...' -a pincer`
-4. Deploy:
-   - `flyctl deploy --remote-only -a pincer`
-5. Verify the machine is running and check logs for the `tailscale service listening` message:
-   - `flyctl logs --no-tail -a pincer`
-
-## Documentation
-
-- `docs/spec.md` - end-state system design and contracts.
-- `docs/auth.md` - authentication and device-pairing lifecycle details.
-- `docs/protocol.md` - ConnectRPC/protobuf wire contract and streaming event model.
-- `docs/autonomy.md` - autonomy primitives (workspace, memory, heartbeat, jobs, scheduler, work queue).
-- `templates/` - copyable default `LAWS.md` and `SOUL.md` templates.
-- `PLAN.md` - phased implementation plan and steps.
-- `docs/ios-ui-plan.md` - iOS UI/UX planning details.
-- `workspace/LAWS.md` - runtime non-negotiable constraints used by the planner.
-- `workspace/SOUL.md` - runtime assistant voice and relational guidance used by the planner.
-- `AGENTS.md` - repository-specific agent instructions.
+- `docs/openclaw-pivot-proposal.md` - architecture options, recommendation, and migration path
+- `ios/Pincer/README.md` - app-specific development notes
+- `AGENTS.md` - repository-specific instructions

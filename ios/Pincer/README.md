@@ -1,47 +1,38 @@
-# Pincer iOS Shell
+# Pincer iOS App
 
-This folder contains the SwiftUI control app:
+This app is now an OpenClaw-focused iOS shell.
 
-- `Chat` screen (send messages, render timeline)
-- `Approvals` screen (list pending approvals, approve action)
-- `Schedules` screen (list schedules, enable/disable, run-now)
-- `Jobs` screen (list background jobs, cancel non-terminal jobs)
-- `Settings` screen (devices/session, agent memory, heartbeat config)
+Current responsibilities:
 
-Project files:
+- session list and session detail UI
+- approvals surface
+- Gateway settings
+- local persistence while the direct OpenClaw WebSocket client is implemented
 
-- `project.yml` (xcodegen spec)
-- `Pincer.xcodeproj` (generated Xcode project)
+## Local build
 
-## Usage
+- `mise run ios-build`
+- `mise run ios-run-simulator`
 
-1. Trust project tasks once:
-   - `mise trust`
-2. Run backend:
-   - `mise run run`
-3. Open app Settings and set `Backend -> Address` (for device testing, use your Mac's LAN URL).
-4. Build from terminal:
-   - `mise run ios-build`
-5. Or run on a physical device:
-   - List connected devices and copy the Xcode `ID` (not `coredevice` ID):
-     - `xcrun xctrace list devices`
-   - Set these env vars (or add to `.envrc`):
-     - `export PINCER_IOS_DEVICE_UDID=<your-device-udid>`
-     - `export PINCER_IOS_DEVELOPMENT_TEAM=<your-team-id>`
-   - Run:
-     - `mise run ios-run-device`
-6. Open in Xcode:
-   - `open ios/Pincer/Pincer.xcodeproj`
-7. Launch app and test the flow:
-   - Send message in Chat.
-   - Open Approvals.
-   - Approve pending action.
+## Runtime config
 
-## Notes
+The app reads:
 
-- This reflects the current Phase 2.5 control-plane surface and remains intentionally lightweight.
-- RPC clients and protobuf models are generated into `ios/Pincer/Generated` from `proto/pincer/protocol/v1/protocol.proto` (`go run github.com/bufbuild/buf/cmd/buf@v1.57.0 generate`).
-- The app uses opaque bearer tokens from pairing (`AuthService.CreatePairingCode` + `AuthService.BindPairingCode`).
-- Token is stored in `UserDefaults` under `PINCER_BEARER_TOKEN` for simulator/dev flows.
-- Backend base URL is stored in `UserDefaults` under `PINCER_BASE_URL`.
-- If build fails with missing iOS platform/runtime, install it from Xcode -> Settings -> Components, then rerun `mise run ios-build`.
+- `OPENCLAW_IOS_GATEWAY_URL`
+- `OPENCLAW_GATEWAY_URL`
+- `OPENCLAW_GATEWAY_TOKEN`
+- `OPENCLAW_PRIMARY_SESSION_KEY`
+
+Defaults:
+
+- Gateway URL: `ws://127.0.0.1:18789`
+- Primary session key: `main`
+
+## Near-term implementation target
+
+Replace the current local persistence shell with:
+
+1. direct Gateway connect/challenge handling
+2. device-auth pairing
+3. real session list/history/send
+4. real approval list/resolve flows

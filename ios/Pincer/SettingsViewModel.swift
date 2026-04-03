@@ -1,7 +1,6 @@
 import Foundation
-import UIKit
 
-enum BackendCheckStatus: Equatable {
+enum GatewayCheckStatus: Equatable {
     case idle
     case running
     case ok
@@ -9,13 +8,13 @@ enum BackendCheckStatus: Equatable {
     case error
 }
 
-struct BackendCheckItem: Identifiable, Equatable {
+struct GatewayCheckItem: Identifiable, Equatable {
     let id: String
     let title: String
-    var status: BackendCheckStatus
+    var status: GatewayCheckStatus
     var detail: String
 
-    init(id: String, title: String, status: BackendCheckStatus = .idle, detail: String = "") {
+    init(id: String, title: String, status: GatewayCheckStatus = .idle, detail: String = "") {
         self.id = id
         self.title = title
         self.status = status
@@ -25,228 +24,108 @@ struct BackendCheckItem: Identifiable, Equatable {
 
 @MainActor
 final class SettingsViewModel: ObservableObject {
-    @Published var devices: [Device] = []
-    @Published var backendURL: String
+    @Published var gatewayURL: String
+    @Published var gatewayToken: String
+    @Published var primarySessionKey: String
     @Published var errorText: String?
     @Published var isBusy = false
-    @Published var isCheckingBackend = false
-    @Published var backendChecks: [BackendCheckItem] = []
-    @Published var generatedPairingCode: String?
-    @Published var isGeneratingCode = false
-    @Published var manualPairingCode: String = ""
-    @Published var isBindingCode = false
-    @Published var memoryContent: String = ""
-    @Published var memoryUpdatedAt: String = ""
-    @Published var isSavingMemory = false
-    @Published var heartbeatEnabled = false
-    @Published var heartbeatIntervalMinutes = 30
-    @Published var heartbeatTasksMarkdown: String = ""
-    @Published var heartbeatTasksUpdatedAt: String = ""
-    @Published var isSavingHeartbeat = false
+    @Published var isCheckingGateway = false
+    @Published var gatewayChecks: [GatewayCheckItem] = []
 
     private let client: APIClient
-    private static let minHeartbeatIntervalMinutes = 15
 
     init(client: APIClient) {
         self.client = client
-        self.backendURL = AppConfig.baseURLString
+        self.gatewayURL = AppConfig.baseURLString
+        self.gatewayToken = AppConfig.bearerToken
+        self.primarySessionKey = AppConfig.primarySessionKey
     }
 
     func refresh() async {
-        isBusy = true
-        defer { isBusy = false }
-
-        await refreshDevicesOnly()
-        await refreshAgentMemory()
-        await refreshHeartbeatConfig()
+        gatewayURL = AppConfig.baseURLString
+        gatewayToken = AppConfig.bearerToken
+        primarySessionKey = AppConfig.primarySessionKey
     }
 
-    func revoke(_ deviceID: String) async {
-        isBusy = true
-        defer { isBusy = false }
-
-        do {
-            try await client.revokeDevice(deviceID: deviceID)
-            await refreshDevicesOnly()
-        } catch {
-            errorText = userFacingErrorMessage(error, fallback: "Failed to revoke device.")
-        }
-    }
-
-    func saveBackendURL() async {
-        guard let parsedURL = AppConfig.parseBaseURL(backendURL) else {
-            errorText = "Enter a valid backend URL (for example, http://192.168.1.50:8080)."
+    func saveConnectionSettings() async {
+        guard let parsedURL = AppConfig.parseBaseURL(gatewayURL) else {
+            errorText = "Enter a valid Gateway URL, for example ws://127.0.0.1:18789."
             return
         }
 
-        backendURL = parsedURL.absoluteString
+        let trimmedSession = primarySessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedSession.isEmpty else {
+            errorText = "Enter a primary session key."
+            return
+        }
+
+        isBusy = true
+        defer { isBusy = false }
+
+        gatewayURL = parsedURL.absoluteString
+        primarySessionKey = trimmedSession
         await client.setBaseURL(parsedURL)
-        devices = []
-        await refresh()
+        await client.setGatewayToken(gatewayToken)
+        await client.setPrimarySessionKey(trimmedSession)
     }
 
-    func resetBackendURL() async {
-        backendURL = AppConfig.defaultBaseURL.absoluteString
+    func resetConnectionSettings() async {
+        isBusy = true
+        defer { isBusy = false }
+
+        gatewayURL = AppConfig.defaultBaseURL.absoluteString
+        gatewayToken = ""
+        primarySessionKey = AppConfig.defaultPrimarySessionKey
         await client.setBaseURL(AppConfig.defaultBaseURL)
-        devices = []
-        await refresh()
+        await client.setGatewayToken("")
+        await client.setPrimarySessionKey(AppConfig.defaultPrimarySessionKey)
     }
 
-    func checkBackend() async {
-        if isCheckingBackend {
+    func checkGateway() async {
+        if isCheckingGateway {
             return
         }
 
-        let raw = backendURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        isCheckingBackend = true
-        backendChecks = [
-            BackendCheckItem(id: "url", title: "URL format", status: .running),
-            BackendCheckItem(id: "rpc", title: "RPC reachable", status: .idle),
-            BackendCheckItem(id: "pairing", title: "Pairing available", status: .idle),
+        let raw = gatewayURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        isCheckingGateway = true
+        gatewayChecks = [
+            GatewayCheckItem(id: "url", title: "Gateway URL", status: .running),
+            GatewayCheckItem(id: "ws", title: "Gateway WebSocket", status: .idle),
+            GatewayCheckItem(id: "auth", title: "Gateway Auth", status: .idle),
         ]
-        defer { isCheckingBackend = false }
+        defer { isCheckingGateway = false }
 
         guard let parsedURL = AppConfig.parseBaseURL(raw) else {
-            setBackendCheck(id: "url", status: .error, detail: "Enter a valid URL (http://192.168.1.50:8080 or https://pincer.tailnet.ts.net).")
-            setBackendCheck(id: "rpc", status: .idle, detail: "")
-            setBackendCheck(id: "pairing", status: .idle, detail: "")
+            setGatewayCheck(id: "url", status: .error, detail: "Use ws://127.0.0.1:18789 or your wss:// Gateway URL.")
             return
         }
 
-        setBackendCheck(id: "url", status: .ok, detail: parsedURL.absoluteString)
+        setGatewayCheck(id: "url", status: .ok, detail: parsedURL.absoluteString)
 
-        setBackendCheck(id: "rpc", status: .running, detail: "")
-        let rpcProbe = await client.probeBackendRPC(baseURL: parsedURL)
-        if rpcProbe.code == "ok" || rpcProbe.code == "unauthenticated" {
-            let detail = rpcProbe.code == "unauthenticated" ? "reachable (auth required)" : "reachable"
-            setBackendCheck(id: "rpc", status: .ok, detail: detail)
+        setGatewayCheck(id: "ws", status: .running, detail: "")
+        let gatewayProbe = await client.probeGatewayConnection(baseURL: parsedURL)
+        if gatewayProbe.code == "ok" {
+            setGatewayCheck(id: "ws", status: .ok, detail: gatewayProbe.detail)
         } else {
-            setBackendCheck(
-                id: "rpc",
+            setGatewayCheck(
+                id: "ws",
                 status: .error,
-                detail: "failed (\(rpcProbe.code))\(rpcProbe.detail.isEmpty ? "" : ": ")\(rpcProbe.detail)"
+                detail: "failed (\(gatewayProbe.code))\(gatewayProbe.detail.isEmpty ? "" : ": \(gatewayProbe.detail)")"
             )
         }
 
-        setBackendCheck(id: "pairing", status: .running, detail: "")
-        let pairingProbe = await client.probePairingEndpoint(baseURL: parsedURL)
-        if pairingProbe.code == "ok" {
-            setBackendCheck(id: "pairing", status: .ok, detail: "create pairing code: ok")
-        } else if pairingProbe.code == "unauthenticated" {
-            setBackendCheck(id: "pairing", status: .ok, detail: "server already paired — authorize from existing device to add this one")
+        setGatewayCheck(id: "auth", status: .running, detail: "")
+        let authProbe = await client.probeGatewayAuth(baseURL: parsedURL)
+        if authProbe.code == "ok" {
+            setGatewayCheck(id: "auth", status: .warning, detail: authProbe.detail)
         } else {
-            setBackendCheck(
-                id: "pairing",
-                status: .error,
-                detail: "failed (\(pairingProbe.code))\(pairingProbe.detail.isEmpty ? "" : ": ")\(pairingProbe.detail)"
-            )
+            setGatewayCheck(id: "auth", status: .error, detail: authProbe.detail)
         }
     }
 
-    func generatePairingCode() async {
-        isGeneratingCode = true
-        defer { isGeneratingCode = false }
-
-        do {
-            let code = try await client.generatePairingCode()
-            generatedPairingCode = code
-        } catch {
-            errorText = userFacingErrorMessage(error, fallback: "Failed to generate pairing code.")
-        }
-    }
-
-    func bindManualCode() async {
-        let code = manualPairingCode.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !code.isEmpty else {
-            errorText = "Enter a pairing code."
-            return
-        }
-
-        isBindingCode = true
-        defer { isBindingCode = false }
-
-        do {
-            try await client.manualBind(code: code, deviceName: UIDevice.current.name)
-            manualPairingCode = ""
-            await refresh()
-        } catch {
-            errorText = userFacingErrorMessage(error, fallback: "Failed to bind pairing code.")
-        }
-    }
-
-    func refreshAgentMemory() async {
-        do {
-            let state = try await client.fetchAgentMemory()
-            memoryContent = state.content
-            memoryUpdatedAt = state.updatedAt
-        } catch {
-            errorText = userFacingErrorMessage(error, fallback: "Failed to load agent memory.")
-        }
-    }
-
-    func saveAgentMemory() async {
-        isSavingMemory = true
-        defer { isSavingMemory = false }
-
-        do {
-            let state = try await client.updateAgentMemory(content: memoryContent)
-            memoryUpdatedAt = state.updatedAt
-        } catch {
-            errorText = userFacingErrorMessage(error, fallback: "Failed to save agent memory.")
-        }
-    }
-
-    func clearAgentMemory() async {
-        memoryContent = ""
-        await saveAgentMemory()
-    }
-
-    func refreshHeartbeatConfig() async {
-        do {
-            let state = try await client.fetchHeartbeatConfig()
-            heartbeatEnabled = state.enabled
-            heartbeatIntervalMinutes = max(Self.minHeartbeatIntervalMinutes, state.intervalMinutes)
-            heartbeatTasksMarkdown = state.tasksMarkdown
-            heartbeatTasksUpdatedAt = state.tasksUpdatedAt
-        } catch {
-            errorText = userFacingErrorMessage(error, fallback: "Failed to load heartbeat settings.")
-        }
-    }
-
-    func saveHeartbeatConfig() async {
-        if heartbeatIntervalMinutes < Self.minHeartbeatIntervalMinutes {
-            heartbeatIntervalMinutes = Self.minHeartbeatIntervalMinutes
-        }
-
-        isSavingHeartbeat = true
-        defer { isSavingHeartbeat = false }
-
-        do {
-            let state = try await client.updateHeartbeatConfig(
-                enabled: heartbeatEnabled,
-                intervalMinutes: heartbeatIntervalMinutes,
-                tasksMarkdown: heartbeatTasksMarkdown
-            )
-            heartbeatEnabled = state.enabled
-            heartbeatIntervalMinutes = max(Self.minHeartbeatIntervalMinutes, state.intervalMinutes)
-            heartbeatTasksMarkdown = state.tasksMarkdown
-            heartbeatTasksUpdatedAt = state.tasksUpdatedAt
-        } catch {
-            errorText = userFacingErrorMessage(error, fallback: "Failed to save heartbeat settings.")
-        }
-    }
-
-    private func refreshDevicesOnly() async {
-        do {
-            devices = try await client.fetchDevices()
-        } catch {
-            errorText = userFacingErrorMessage(error, fallback: "Failed to load devices.")
-        }
-    }
-
-    private func setBackendCheck(id: String, status: BackendCheckStatus, detail: String) {
-        guard let index = backendChecks.firstIndex(where: { $0.id == id }) else { return }
-        backendChecks[index].status = status
-        backendChecks[index].detail = detail
+    private func setGatewayCheck(id: String, status: GatewayCheckStatus, detail: String) {
+        guard let index = gatewayChecks.firstIndex(where: { $0.id == id }) else { return }
+        gatewayChecks[index].status = status
+        gatewayChecks[index].detail = detail
     }
 }

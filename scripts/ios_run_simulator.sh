@@ -6,8 +6,8 @@ DEVICE="${PINCER_IOS_DEVICE:-iPhone 17 Pro}"
 BUNDLE_ID="${PINCER_IOS_BUNDLE_ID:-com.lox.pincer}"
 PROJECT_PATH="${ROOT_DIR}/ios/Pincer/Pincer.xcodeproj"
 SCHEME="${PINCER_IOS_SCHEME:-Pincer}"
-AUTH_TOKEN="${PINCER_AUTH_TOKEN:-}"
-BASE_URL="${PINCER_BASE_URL:-http://127.0.0.1:8080}"
+AUTH_TOKEN="${OPENCLAW_GATEWAY_TOKEN:-}"
+BASE_URL="${OPENCLAW_GATEWAY_URL:-ws://127.0.0.1:18789}"
 
 get_app_path() {
   local settings target wrapper
@@ -47,14 +47,14 @@ xcrun simctl bootstatus "${DEVICE}" -b >/dev/null
 xcrun simctl install "${DEVICE}" "${APP_PATH}" >/dev/null
 
 if [[ -n "${AUTH_TOKEN}" ]]; then
-  xcrun simctl spawn "${DEVICE}" defaults write "${BUNDLE_ID}" PINCER_BEARER_TOKEN -string "${AUTH_TOKEN}" >/dev/null
+  xcrun simctl spawn "${DEVICE}" defaults write "${BUNDLE_ID}" OPENCLAW_GATEWAY_TOKEN -string "${AUTH_TOKEN}" >/dev/null
 fi
-xcrun simctl spawn "${DEVICE}" defaults write "${BUNDLE_ID}" PINCER_BASE_URL -string "${BASE_URL}" >/dev/null
+xcrun simctl spawn "${DEVICE}" defaults write "${BUNDLE_ID}" OPENCLAW_GATEWAY_URL -string "${BASE_URL}" >/dev/null
 
 xcrun simctl terminate "${DEVICE}" "${BUNDLE_ID}" >/dev/null 2>&1 || true
 xcrun simctl launch "${DEVICE}" "${BUNDLE_ID}" >/dev/null
 
 echo "ios run ok"
 echo "device=${DEVICE}"
-echo "base_url=${BASE_URL}"
+echo "gateway_url=${BASE_URL}"
 echo "bundle_id=${BUNDLE_ID}"

@@ -10,7 +10,7 @@ struct ThreadSummary: Identifiable {
     var id: String { threadID }
 
     var displayTitle: String {
-        title.isEmpty ? "New conversation" : title
+        title.isEmpty ? "Untitled session" : title
     }
 }
 
@@ -113,6 +113,12 @@ struct HeartbeatConfigState {
     let intervalMinutes: Int
     let tasksMarkdown: String
     let tasksUpdatedAt: String
+}
+
+struct GatewayConnectionState {
+    let gatewayURL: String
+    let controlUIURL: String
+    let primarySessionKey: String
 }
 
 // MARK: - Activity Model

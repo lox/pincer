@@ -1,6 +1,4 @@
 import Foundation
-import Connect
-import SwiftProtobuf
 
 enum APIError: Error {
     case invalidResponse
@@ -13,33 +11,27 @@ struct ThreadMessagesSnapshot {
     let lastSequence: UInt64
 }
 
-struct BackendProbeResult: Sendable, Equatable {
+struct GatewayProbeResult: Sendable, Equatable {
     let code: String
     let detail: String
 }
 
+private struct StoredThread: Codable {
+    let threadID: String
+    var title: String
+    let createdAt: String
+    var updatedAt: String
+}
+
+private enum LocalStorage {
+    static let threadsKey = "OPENCLAW_LOCAL_THREADS"
+    static let approvalsKey = "OPENCLAW_LOCAL_APPROVALS"
+}
+
 actor APIClient {
-    // Unary calls should fail fast so UI actions (like Settings "Save") don't
-    // get stuck indefinitely when the backend is unreachable.
-    private static let unaryRequestTimeoutSeconds: TimeInterval = 15
-    private static let unaryResourceTimeoutSeconds: TimeInterval = 60
-
-    // Streaming endpoints (watch/start turn) intentionally run long-lived HTTP
-    // requests.
-    private static let streamRequestTimeoutSeconds: TimeInterval = 60 * 20
-    private static let streamResourceTimeoutSeconds: TimeInterval = 60 * 60 * 24
-
     private var baseURL: URL
     private var token: String
-    private var authClient: Pincer_Protocol_V1_AuthServiceClient
-    private var threadsClient: Pincer_Protocol_V1_ThreadsServiceClient
-    private var turnsClient: Pincer_Protocol_V1_TurnsServiceClient
-    private var eventsClient: Pincer_Protocol_V1_EventsServiceClient
-    private var approvalsClient: Pincer_Protocol_V1_ApprovalsServiceClient
-    private var devicesClient: Pincer_Protocol_V1_DevicesServiceClient
-    private var jobsClient: Pincer_Protocol_V1_JobsServiceClient
-    private var schedulesClient: Pincer_Protocol_V1_SchedulesServiceClient
-    private var systemClient: Pincer_Protocol_V1_SystemServiceClient
+    private let defaults = UserDefaults.standard
 
     private static let timestampFormatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
@@ -50,709 +42,299 @@ actor APIClient {
     init(baseURL: URL, token: String) {
         self.baseURL = baseURL
         self.token = token
-
-        let unaryTransport = Self.makeUnaryTransport(baseURL: baseURL)
-        let streamTransport = Self.makeStreamTransport(baseURL: baseURL)
-        self.authClient = Pincer_Protocol_V1_AuthServiceClient(client: unaryTransport)
-        self.threadsClient = Pincer_Protocol_V1_ThreadsServiceClient(client: unaryTransport)
-        self.turnsClient = Pincer_Protocol_V1_TurnsServiceClient(client: streamTransport)
-        self.eventsClient = Pincer_Protocol_V1_EventsServiceClient(client: streamTransport)
-        self.approvalsClient = Pincer_Protocol_V1_ApprovalsServiceClient(client: unaryTransport)
-        self.devicesClient = Pincer_Protocol_V1_DevicesServiceClient(client: unaryTransport)
-        self.jobsClient = Pincer_Protocol_V1_JobsServiceClient(client: unaryTransport)
-        self.schedulesClient = Pincer_Protocol_V1_SchedulesServiceClient(client: unaryTransport)
-        self.systemClient = Pincer_Protocol_V1_SystemServiceClient(client: unaryTransport)
-
-        AppConfig.setBaseURL(baseURL)
+        Self.seedDefaultStateIfNeeded(defaults: defaults)
     }
 
     func setBaseURL(_ baseURL: URL) {
-        guard self.baseURL.absoluteString != baseURL.absoluteString else { return }
-
         self.baseURL = baseURL
         AppConfig.setBaseURL(baseURL)
-
-        let unaryTransport = Self.makeUnaryTransport(baseURL: baseURL)
-        let streamTransport = Self.makeStreamTransport(baseURL: baseURL)
-        self.authClient = Pincer_Protocol_V1_AuthServiceClient(client: unaryTransport)
-        self.threadsClient = Pincer_Protocol_V1_ThreadsServiceClient(client: unaryTransport)
-        self.turnsClient = Pincer_Protocol_V1_TurnsServiceClient(client: streamTransport)
-        self.eventsClient = Pincer_Protocol_V1_EventsServiceClient(client: streamTransport)
-        self.approvalsClient = Pincer_Protocol_V1_ApprovalsServiceClient(client: unaryTransport)
-        self.devicesClient = Pincer_Protocol_V1_DevicesServiceClient(client: unaryTransport)
-        self.jobsClient = Pincer_Protocol_V1_JobsServiceClient(client: unaryTransport)
-        self.schedulesClient = Pincer_Protocol_V1_SchedulesServiceClient(client: unaryTransport)
-        self.systemClient = Pincer_Protocol_V1_SystemServiceClient(client: unaryTransport)
-
-        clearToken()
     }
 
-    func ensurePaired(force: Bool = false, deviceName: String = "Pincer iOS") async throws {
-        if !force, !token.isEmpty {
-            return
-        }
+    func setGatewayToken(_ token: String) {
+        self.token = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        AppConfig.setBearerToken(self.token)
+    }
 
-        let codeResponse = await authClient.createPairingCode(
-            request: .init(),
-            headers: [:]
-        )
-        let codeMessage = try responseMessage(codeResponse)
-
-        var bindRequest = Pincer_Protocol_V1_BindPairingCodeRequest()
-        bindRequest.code = codeMessage.code
-        bindRequest.deviceName = deviceName
-        let bindResponse = await authClient.bindPairingCode(
-            request: bindRequest,
-            headers: [:]
-        )
-        let bindMessage = try responseMessage(bindResponse)
-
-        token = bindMessage.token
-        UserDefaults.standard.set(bindMessage.token, forKey: AppConfig.tokenDefaultsKey)
+    func setPrimarySessionKey(_ sessionKey: String) {
+        AppConfig.setPrimarySessionKey(sessionKey)
     }
 
     func createThread() async throws -> String {
-        try await withAuthorizedRetry {
-            let response = await threadsClient.createThread(
-                request: .init(),
-                headers: authHeaders()
-            )
-            let message = try responseMessage(response)
-            return message.threadID
-        }
+        var threads = loadThreads()
+        let now = Self.nowString()
+        let title = "Session \(threads.count + 1)"
+        let threadID = "sess_\(UUID().uuidString.lowercased())"
+        threads.insert(
+            StoredThread(
+                threadID: threadID,
+                title: title,
+                createdAt: now,
+                updatedAt: now
+            ),
+            at: 0
+        )
+        saveThreads(threads)
+        saveMessages([], for: threadID)
+        return threadID
     }
 
     func listThreads() async throws -> [ThreadSummary] {
-        try await withAuthorizedRetry {
-            let response = await threadsClient.listThreads(
-                request: .init(),
-                headers: authHeaders()
-            )
-            let message = try responseMessage(response)
-            return message.items.map { item in
+        loadThreads()
+            .sorted { $0.updatedAt > $1.updatedAt }
+            .map { thread in
                 ThreadSummary(
-                    threadID: item.threadID,
-                    title: item.title,
-                    createdAt: timestampString(item.createdAt, hasValue: item.hasCreatedAt),
-                    updatedAt: timestampString(item.updatedAt, hasValue: item.hasUpdatedAt),
-                    messageCount: Int(item.messageCount)
+                    threadID: thread.threadID,
+                    title: thread.title,
+                    createdAt: thread.createdAt,
+                    updatedAt: thread.updatedAt,
+                    messageCount: loadMessages(for: thread.threadID).count
                 )
             }
-        }
     }
 
     func deleteThread(threadID: String) async throws {
-        try await withAuthorizedRetry {
-            var request = Pincer_Protocol_V1_DeleteThreadRequest()
-            request.threadID = threadID
-            let response = await threadsClient.deleteThread(
-                request: request,
-                headers: authHeaders()
-            )
-            _ = try responseMessage(response) as Pincer_Protocol_V1_DeleteThreadResponse
-        }
-    }
+        var threads = loadThreads()
+        threads.removeAll { $0.threadID == threadID }
+        saveThreads(threads)
+        defaults.removeObject(forKey: messagesKey(for: threadID))
 
-    func fetchMessages(threadID: String) async throws -> [Message] {
-        let snapshot = try await fetchMessagesSnapshot(threadID: threadID)
-        return snapshot.messages
+        if threads.isEmpty {
+            Self.seedDefaultStateIfNeeded(defaults: defaults)
+        }
     }
 
     func fetchMessagesSnapshot(threadID: String) async throws -> ThreadMessagesSnapshot {
-        try await withAuthorizedRetry {
-            var request = Pincer_Protocol_V1_ListThreadMessagesRequest()
-            request.threadID = threadID
-
-            let response = await threadsClient.listThreadMessages(
-                request: request,
-                headers: authHeaders()
-            )
-            let message = try responseMessage(response)
-            let items = message.items.map { item in
-                Message(
-                    messageID: item.messageID,
-                    threadID: threadID,
-                    role: item.role,
-                    content: item.content,
-                    createdAt: timestampString(item.createdAt, hasValue: item.hasCreatedAt)
-                )
-            }
-            return ThreadMessagesSnapshot(messages: items, lastSequence: message.lastSequence)
-        }
+        ThreadMessagesSnapshot(messages: loadMessages(for: threadID), lastSequence: 0)
     }
 
-    func startTurnStream(
-        threadID: String,
-        content: String,
-        clientMessageID: String,
-        resumeFromSequence: UInt64,
-        onEvent: @escaping (Pincer_Protocol_V1_ThreadEvent) async -> Void
-    ) async throws {
-        try await withAuthorizedRetry {
-            var request = Pincer_Protocol_V1_StartTurnRequest()
-            request.threadID = threadID
-            request.userText = content
-            request.clientMessageID = clientMessageID
-            request.triggerType = .chatMessage
-            request.reasoningVisibility = .reasoningSummary
-            request.resumeFromSequence = resumeFromSequence
-
-            let stream = turnsClient.startTurn(headers: authHeaders())
-            try await consumeThreadEventStream(
-                stream: stream,
-                request: request,
-                onEvent: onEvent
+    func appendUserMessage(threadID: String, content: String) async throws {
+        var messages = loadMessages(for: threadID)
+        let createdAt = Self.nowString()
+        messages.append(
+            Message(
+                messageID: "msg_\(UUID().uuidString.lowercased())",
+                threadID: threadID,
+                role: "user",
+                content: content,
+                createdAt: createdAt
             )
-        }
+        )
+        saveMessages(messages, for: threadID)
+        touchThread(threadID: threadID, updatedAt: createdAt)
     }
 
-    func watchThreadStream(
-        threadID: String,
-        fromSequence: UInt64,
-        onEvent: @escaping (Pincer_Protocol_V1_ThreadEvent) async -> Void
-    ) async throws {
-        try await withAuthorizedRetry {
-            var request = Pincer_Protocol_V1_WatchThreadRequest()
-            request.threadID = threadID
-            request.fromSequence = fromSequence
+    func appendLocalAssistantPlaceholder(threadID: String) async throws {
+        var messages = loadMessages(for: threadID)
+        let createdAt = Self.nowString()
+        messages.append(
+            Message(
+                messageID: "msg_\(UUID().uuidString.lowercased())",
+                threadID: threadID,
+                role: "assistant",
+                content: """
+                OpenClaw transport is the next implementation slice.
 
-            let stream = eventsClient.watchThread(headers: authHeaders())
-            try await consumeThreadEventStream(
-                stream: stream,
-                request: request,
-                onEvent: onEvent
+                This build keeps the app iOS-only, stores sessions locally, and saves your Gateway settings so the direct WebSocket client can replace this local shell cleanly.
+                """,
+                createdAt: createdAt
             )
-        }
+        )
+        saveMessages(messages, for: threadID)
+        touchThread(threadID: threadID, updatedAt: createdAt)
     }
 
     func fetchApprovals(status: String = "pending") async throws -> [Approval] {
-        try await withAuthorizedRetry {
-            var request = Pincer_Protocol_V1_ListApprovalsRequest()
-            request.status = actionStatus(status)
-
-            let response = await approvalsClient.listApprovals(
-                request: request,
-                headers: authHeaders()
-            )
-            let message = try responseMessage(response)
-            return message.items.map { item in
-                let deterministicSummary = item.deterministicSummary.trimmingCharacters(in: .whitespacesAndNewlines)
-                let preview = item.hasPreview ? item.preview : nil
-                return Approval(
-                    actionID: item.actionID,
-                    source: item.source,
-                    sourceID: item.sourceID,
-                    tool: item.tool,
-                    status: actionStatusName(item.status),
-                    riskClass: riskClassName(item.riskClass),
-                    deterministicSummary: deterministicSummary,
-                    commandPreview: approvalCommandPreview(tool: item.tool, preview: preview),
-                    commandTimeoutMS: approvalCommandTimeoutMS(tool: item.tool, preview: preview),
-                    createdAt: timestampString(item.createdAt, hasValue: item.hasCreatedAt),
-                    expiresAt: timestampString(item.expiresAt, hasValue: item.hasExpiresAt)
-                )
-            }
+        let normalized = status.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        return loadApprovals().filter { approval in
+            normalized.isEmpty || approval.status.uppercased() == normalized
         }
     }
 
     func approve(actionID: String) async throws {
-        try await withAuthorizedRetry {
-            var request = Pincer_Protocol_V1_ApproveActionRequest()
-            request.actionID = actionID
-            let response = await approvalsClient.approveAction(
-                request: request,
-                headers: authHeaders()
-            )
-            _ = try responseMessage(response) as Pincer_Protocol_V1_ApproveActionResponse
+        var approvals = loadApprovals()
+        guard let index = approvals.firstIndex(where: { $0.actionID == actionID }) else {
+            return
         }
-    }
 
-    func fetchDevices() async throws -> [Device] {
-        try await withAuthorizedRetry {
-            let response = await devicesClient.listDevices(
-                request: .init(),
-                headers: authHeaders()
-            )
-            let message = try responseMessage(response)
-            return message.items.map { item in
-                Device(
-                    deviceID: item.deviceID,
-                    name: item.name,
-                    revokedAt: timestampString(item.revokedAt, hasValue: item.hasRevokedAt),
-                    createdAt: timestampString(item.createdAt, hasValue: item.hasCreatedAt),
-                    isCurrent: item.isCurrent
-                )
-            }
-        }
-    }
-
-    func revokeDevice(deviceID: String) async throws {
-        try await withAuthorizedRetry {
-            var request = Pincer_Protocol_V1_RevokeDeviceRequest()
-            request.deviceID = deviceID
-            let response = await devicesClient.revokeDevice(
-                request: request,
-                headers: authHeaders()
-            )
-            _ = try responseMessage(response) as Pincer_Protocol_V1_RevokeDeviceResponse
-        }
-    }
-
-    func fetchJobs() async throws -> [JobSummary] {
-        try await withAuthorizedRetry {
-            let response = await jobsClient.listJobs(
-                request: .init(),
-                headers: authHeaders()
-            )
-            let message = try responseMessage(response)
-            return message.items.map { item in
-                JobSummary(
-                    jobID: item.jobID,
-                    goal: item.goal,
-                    status: jobStatusName(item.status),
-                    threadID: item.threadID,
-                    triggerType: triggerTypeName(item.triggerType),
-                    triggerSourceID: item.triggerSourceID,
-                    maxWallTimeMS: item.maxWallTimeMs,
-                    lastError: item.lastError,
-                    createdAt: timestampString(item.createdAt, hasValue: item.hasCreatedAt),
-                    updatedAt: timestampString(item.updatedAt, hasValue: item.hasUpdatedAt)
-                )
-            }
-        }
-    }
-
-    func cancelJob(jobID: String) async throws {
-        try await withAuthorizedRetry {
-            var request = Pincer_Protocol_V1_CancelJobRequest()
-            request.jobID = jobID
-            let response = await jobsClient.cancelJob(
-                request: request,
-                headers: authHeaders()
-            )
-            _ = try responseMessage(response) as Pincer_Protocol_V1_CancelJobResponse
-        }
-    }
-
-    func fetchSchedules() async throws -> [ScheduleSummary] {
-        try await withAuthorizedRetry {
-            let response = await schedulesClient.listSchedules(
-                request: .init(),
-                headers: authHeaders()
-            )
-            let message = try responseMessage(response)
-            return message.items.map { item in
-                ScheduleSummary(
-                    scheduleID: item.scheduleID,
-                    name: item.name,
-                    triggerKind: scheduleTriggerKindName(item.triggerKind),
-                    triggerSpec: item.triggerSpec,
-                    timezone: item.timezone,
-                    enabled: item.enabled,
-                    nextRunAt: timestampString(item.nextRunAt, hasValue: item.hasNextRunAt),
-                    lastRunAt: timestampString(item.lastRunAt, hasValue: item.hasLastRunAt),
-                    createdAt: timestampString(item.createdAt, hasValue: item.hasCreatedAt),
-                    updatedAt: timestampString(item.updatedAt, hasValue: item.hasUpdatedAt)
-                )
-            }
-        }
-    }
-
-    func setScheduleEnabled(scheduleID: String, enabled: Bool) async throws {
-        try await withAuthorizedRetry {
-            var enabledValue = Google_Protobuf_Value()
-            enabledValue.boolValue = enabled
-            var patch = Google_Protobuf_Struct()
-            patch.fields["enabled"] = enabledValue
-
-            var request = Pincer_Protocol_V1_UpdateScheduleRequest()
-            request.scheduleID = scheduleID
-            request.patch = patch
-
-            let response = await schedulesClient.updateSchedule(
-                request: request,
-                headers: authHeaders()
-            )
-            _ = try responseMessage(response) as Pincer_Protocol_V1_UpdateScheduleResponse
-        }
-    }
-
-    func runScheduleNow(scheduleID: String) async throws {
-        try await withAuthorizedRetry {
-            var request = Pincer_Protocol_V1_RunScheduleNowRequest()
-            request.scheduleID = scheduleID
-            let response = await schedulesClient.runScheduleNow(
-                request: request,
-                headers: authHeaders()
-            )
-            _ = try responseMessage(response) as Pincer_Protocol_V1_RunScheduleNowResponse
-        }
-    }
-
-    func fetchAgentMemory() async throws -> AgentMemoryState {
-        try await withAuthorizedRetry {
-            let response = await systemClient.getAgentMemory(
-                request: .init(),
-                headers: authHeaders()
-            )
-            let message = try responseMessage(response)
-            return AgentMemoryState(
-                content: message.content,
-                updatedAt: timestampString(message.updatedAt, hasValue: message.hasUpdatedAt)
-            )
-        }
-    }
-
-    func updateAgentMemory(content: String) async throws -> AgentMemoryState {
-        try await withAuthorizedRetry {
-            var request = Pincer_Protocol_V1_UpdateAgentMemoryRequest()
-            request.content = content
-            let response = await systemClient.updateAgentMemory(
-                request: request,
-                headers: authHeaders()
-            )
-            let message = try responseMessage(response)
-            return AgentMemoryState(
-                content: content,
-                updatedAt: timestampString(message.updatedAt, hasValue: message.hasUpdatedAt)
-            )
-        }
-    }
-
-    func fetchHeartbeatConfig() async throws -> HeartbeatConfigState {
-        try await withAuthorizedRetry {
-            let response = await systemClient.getHeartbeatConfig(
-                request: .init(),
-                headers: authHeaders()
-            )
-            let message = try responseMessage(response)
-            return HeartbeatConfigState(
-                enabled: message.enabled,
-                intervalMinutes: Int(message.intervalMinutes),
-                tasksMarkdown: message.tasksMarkdown,
-                tasksUpdatedAt: timestampString(message.tasksUpdatedAt, hasValue: message.hasTasksUpdatedAt)
-            )
-        }
-    }
-
-    func updateHeartbeatConfig(enabled: Bool, intervalMinutes: Int, tasksMarkdown: String) async throws -> HeartbeatConfigState {
-        try await withAuthorizedRetry {
-            var request = Pincer_Protocol_V1_UpdateHeartbeatConfigRequest()
-            request.enabled = enabled
-            request.intervalMinutes = UInt32(intervalMinutes)
-            request.tasksMarkdown = tasksMarkdown
-
-            let response = await systemClient.updateHeartbeatConfig(
-                request: request,
-                headers: authHeaders()
-            )
-            let message = try responseMessage(response)
-            return HeartbeatConfigState(
-                enabled: message.enabled,
-                intervalMinutes: Int(message.intervalMinutes),
-                tasksMarkdown: message.tasksMarkdown,
-                tasksUpdatedAt: timestampString(message.tasksUpdatedAt, hasValue: message.hasTasksUpdatedAt)
-            )
-        }
-    }
-
-    func generatePairingCode() async throws -> String {
-        try await withAuthorizedRetry {
-            let response = await authClient.createPairingCode(
-                request: .init(),
-                headers: authHeaders()
-            )
-            let message = try responseMessage(response)
-            return message.code
-        }
-    }
-
-    func manualBind(code: String, deviceName: String = "Pincer iOS") async throws {
-        var bindRequest = Pincer_Protocol_V1_BindPairingCodeRequest()
-        bindRequest.code = code
-        bindRequest.deviceName = deviceName
-        let bindResponse = await authClient.bindPairingCode(
-            request: bindRequest,
-            headers: [:]
+        let current = approvals[index]
+        approvals[index] = Approval(
+            actionID: current.actionID,
+            source: current.source,
+            sourceID: current.sourceID,
+            tool: current.tool,
+            status: "APPROVED",
+            riskClass: current.riskClass,
+            deterministicSummary: current.deterministicSummary,
+            commandPreview: current.commandPreview,
+            commandTimeoutMS: current.commandTimeoutMS,
+            createdAt: current.createdAt,
+            expiresAt: current.expiresAt
         )
-        let bindMessage = try responseMessage(bindResponse)
-        token = bindMessage.token
-        UserDefaults.standard.set(bindMessage.token, forKey: AppConfig.tokenDefaultsKey)
+        saveApprovals(approvals)
     }
 
-    private func withAuthorizedRetry<T>(_ operation: () async throws -> T) async throws -> T {
-        try await ensurePaired()
-        do {
-            return try await operation()
-        } catch APIError.unauthorized {
-            try await ensurePaired(force: true)
-            return try await operation()
-        }
+    func probeGatewayConnection(baseURL: URL) async -> GatewayProbeResult {
+        await probeGateway(baseURL: baseURL)
     }
 
-    private func consumeThreadEventStream<Request: SwiftProtobuf.Message>(
-        stream: any Connect.ServerOnlyAsyncStreamInterface<Request, Pincer_Protocol_V1_ThreadEvent>,
-        request: Request,
-        onEvent: @escaping (Pincer_Protocol_V1_ThreadEvent) async -> Void
-    ) async throws {
-        do {
-            try stream.send(request)
-        } catch {
-            throw streamAPIError(code: nil, error: error)
+    func probeGatewayAuth(baseURL: URL) async -> GatewayProbeResult {
+        let result = await probeGateway(baseURL: baseURL)
+        if result.code == "ok" {
+            return GatewayProbeResult(
+                code: "ok",
+                detail: "gateway reachable; device-auth pairing still needs the direct OpenClaw client implementation"
+            )
+        }
+        return result
+    }
+
+    private func probeGateway(baseURL: URL) async -> GatewayProbeResult {
+        guard let websocketURL = websocketURL(from: baseURL) else {
+            return GatewayProbeResult(code: "invalid_url", detail: "Enter a valid ws:// or wss:// Gateway URL.")
         }
 
-        var sawCompletion = false
-        for await result in stream.results() {
-            switch result {
-            case .headers:
-                continue
-            case .message(let event):
-                await onEvent(event)
-            case .complete(let code, let error, _):
-                sawCompletion = true
-                if code == .ok {
-                    return
+        let session = URLSession(configuration: .ephemeral)
+        let task = session.webSocketTask(with: websocketURL)
+        task.resume()
+
+        do {
+            let message = try await withThrowingTaskGroup(of: URLSessionWebSocketTask.Message.self) { group in
+                group.addTask {
+                    try await task.receive()
                 }
-                throw streamAPIError(code: code, error: error)
+                group.addTask {
+                    try await Task.sleep(nanoseconds: 5_000_000_000)
+                    throw URLError(.timedOut)
+                }
+                guard let first = try await group.next() else {
+                    throw APIError.invalidResponse
+                }
+                group.cancelAll()
+                return first
             }
-        }
 
-        if !sawCompletion {
-            throw APIError.invalidResponse
-        }
-    }
+            task.cancel(with: .goingAway, reason: nil)
 
-    private func streamAPIError(code: Connect.Code?, error: Error?) -> APIError {
-        if code == .unauthenticated {
-            clearToken()
-            return .unauthorized
-        }
-        if let connectError = error as? Connect.ConnectError {
-            if connectError.code == .unauthenticated {
-                clearToken()
-                return .unauthorized
+            switch message {
+            case .string(let text):
+                if text.contains("connect.challenge") || text.contains("hello-ok") {
+                    return GatewayProbeResult(code: "ok", detail: "Gateway challenge received.")
+                }
+                return GatewayProbeResult(code: "ok", detail: "Gateway responded: \(trimmed(text))")
+            case .data(let data):
+                return GatewayProbeResult(code: "ok", detail: "Gateway responded with \(data.count) bytes.")
+            @unknown default:
+                return GatewayProbeResult(code: "ok", detail: "Gateway responded.")
             }
-            return .rpc(connectError.code.name)
-        }
-        if let code {
-            return .rpc(code.name)
-        }
-        return .invalidResponse
-    }
-
-    private static func makeUnaryTransport(baseURL: URL) -> ProtocolClient {
-        makeTransport(
-            baseURL: baseURL,
-            timeoutIntervalForRequest: unaryRequestTimeoutSeconds,
-            timeoutIntervalForResource: unaryResourceTimeoutSeconds
-        )
-    }
-
-    private static func makeStreamTransport(baseURL: URL) -> ProtocolClient {
-        makeTransport(
-            baseURL: baseURL,
-            timeoutIntervalForRequest: streamRequestTimeoutSeconds,
-            timeoutIntervalForResource: streamResourceTimeoutSeconds
-        )
-    }
-
-    private static func makeTransport(
-        baseURL: URL,
-        timeoutIntervalForRequest: TimeInterval,
-        timeoutIntervalForResource: TimeInterval
-    ) -> ProtocolClient {
-        let host = baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-
-        let sessionConfig = URLSessionConfiguration.default
-        sessionConfig.timeoutIntervalForRequest = timeoutIntervalForRequest
-        sessionConfig.timeoutIntervalForResource = timeoutIntervalForResource
-        // Fail fast; otherwise URLSession can wait indefinitely for a route that
-        // might never become available (for example when Tailscale isn't connected).
-        sessionConfig.waitsForConnectivity = false
-        let httpClient = URLSessionHTTPClient(configuration: sessionConfig)
-
-        return ProtocolClient(httpClient: httpClient, config: .init(
-            host: host,
-            networkProtocol: .connect,
-            codec: JSONCodec()
-        ))
-    }
-
-    private func authHeaders() -> Connect.Headers {
-        var headers: Connect.Headers = [:]
-        if !token.isEmpty {
-            headers["Authorization"] = ["Bearer \(token)"]
-        }
-        return headers
-    }
-
-    private func responseMessage<T: SwiftProtobuf.Message>(_ response: ResponseMessage<T>) throws -> T {
-        if let message = response.message {
-            return message
-        }
-
-        if let rpcError = response.error {
-            if rpcError.code == .unauthenticated {
-                clearToken()
-                throw APIError.unauthorized
+        } catch {
+            task.cancel(with: .goingAway, reason: nil)
+            if let urlError = error as? URLError {
+                return GatewayProbeResult(code: urlError.code.rawValue.description, detail: urlError.localizedDescription)
             }
-            throw APIError.rpc(rpcError.code.name)
+            return GatewayProbeResult(code: "connection_failed", detail: error.localizedDescription)
         }
-
-        if response.code == .unauthenticated {
-            clearToken()
-            throw APIError.unauthorized
-        }
-
-        if response.code != .ok {
-            throw APIError.rpc(response.code.name)
-        }
-
-        throw APIError.invalidResponse
     }
 
-    private func timestampString(_ timestamp: SwiftProtobuf.Google_Protobuf_Timestamp, hasValue: Bool) -> String {
-        guard hasValue else {
-            return ""
+    private func websocketURL(from url: URL) -> URL? {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return nil
         }
 
-        let seconds = TimeInterval(timestamp.seconds)
-        let nanos = TimeInterval(timestamp.nanos) / 1_000_000_000
-        let date = Date(timeIntervalSince1970: seconds + nanos)
-        return Self.timestampFormatter.string(from: date)
-    }
-
-    private func actionStatus(_ value: String) -> Pincer_Protocol_V1_ActionStatus {
-        switch value.uppercased() {
-        case "PENDING":
-            return .pending
-        case "APPROVED":
-            return .approved
-        case "REJECTED":
-            return .rejected
-        case "EXECUTED":
-            return .executed
+        switch components.scheme?.lowercased() {
+        case "http":
+            components.scheme = "ws"
+        case "https":
+            components.scheme = "wss"
+        case "ws", "wss":
+            break
         default:
-            return .unspecified
-        }
-    }
-
-    private func actionStatusName(_ value: Pincer_Protocol_V1_ActionStatus) -> String {
-        switch value {
-        case .pending:
-            return "PENDING"
-        case .approved:
-            return "APPROVED"
-        case .rejected:
-            return "REJECTED"
-        case .executed:
-            return "EXECUTED"
-        case .unspecified, .UNRECOGNIZED:
-            return "UNSPECIFIED"
-        }
-    }
-
-    private func riskClassName(_ value: Pincer_Protocol_V1_RiskClass) -> String {
-        switch value {
-        case .read:
-            return "READ"
-        case .write:
-            return "WRITE"
-        case .exfiltration:
-            return "EXFILTRATION"
-        case .destructive:
-            return "DESTRUCTIVE"
-        case .high:
-            return "HIGH"
-        case .unspecified, .UNRECOGNIZED:
-            return "UNSPECIFIED"
-        }
-    }
-
-    private func jobStatusName(_ value: Pincer_Protocol_V1_JobStatus) -> String {
-        switch value {
-        case .jobRunning:
-            return "RUNNING"
-        case .jobWaitingApproval:
-            return "WAITING_APPROVAL"
-        case .jobCompleted:
-            return "COMPLETED"
-        case .jobFailed:
-            return "FAILED"
-        case .jobPausedBudget:
-            return "PAUSED_BUDGET"
-        case .jobCancelled:
-            return "CANCELLED"
-        case .unspecified, .UNRECOGNIZED:
-            return "UNSPECIFIED"
-        }
-    }
-
-    private func triggerTypeName(_ value: Pincer_Protocol_V1_TriggerType) -> String {
-        switch value {
-        case .chatMessage:
-            return "CHAT_MESSAGE"
-        case .jobWakeup:
-            return "JOB_WAKEUP"
-        case .scheduleWakeup:
-            return "SCHEDULE_WAKEUP"
-        case .heartbeat:
-            return "HEARTBEAT"
-        case .delegatedCallback:
-            return "DELEGATED_CALLBACK"
-        case .unspecified, .UNRECOGNIZED:
-            return "UNSPECIFIED"
-        }
-    }
-
-    private func scheduleTriggerKindName(_ value: Pincer_Protocol_V1_ScheduleTriggerKind) -> String {
-        switch value {
-        case .scheduleTriggerCron:
-            return "CRON"
-        case .scheduleTriggerInterval:
-            return "INTERVAL"
-        case .scheduleTriggerAt:
-            return "AT"
-        case .unspecified, .UNRECOGNIZED:
-            return "UNSPECIFIED"
-        }
-    }
-
-    private func clearToken() {
-        token = ""
-        UserDefaults.standard.removeObject(forKey: AppConfig.tokenDefaultsKey)
-    }
-
-    // Probes used by the Settings screen when debugging backend connectivity.
-    // These should never mutate auth state.
-    func probeBackendRPC(baseURL: URL) async -> BackendProbeResult {
-        let transport = Self.makeUnaryTransport(baseURL: baseURL)
-        let probeSystemClient = Pincer_Protocol_V1_SystemServiceClient(client: transport)
-        let response = await probeSystemClient.getPolicySummary(request: .init(), headers: [:])
-        return Self.probeResult(response)
-    }
-
-    func probePairingEndpoint(baseURL: URL) async -> BackendProbeResult {
-        let transport = Self.makeUnaryTransport(baseURL: baseURL)
-        let authClient = Pincer_Protocol_V1_AuthServiceClient(client: transport)
-        let response = await authClient.createPairingCode(request: .init(), headers: [:])
-        return Self.probeResult(response)
-    }
-
-    private static func probeResult<T: SwiftProtobuf.Message>(_ response: ResponseMessage<T>) -> BackendProbeResult {
-        if response.message != nil {
-            return BackendProbeResult(code: response.code.name, detail: "")
+            return nil
         }
 
-        if let rpcError = response.error {
-            let detail = rpcError.message ?? rpcError.exception?.localizedDescription ?? ""
-            return BackendProbeResult(code: rpcError.code.name, detail: detail)
-        }
+        return components.url
+    }
 
-        if response.code != .ok {
-            return BackendProbeResult(code: response.code.name, detail: "")
-        }
+    private static func seedDefaultStateIfNeeded(defaults: UserDefaults) {
+        guard defaults.data(forKey: LocalStorage.threadsKey) == nil else { return }
+        let now = Self.nowString()
+        let main = StoredThread(
+            threadID: AppConfig.primarySessionKey,
+            title: "Main",
+            createdAt: now,
+            updatedAt: now
+        )
+        let messages = [
+            Message(
+                messageID: "msg_welcome",
+                threadID: main.threadID,
+                role: "system",
+                content: "OpenClaw iOS shell initialized. Configure your Gateway in Settings, then use this session-first UI as the base for the direct WebSocket client.",
+                createdAt: now
+            )
+        ]
+        encode([main], forKey: LocalStorage.threadsKey, defaults: defaults)
+        encode(messages, forKey: "OPENCLAW_LOCAL_MESSAGES_\(main.threadID)", defaults: defaults)
+        encode([Approval](), forKey: LocalStorage.approvalsKey, defaults: defaults)
+    }
 
-        return BackendProbeResult(code: "unknown", detail: "")
+    private func touchThread(threadID: String, updatedAt: String) {
+        var threads = loadThreads()
+        guard let index = threads.firstIndex(where: { $0.threadID == threadID }) else { return }
+        threads[index].updatedAt = updatedAt
+        saveThreads(threads)
+    }
+
+    private func loadThreads() -> [StoredThread] {
+        decode([StoredThread].self, forKey: LocalStorage.threadsKey) ?? []
+    }
+
+    private func saveThreads(_ threads: [StoredThread]) {
+        encode(threads, forKey: LocalStorage.threadsKey)
+    }
+
+    private func loadMessages(for threadID: String) -> [Message] {
+        decode([Message].self, forKey: messagesKey(for: threadID)) ?? []
+    }
+
+    private func saveMessages(_ messages: [Message], for threadID: String) {
+        encode(messages, forKey: messagesKey(for: threadID))
+    }
+
+    private func loadApprovals() -> [Approval] {
+        decode([Approval].self, forKey: LocalStorage.approvalsKey) ?? []
+    }
+
+    private func saveApprovals(_ approvals: [Approval]) {
+        encode(approvals, forKey: LocalStorage.approvalsKey)
+    }
+
+    private func messagesKey(for threadID: String) -> String {
+        "OPENCLAW_LOCAL_MESSAGES_\(threadID)"
+    }
+
+    private func encode<T: Encodable>(_ value: T, forKey key: String) {
+        Self.encode(value, forKey: key, defaults: defaults)
+    }
+
+    private func decode<T: Decodable>(_ type: T.Type, forKey key: String) -> T? {
+        guard let data = defaults.data(forKey: key) else { return nil }
+        return try? JSONDecoder().decode(type, from: data)
+    }
+
+    private static func encode<T: Encodable>(_ value: T, forKey key: String, defaults: UserDefaults) {
+        guard let data = try? JSONEncoder().encode(value) else { return }
+        defaults.set(data, forKey: key)
+    }
+
+    private static func nowString() -> String {
+        timestampFormatter.string(from: Date())
+    }
+
+    private func trimmed(_ value: String) -> String {
+        let compact = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if compact.count <= 120 {
+            return compact
+        }
+        return String(compact.prefix(117)) + "..."
     }
 }

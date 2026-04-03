@@ -19,9 +19,9 @@ func userFacingErrorMessage(_ error: Error, fallback: String) -> String {
     if let apiError = error as? APIError {
         switch apiError {
         case .unauthorized:
-            return "Session unauthorized. Open Settings and re-pair the device."
+            return "Connection unauthorized. Check your OpenClaw token or pairing approval."
         case .rpc(let code):
-            return "Backend returned RPC error \(code)."
+            return "OpenClaw returned error \(code)."
         case .invalidResponse:
             return fallback
         }
@@ -30,7 +30,7 @@ func userFacingErrorMessage(_ error: Error, fallback: String) -> String {
     if let urlError = error as? URLError {
         switch urlError.code {
         case .cannotConnectToHost, .cannotFindHost, .notConnectedToInternet, .timedOut, .networkConnectionLost:
-            return "Cannot reach backend at \(AppConfig.baseURL.absoluteString). Start it with `mise run dev`."
+            return "Cannot reach OpenClaw Gateway at \(AppConfig.baseURL.absoluteString)."
         default:
             break
         }
