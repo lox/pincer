@@ -9,16 +9,24 @@
 /* Begin PBXBuildFile section */
 		00BB6F4CBB92D09472C7C7E0 /* ErrorText.swift in Sources */ = {isa = PBXBuildFile; fileRef = E79B8CDFD73AC6C0F7C663C7 /* ErrorText.swift */; };
 		0B16F2765408205AB7554F1A /* AppConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 044069EE4D0C506D769F1321 /* AppConfig.swift */; };
+		1792F004A96D190ACAE32F33 /* APIClientGatewayMappingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20D0CE1280711E5ABDE8B7F9 /* APIClientGatewayMappingTests.swift */; };
 		1AF7E5AA1EA446E74FF45490 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B1527160929BF525EC809E77 /* Assets.xcassets */; };
+		3239533CEA149CAB147665DA /* TestStores.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36890059719FA38959FAC3AF /* TestStores.swift */; };
 		32527E93C243AB83D8ED63ED /* SettingsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 633F539062FB2D5937DD6F3D /* SettingsViewModel.swift */; };
 		42CEFDE4C0A0D72A16F1FE81 /* ApprovalsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58EE2731E78134BC2EF5F1C7 /* ApprovalsStore.swift */; };
+		4503A87AF31F6CFD7845C273 /* OpenClawGatewayAuthTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1BC7C584910416849FA650D /* OpenClawGatewayAuthTests.swift */; };
 		5BE32E340B9A4FEEA93439D8 /* ChatViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 817111BB98CE5BFED6A4750F /* ChatViewModel.swift */; };
+		5FA48AB4DB97D95DC75ABD35 /* OpenClawGatewayAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 751274ED0A2110A71F4952A5 /* OpenClawGatewayAuth.swift */; };
 		7EB7EC438B9862D4CE3932E1 /* PincerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 085FB97D074C43558F99C149 /* PincerApp.swift */; };
 		808665AD8359851B626F0BA5 /* PincerUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF493BDB69A270238281D4CC /* PincerUITests.swift */; };
+		8CBFD05DBD2B2F1370974FE1 /* ChatStreamReducerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC08CAECE18E04F0F1201D17 /* ChatStreamReducerTests.swift */; };
 		8EC2FB5064B179146561EC84 /* ErrorTextTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA80E693D47FA40C0B3EE8C6 /* ErrorTextTests.swift */; };
 		A946EFFA9815D941DCEDAF8C /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8C017076C30A916A55441D6 /* Models.swift */; };
 		AA7FE540D31985864B286587 /* ApprovalsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A607777578E8E2C3D86C035 /* ApprovalsViewModel.swift */; };
+		B2B4462D5C243312FC80B50E /* APIClientParsingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70F405D38AF835DD53EBD247 /* APIClientParsingTests.swift */; };
+		BB5D02C489020E0A39D77021 /* OpenClawGatewayStream.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7AD40831A3250C68BD7673D9 /* OpenClawGatewayStream.swift */; };
 		C234C3C3E9E7513FD08A3ED9 /* AppConfigTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96B73C04CF505D8C2BBE7FF5 /* AppConfigTests.swift */; };
+		DC7775150A1626F223531E23 /* OpenClawGatewayConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 980AC4263AE9B670F6153CE5 /* OpenClawGatewayConnection.swift */; };
 		F632AA762B2A724BBBA70BDA /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC76A57DF375709D807D6E1D /* APIClient.swift */; };
 		FFD587396FB1D0F8F33EF7DE /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15B0AC0BC187E83771DCED94 /* ContentView.swift */; };
 /* End PBXBuildFile section */
@@ -45,15 +53,23 @@
 		044069EE4D0C506D769F1321 /* AppConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfig.swift; sourceTree = "<group>"; };
 		085FB97D074C43558F99C149 /* PincerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PincerApp.swift; sourceTree = "<group>"; };
 		15B0AC0BC187E83771DCED94 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		20D0CE1280711E5ABDE8B7F9 /* APIClientGatewayMappingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClientGatewayMappingTests.swift; sourceTree = "<group>"; };
+		36890059719FA38959FAC3AF /* TestStores.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestStores.swift; sourceTree = "<group>"; };
 		4A607777578E8E2C3D86C035 /* ApprovalsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApprovalsViewModel.swift; sourceTree = "<group>"; };
 		58EE2731E78134BC2EF5F1C7 /* ApprovalsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApprovalsStore.swift; sourceTree = "<group>"; };
 		633F539062FB2D5937DD6F3D /* SettingsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsViewModel.swift; sourceTree = "<group>"; };
+		70F405D38AF835DD53EBD247 /* APIClientParsingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClientParsingTests.swift; sourceTree = "<group>"; };
+		751274ED0A2110A71F4952A5 /* OpenClawGatewayAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenClawGatewayAuth.swift; sourceTree = "<group>"; };
+		7AD40831A3250C68BD7673D9 /* OpenClawGatewayStream.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenClawGatewayStream.swift; sourceTree = "<group>"; };
 		817111BB98CE5BFED6A4750F /* ChatViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatViewModel.swift; sourceTree = "<group>"; };
 		866A1BC33E273D3C8E5626CA /* PincerTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = PincerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		96B73C04CF505D8C2BBE7FF5 /* AppConfigTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfigTests.swift; sourceTree = "<group>"; };
+		980AC4263AE9B670F6153CE5 /* OpenClawGatewayConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenClawGatewayConnection.swift; sourceTree = "<group>"; };
 		B1527160929BF525EC809E77 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		B1BC7C584910416849FA650D /* OpenClawGatewayAuthTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenClawGatewayAuthTests.swift; sourceTree = "<group>"; };
 		BA80E693D47FA40C0B3EE8C6 /* ErrorTextTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ErrorTextTests.swift; sourceTree = "<group>"; };
 		C8C017076C30A916A55441D6 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		CC08CAECE18E04F0F1201D17 /* ChatStreamReducerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatStreamReducerTests.swift; sourceTree = "<group>"; };
 		DC76A57DF375709D807D6E1D /* APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClient.swift; sourceTree = "<group>"; };
 		E79B8CDFD73AC6C0F7C663C7 /* ErrorText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ErrorText.swift; sourceTree = "<group>"; };
 		EF493BDB69A270238281D4CC /* PincerUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PincerUITests.swift; sourceTree = "<group>"; };
@@ -64,8 +80,13 @@
 		A094CE94BDD23A7677E9420D /* PincerTests */ = {
 			isa = PBXGroup;
 			children = (
+				20D0CE1280711E5ABDE8B7F9 /* APIClientGatewayMappingTests.swift */,
+				70F405D38AF835DD53EBD247 /* APIClientParsingTests.swift */,
 				96B73C04CF505D8C2BBE7FF5 /* AppConfigTests.swift */,
+				CC08CAECE18E04F0F1201D17 /* ChatStreamReducerTests.swift */,
 				BA80E693D47FA40C0B3EE8C6 /* ErrorTextTests.swift */,
+				B1BC7C584910416849FA650D /* OpenClawGatewayAuthTests.swift */,
+				36890059719FA38959FAC3AF /* TestStores.swift */,
 			);
 			name = PincerTests;
 			path = ../PincerTests;
@@ -82,6 +103,9 @@
 				15B0AC0BC187E83771DCED94 /* ContentView.swift */,
 				E79B8CDFD73AC6C0F7C663C7 /* ErrorText.swift */,
 				C8C017076C30A916A55441D6 /* Models.swift */,
+				751274ED0A2110A71F4952A5 /* OpenClawGatewayAuth.swift */,
+				980AC4263AE9B670F6153CE5 /* OpenClawGatewayConnection.swift */,
+				7AD40831A3250C68BD7673D9 /* OpenClawGatewayStream.swift */,
 				085FB97D074C43558F99C149 /* PincerApp.swift */,
 				633F539062FB2D5937DD6F3D /* SettingsViewModel.swift */,
 			);
@@ -235,6 +259,9 @@
 				FFD587396FB1D0F8F33EF7DE /* ContentView.swift in Sources */,
 				00BB6F4CBB92D09472C7C7E0 /* ErrorText.swift in Sources */,
 				A946EFFA9815D941DCEDAF8C /* Models.swift in Sources */,
+				5FA48AB4DB97D95DC75ABD35 /* OpenClawGatewayAuth.swift in Sources */,
+				DC7775150A1626F223531E23 /* OpenClawGatewayConnection.swift in Sources */,
+				BB5D02C489020E0A39D77021 /* OpenClawGatewayStream.swift in Sources */,
 				7EB7EC438B9862D4CE3932E1 /* PincerApp.swift in Sources */,
 				32527E93C243AB83D8ED63ED /* SettingsViewModel.swift in Sources */,
 			);
@@ -244,8 +271,13 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				1792F004A96D190ACAE32F33 /* APIClientGatewayMappingTests.swift in Sources */,
+				B2B4462D5C243312FC80B50E /* APIClientParsingTests.swift in Sources */,
 				C234C3C3E9E7513FD08A3ED9 /* AppConfigTests.swift in Sources */,
+				8CBFD05DBD2B2F1370974FE1 /* ChatStreamReducerTests.swift in Sources */,
 				8EC2FB5064B179146561EC84 /* ErrorTextTests.swift in Sources */,
+				4503A87AF31F6CFD7845C273 /* OpenClawGatewayAuthTests.swift in Sources */,
+				3239533CEA149CAB147665DA /* TestStores.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

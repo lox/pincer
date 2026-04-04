@@ -115,10 +115,16 @@ final class SettingsViewModel: ObservableObject {
         }
 
         setGatewayCheck(id: "auth", status: .running, detail: "")
-        let authProbe = await client.probeGatewayAuth(baseURL: parsedURL)
-        if authProbe.code == "ok" {
+        let authProbe = await client.probeGatewayAuth(
+            baseURL: parsedURL,
+            gatewayToken: gatewayToken
+        )
+        switch authProbe.code {
+        case "ok":
+            setGatewayCheck(id: "auth", status: .ok, detail: authProbe.detail)
+        case "pairing_required":
             setGatewayCheck(id: "auth", status: .warning, detail: authProbe.detail)
-        } else {
+        default:
             setGatewayCheck(id: "auth", status: .error, detail: authProbe.detail)
         }
     }

@@ -4,10 +4,17 @@ This app is now an OpenClaw-focused iOS shell.
 
 Current responsibilities:
 
-- session list and session detail UI
+- single-chat-first UI for the primary OpenClaw session
+- conditional session switcher for non-main sessions
 - approvals surface
 - Gateway settings
-- local persistence while the direct OpenClaw WebSocket client is implemented
+- real Gateway auth probing with stored device identity and device token reuse
+- real Gateway-backed session list/history/create/delete/send requests
+- long-lived authenticated Gateway transport for chat + agent events
+- optimistic user send with streamed assistant draft updates
+- Control UI-style transcript cleanup for metadata wrappers, timestamp/channel prefixes, silent assistant `NO_REPLY`, and hidden tool execution artifacts
+- live tool activity cards and `chat.abort` support in the composer
+- local approvals placeholders while approval transport is still being replaced
 
 ## Local build
 
@@ -23,6 +30,15 @@ The app reads:
 - `OPENCLAW_GATEWAY_TOKEN`
 - `OPENCLAW_PRIMARY_SESSION_KEY`
 
+Gateway secrets are persisted in Keychain. If `OPENCLAW_GATEWAY_TOKEN` is injected via
+simulator defaults for local development, the app migrates it into Keychain on first read
+and clears the plain `UserDefaults` copy.
+
+The app also stores:
+
+- a stable Ed25519 device identity for signed Gateway `connect` requests
+- the issued per-device Gateway auth token returned in `hello-ok.auth.deviceToken`
+
 Defaults:
 
 - Gateway URL: `ws://127.0.0.1:18789`
@@ -30,9 +46,9 @@ Defaults:
 
 ## Near-term implementation target
 
-Replace the current local persistence shell with:
+Extend the current direct Gateway shell with:
 
-1. direct Gateway connect/challenge handling
-2. device-auth pairing
-3. real session list/history/send
-4. real approval list/resolve flows
+1. real approval list/resolve flows
+2. tighter reconnect and gap-recovery behavior
+3. richer timeline rendering for streamed assistant/tool output
+4. session/presence shell updates without explicit refresh actions

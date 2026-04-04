@@ -16,18 +16,24 @@ The old standalone Go backend/runtime has been removed from the product directio
 
 The iOS app currently provides:
 
-- a native session-based app shell,
+- a native single-chat-first app shell,
+- a conditional session switcher when OpenClaw exposes non-main sessions,
 - approvals and settings surfaces,
-- local session persistence while the transport layer is replaced,
 - Gateway URL/token/session configuration,
-- Gateway reachability probing over WebSocket.
+- Gateway reachability probing over WebSocket,
+- real Gateway auth probing with device identity, signed `connect`, and Keychain-backed device-token persistence.
+- real Gateway-backed chat/session list, history, create/delete, send, and abort flows,
+- a long-lived authenticated Gateway connection for chat, agent, health, and presence events,
+- event-driven assistant drafts and live tool activity in the chat timeline,
+- Control UI-style transcript cleanup for metadata wrappers, timestamp/channel prefixes, silent `NO_REPLY` assistant messages, and hidden tool execution artifacts,
+- local approvals placeholders while the approvals transport is still being replaced.
 
-The next implementation slice is the direct OpenClaw Gateway client:
+The next implementation slice is the remaining Gateway operator surface:
 
-1. connect/challenge handling,
-2. device-auth pairing,
-3. real session list/history/send,
-4. approval listing and resolution.
+1. replace local approvals data with real approval listing and resolution,
+2. carry presence/health/session updates into the shell without manual refresh affordances,
+3. harden reconnect and gap-recovery behavior,
+4. tighten the chat timeline presentation for richer message/tool rendering.
 
 ## Local development
 

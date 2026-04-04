@@ -209,7 +209,7 @@ Suggested v1 surfaces:
 
 1. Gateway connection
 2. Pair/connect/disconnect
-3. Session list and switcher
+3. Single-primary-chat UX with a session switcher only when non-main sessions exist
 4. Chat timeline with streaming updates
 5. Send/abort/retry
 6. Node list and basic node status
@@ -306,7 +306,7 @@ Goal:
 
 Deliverables:
 
-- session list,
+- single-primary-chat shell with conditional session switching,
 - streaming chat UI,
 - send/abort,
 - health/presence banner,

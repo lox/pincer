@@ -51,4 +51,75 @@ final class AppConfigTests: XCTestCase {
         defaults.removeObject(forKey: key)
         XCTAssertEqual(AppConfig.primarySessionKey, "main")
     }
+
+    func testBearerTokenMigratesFromDefaultsIntoSecureStore() {
+        let defaults = InMemoryDefaultsStore()
+        defaults.storage[AppConfig.tokenDefaultsKey] = "shared-token"
+        let secureStore = InMemorySecureStore()
+        let store = GatewayCredentialStore(
+            defaults: defaults,
+            secureStore: secureStore,
+            tokenKey: AppConfig.tokenDefaultsKey,
+            deviceIdentityKey: AppConfig.deviceIdentityDefaultsKey,
+            deviceTokenKeyPrefix: AppConfig.deviceTokenDefaultsKeyPrefix
+        )
+
+        XCTAssertEqual(store.bearerToken(), "shared-token")
+        XCTAssertNil(defaults.storage[AppConfig.tokenDefaultsKey])
+        XCTAssertEqual(secureStore.storage[AppConfig.tokenDefaultsKey], "shared-token")
+    }
+
+    func testSetBearerTokenRemovesDefaultsAndSecureStoreWhenBlank() {
+        let defaults = InMemoryDefaultsStore()
+        defaults.storage[AppConfig.tokenDefaultsKey] = "stale"
+        let secureStore = InMemorySecureStore()
+        secureStore.storage[AppConfig.tokenDefaultsKey] = "secret"
+        let store = GatewayCredentialStore(
+            defaults: defaults,
+            secureStore: secureStore,
+            tokenKey: AppConfig.tokenDefaultsKey,
+            deviceIdentityKey: AppConfig.deviceIdentityDefaultsKey,
+            deviceTokenKeyPrefix: AppConfig.deviceTokenDefaultsKeyPrefix
+        )
+
+        store.setBearerToken("   ")
+
+        XCTAssertNil(defaults.storage[AppConfig.tokenDefaultsKey])
+        XCTAssertNil(secureStore.storage[AppConfig.tokenDefaultsKey])
+    }
+
+    func testSessionSwitcherStaysHiddenWhenOnlyPrimarySessionExists() {
+        let threads = [
+            ThreadSummary(
+                threadID: "agent:main:main",
+                title: "Main",
+                createdAt: "",
+                updatedAt: "",
+                messageCount: 1
+            ),
+        ]
+
+        XCTAssertFalse(shouldShowSessionSwitcher(for: threads))
+    }
+
+    func testSessionSwitcherAppearsWhenSecondarySessionExists() {
+        let threads = [
+            ThreadSummary(
+                threadID: "agent:main:main",
+                title: "Main",
+                createdAt: "",
+                updatedAt: "",
+                messageCount: 1
+            ),
+            ThreadSummary(
+                threadID: "agent:main:ops",
+                title: "Ops",
+                createdAt: "",
+                updatedAt: "",
+                messageCount: 4
+            ),
+        ]
+
+        XCTAssertTrue(shouldShowSessionSwitcher(for: threads))
+    }
 }

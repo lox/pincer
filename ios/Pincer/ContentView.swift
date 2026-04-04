@@ -1,10 +1,10 @@
 import SwiftUI
 
 private enum A11y {
-    static let screenSessions = "screen_sessions"
+    static let screenChat = "screen_chat"
     static let screenApprovals = "screen_approvals"
     static let screenSettings = "screen_settings"
-    static let tabSessions = "tab_sessions"
+    static let tabChat = "tab_chat"
     static let tabApprovals = "tab_approvals"
     static let tabSettings = "tab_settings"
     static let gatewayURLInput = "gateway_url_input"
@@ -12,6 +12,8 @@ private enum A11y {
     static let gatewayResetButton = "gateway_reset_button"
     static let messageInput = "message_input"
     static let messageSendButton = "message_send_button"
+    static let messageStopButton = "message_stop_button"
+    static let chatSessionsButton = "chat_sessions_button"
 }
 
 struct ContentView: View {
@@ -30,11 +32,11 @@ struct ContentView: View {
 
     var body: some View {
         TabView {
-            SessionRootView(model: chatModel)
-                .accessibilityIdentifier(A11y.screenSessions)
+            ChatRootView(model: chatModel)
+                .accessibilityIdentifier(A11y.screenChat)
                 .tabItem {
-                    Label("Sessions", systemImage: "bubble.left.and.bubble.right")
-                        .accessibilityIdentifier(A11y.tabSessions)
+                    Label("Chat", systemImage: "bubble.left.and.text.bubble.right")
+                        .accessibilityIdentifier(A11y.tabChat)
                 }
 
             ApprovalsView(model: approvalsModel)
@@ -60,71 +62,62 @@ struct ContentView: View {
     }
 }
 
-private struct SessionRootView: View {
+private struct ChatRootView: View {
     @ObservedObject var model: ChatViewModel
+    @State private var isShowingSessions = false
 
     var body: some View {
         NavigationStack {
-            List {
-                Section {
-                    ForEach(model.threads) { thread in
-                        NavigationLink {
-                            SessionDetailView(model: model, thread: thread)
-                        } label: {
-                            VStack(alignment: .leading, spacing: 4) {
-                                HStack {
-                                    Text(thread.displayTitle)
-                                        .font(.headline)
-                                        .foregroundStyle(PincerPalette.textPrimary)
-                                    if thread.threadID == AppConfig.primarySessionKey {
-                                        Text("Primary")
-                                            .font(.caption.weight(.semibold))
-                                            .foregroundStyle(PincerPalette.accent)
-                                            .padding(.horizontal, 8)
-                                            .padding(.vertical, 2)
-                                            .background(PincerPalette.accent.opacity(0.14))
-                                            .clipShape(Capsule())
-                                    }
-                                }
-
-                                Text(thread.updatedAt.isEmpty ? "No activity yet" : relativeTimestamp(from: thread.updatedAt))
-                                    .font(.subheadline)
-                                    .foregroundStyle(PincerPalette.textSecondary)
-                            }
-                            .padding(.vertical, 4)
-                        }
+            Group {
+                if model.currentThreadSummary != nil {
+                    ChatConversationView(model: model)
+                } else if model.isBusy {
+                    VStack {
+                        Spacer()
+                        ProgressView("Loading chat")
+                            .tint(PincerPalette.accent)
+                        Spacer()
                     }
-                    .onDelete { offsets in
-                        guard let first = offsets.first, model.threads.indices.contains(first) else { return }
-                        let thread = model.threads[first]
-                        Task {
-                            await model.loadThread(thread.threadID, title: thread.displayTitle)
-                            await model.deleteCurrentThread()
-                        }
+                } else {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("No active chat")
+                            .font(.title3.weight(.semibold))
+                            .foregroundStyle(PincerPalette.textPrimary)
+                        Text("Pincer opens straight into the primary OpenClaw conversation. Extra sessions only show up when the Gateway exposes them.")
+                            .foregroundStyle(PincerPalette.textSecondary)
                     }
-                } header: {
-                    Text("OpenClaw Sessions")
-                } footer: {
-                    Text("The app is now session-first. The direct OpenClaw Gateway client replaces the local shell next.")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .padding(16)
                 }
             }
-            .scrollContentBackground(.hidden)
             .background(PincerPalette.page)
-            .navigationTitle("Sessions")
+            .navigationTitle(model.currentThreadDisplayTitle)
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                if model.showsSessionSwitcher {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button {
+                            isShowingSessions = true
+                        } label: {
+                            Image(systemName: "rectangle.stack")
+                        }
+                        .accessibilityIdentifier(A11y.chatSessionsButton)
+                    }
+                }
+
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
-                        Task { await model.startNewThread() }
+                        Task { await model.refreshCurrentThread() }
                     } label: {
-                        Image(systemName: "plus")
+                        Image(systemName: "arrow.clockwise")
                     }
                 }
             }
             .task {
                 await model.bootstrapIfNeeded()
             }
-            .refreshable {
-                await model.refreshThreads()
+            .sheet(isPresented: $isShowingSessions) {
+                SessionSwitcherView(model: model)
             }
             .alert("Error", isPresented: Binding(
                 get: { model.errorText != nil },
@@ -138,12 +131,129 @@ private struct SessionRootView: View {
     }
 }
 
-private struct SessionDetailView: View {
+private struct SessionSwitcherView: View {
+    @Environment(\.dismiss) private var dismiss
     @ObservedObject var model: ChatViewModel
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    ForEach(model.threads) { thread in
+                        Button {
+                            Task {
+                                await model.loadThread(thread.threadID, title: thread.displayTitle)
+                                dismiss()
+                            }
+                        } label: {
+                            SessionSwitcherRow(
+                                thread: thread,
+                                isSelected: model.threadID == thread.threadID
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .swipeActions {
+                            if !sessionKeyMatchesPrimary(thread.threadID) {
+                                Button("Delete", role: .destructive) {
+                                    Task {
+                                        await model.deleteThread(thread.threadID)
+                                        if !model.showsSessionSwitcher {
+                                            dismiss()
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } header: {
+                    Text("OpenClaw Sessions")
+                } footer: {
+                    Text("Main stays pinned as the default chat. Extra sessions are available here when OpenClaw exposes them.")
+                }
+            }
+            .scrollContentBackground(.hidden)
+            .background(PincerPalette.page)
+            .navigationTitle("Sessions")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                }
+
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        Task {
+                            await model.startNewThread()
+                            dismiss()
+                        }
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct SessionSwitcherRow: View {
     let thread: ThreadSummary
+    let isSelected: Bool
+
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text(thread.displayTitle)
+                        .font(.headline)
+                        .foregroundStyle(PincerPalette.textPrimary)
+
+                    if sessionKeyMatchesPrimary(thread.threadID) {
+                        Text("Main")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(PincerPalette.accent)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 2)
+                            .background(PincerPalette.accent.opacity(0.14))
+                            .clipShape(Capsule())
+                    }
+                }
+
+                Text(thread.updatedAt.isEmpty ? "No activity yet" : relativeTimestamp(from: thread.updatedAt))
+                    .font(.subheadline)
+                    .foregroundStyle(PincerPalette.textSecondary)
+            }
+
+            Spacer()
+
+            if isSelected {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(PincerPalette.accent)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+private struct ChatConversationView: View {
+    @ObservedObject var model: ChatViewModel
 
     var body: some View {
         VStack(spacing: 0) {
+            if let connectionNotice = model.connectionNotice {
+                HStack(spacing: 10) {
+                    Image(systemName: model.canAbortCurrentRun ? "bolt.horizontal.circle.fill" : "wifi.exclamationmark")
+                        .foregroundStyle(model.canAbortCurrentRun ? PincerPalette.accent : PincerPalette.warning)
+                    Text(connectionNotice)
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(PincerPalette.textPrimary)
+                    Spacer()
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .background(PincerPalette.card)
+            }
+
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
@@ -151,14 +261,32 @@ private struct SessionDetailView: View {
                             MessageBubble(message: message)
                                 .id(message.id)
                         }
+
+                        if !model.liveToolCalls.isEmpty || model.liveAssistantDraft != nil {
+                            RunActivityView(
+                                toolCalls: model.liveToolCalls,
+                                assistantDraft: model.liveAssistantDraft
+                            )
+                            .id("run_activity")
+                        }
                     }
                     .padding(16)
                 }
                 .background(PincerPalette.page)
                 .onChange(of: model.messages.count) { _, _ in
-                    guard let lastID = model.messages.last?.id else { return }
+                    let lastID = model.liveAssistantDraft?.id ?? model.messages.last?.id ?? "run_activity"
                     withAnimation(.easeOut(duration: 0.2)) {
                         proxy.scrollTo(lastID, anchor: .bottom)
+                    }
+                }
+                .onChange(of: model.liveToolCalls.count) { _, _ in
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        proxy.scrollTo("run_activity", anchor: .bottom)
+                    }
+                }
+                .onChange(of: model.liveAssistantDraft?.content ?? "") { _, _ in
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        proxy.scrollTo(model.liveAssistantDraft?.id ?? "run_activity", anchor: .bottom)
                     }
                 }
             }
@@ -166,16 +294,11 @@ private struct SessionDetailView: View {
             composer
         }
         .background(PincerPalette.page)
-        .navigationTitle(thread.displayTitle)
-        .navigationBarTitleDisplayMode(.inline)
-        .task {
-            await model.loadThread(thread.threadID, title: thread.displayTitle)
-        }
     }
 
     private var composer: some View {
         HStack(alignment: .bottom, spacing: 12) {
-            TextField("Message \(thread.displayTitle)", text: $model.input, axis: .vertical)
+            TextField("Message \(model.currentThreadDisplayTitle)", text: $model.input, axis: .vertical)
                 .textFieldStyle(.plain)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
@@ -183,15 +306,25 @@ private struct SessionDetailView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .accessibilityIdentifier(A11y.messageInput)
 
-            Button {
-                Task { await model.send() }
-            } label: {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.system(size: 28))
-                    .foregroundStyle(model.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? PincerPalette.textTertiary : PincerPalette.accent)
+            if model.canAbortCurrentRun {
+                Button(model.isStopping ? "Stopping…" : "Stop") {
+                    Task { await model.abortCurrentRun() }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(PincerPalette.warning)
+                .disabled(model.isStopping)
+                .accessibilityIdentifier(A11y.messageStopButton)
+            } else {
+                Button {
+                    Task { await model.send() }
+                } label: {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.system(size: 28))
+                        .foregroundStyle(model.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? PincerPalette.textTertiary : PincerPalette.accent)
+                }
+                .disabled(model.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.isBusy)
+                .accessibilityIdentifier(A11y.messageSendButton)
             }
-            .disabled(model.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.isBusy)
-            .accessibilityIdentifier(A11y.messageSendButton)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
@@ -201,6 +334,7 @@ private struct SessionDetailView: View {
 
 private struct MessageBubble: View {
     let message: Message
+    var isStreaming = false
 
     var body: some View {
         VStack(alignment: alignment, spacing: 6) {
@@ -228,7 +362,7 @@ private struct MessageBubble: View {
     private var roleLabel: String {
         switch message.role {
         case "assistant":
-            return "Assistant"
+            return isStreaming ? "Assistant Live" : "Assistant"
         case "system":
             return "System"
         default:
@@ -252,6 +386,117 @@ private struct MessageBubble: View {
             return PincerPalette.warning.opacity(0.14)
         default:
             return PincerPalette.card
+        }
+    }
+}
+
+private struct RunActivityView: View {
+    let toolCalls: [ToolCallActivity]
+    let assistantDraft: Message?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if !toolCalls.isEmpty {
+                Text("Live Activity")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(PincerPalette.textSecondary)
+
+                ForEach(toolCalls) { toolCall in
+                    ToolActivityCard(toolCall: toolCall)
+                }
+            }
+
+            if let assistantDraft {
+                MessageBubble(message: assistantDraft, isStreaming: true)
+                    .id(assistantDraft.id)
+            }
+        }
+    }
+}
+
+private struct ToolActivityCard: View {
+    let toolCall: ToolCallActivity
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "hammer.circle.fill")
+                    .foregroundStyle(PincerPalette.accent)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(toolCall.displayLabel)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(PincerPalette.textPrimary)
+                    Text(stateLabel)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(stateColor)
+                }
+
+                Spacer()
+            }
+
+            if let argsPreview = toolCall.argsPreview, !argsPreview.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Input")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(PincerPalette.textSecondary)
+                    Text(argsPreview)
+                        .font(.footnote.monospaced())
+                        .foregroundStyle(PincerPalette.textPrimary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(10)
+                        .background(PincerPalette.page)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+            }
+
+            if let outputPreview = toolCall.executions.first?.stdout, !outputPreview.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Output")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(PincerPalette.textSecondary)
+                    Text(outputPreview)
+                        .font(.footnote.monospaced())
+                        .foregroundStyle(PincerPalette.textPrimary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(10)
+                        .background(PincerPalette.page)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+            }
+        }
+        .cardSurface()
+    }
+
+    private var stateLabel: String {
+        switch toolCall.state {
+        case .planned:
+            return "Queued"
+        case .waitingApproval:
+            return "Waiting Approval"
+        case .running:
+            return "Running"
+        case .succeeded:
+            return "Completed"
+        case .failed:
+            return "Failed"
+        case .rejected:
+            return "Rejected"
+        }
+    }
+
+    private var stateColor: Color {
+        switch toolCall.state {
+        case .planned:
+            return PincerPalette.textSecondary
+        case .waitingApproval:
+            return PincerPalette.warning
+        case .running:
+            return PincerPalette.accent
+        case .succeeded:
+            return PincerPalette.success
+        case .failed, .rejected:
+            return PincerPalette.danger
         }
     }
 }
@@ -381,13 +626,18 @@ private struct GatewayCard: View {
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(PincerPalette.textPrimary)
 
-            SecureField("Optional for now", text: $model.gatewayToken)
+            SecureField("Required on first connect", text: $model.gatewayToken)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
                 .background(PincerPalette.page)
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+            Text("After the first authenticated connect, Pincer stores the issued device token in Keychain and can reconnect without retyping the shared token.")
+                .font(.footnote)
+                .foregroundStyle(PincerPalette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
 
             Text("Primary session key")
                 .font(.subheadline.weight(.semibold))
