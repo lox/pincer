@@ -60,9 +60,34 @@ func isGatewaySilentAssistantReply(_ text: String, role: String = "assistant") -
         text.trimmingCharacters(in: .whitespacesAndNewlines) == "NO_REPLY"
 }
 
+func isGatewayHeartbeatMaintenancePrompt(_ text: String, role: String = "user") -> Bool {
+    guard role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "user" else {
+        return false
+    }
+
+    let normalized = gatewayNormalizedMatchText(text)
+    return normalized.contains("read heartbeat.md if it exists (workspace context).") &&
+        normalized.contains("follow it strictly.") &&
+        normalized.contains("do not infer or repeat old tasks from prior chats.") &&
+        normalized.contains("if nothing needs attention, reply heartbeat_ok.") &&
+        normalized.contains("do not read docs/heartbeat.md.")
+}
+
+func isGatewayHeartbeatMaintenanceReply(_ text: String, role: String = "assistant") -> Bool {
+    role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "assistant" &&
+        gatewayNormalizedMatchText(text) == "heartbeat_ok"
+}
+
 private func gatewayTrimmedText(_ text: String?) -> String? {
     let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     return trimmed.isEmpty ? nil : trimmed
+}
+
+private func gatewayNormalizedMatchText(_ text: String) -> String {
+    text
+        .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        .lowercased()
 }
 
 private func stripGatewayReplyDirectiveTags(from text: String) -> String {
@@ -252,7 +277,7 @@ struct Message: Codable, Identifiable, Equatable {
     var id: String { messageID }
 }
 
-struct Approval: Codable, Identifiable {
+struct Approval: Codable, Identifiable, Equatable {
     let actionID: String
     let source: String
     let sourceID: String
@@ -409,13 +434,15 @@ struct TurnActivity: Identifiable, Equatable {
     var id: String { turnID }
 }
 
-enum ChatTimelineItem: Identifiable {
+enum ChatTimelineItem: Identifiable, Equatable {
     case message(Message)
+    case toolActivity(ToolCallActivity)
     case approval(Approval)
 
     var id: String {
         switch self {
         case .message(let m): return "msg_\(m.id)"
+        case .toolActivity(let tool): return "tool_\(tool.id)"
         case .approval(let a): return "apv_\(a.id)"
         }
     }

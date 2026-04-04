@@ -272,4 +272,112 @@ final class ChatStreamReducerTests: XCTestCase {
         XCTAssertTrue(state.needsSnapshotRefresh)
         XCTAssertEqual(state.connectionNotice, "Gateway event gap detected. Refreshing chat…")
     }
+
+    func testApplyGatewayChatEventsSuppressesHeartbeatMaintenanceRun() {
+        var state = ChatStreamState()
+
+        applyGatewayConnectionEvent(
+            .chat(
+                GatewayChatEvent(
+                    runID: "heartbeat-run",
+                    sessionKey: "agent:main:main",
+                    sequence: 10,
+                    state: .final,
+                    message: GatewayChatMessage(
+                        role: "user",
+                        text: heartbeatMaintenancePrompt,
+                        thinkingText: "",
+                        command: false,
+                        hasAttachments: false
+                    ),
+                    errorMessage: nil,
+                    stopReason: nil
+                )
+            ),
+            to: &state,
+            currentThreadID: "agent:main:main",
+            now: { "2026-04-04T04:21:00Z" }
+        )
+
+        applyGatewayConnectionEvent(
+            .agent(
+                GatewayAgentEvent(
+                    runID: "heartbeat-run",
+                    sessionKey: "agent:main:main",
+                    sequence: 11,
+                    stream: "tool",
+                    tool: GatewayToolEvent(
+                        phase: "start",
+                        toolCallID: "heartbeat-tool",
+                        name: "read",
+                        argsPreview: "{\"path\":\"/Users/lachlan/.openclaw/workspace/HEARTBEAT.md\"}",
+                        outputPreview: nil,
+                        isError: false
+                    ),
+                    lifecyclePhase: nil
+                )
+            ),
+            to: &state,
+            currentThreadID: "agent:main:main"
+        )
+
+        applyGatewayConnectionEvent(
+            .chat(
+                GatewayChatEvent(
+                    runID: "heartbeat-run",
+                    sessionKey: "agent:main:main",
+                    sequence: 12,
+                    state: .final,
+                    message: GatewayChatMessage(
+                        role: "assistant",
+                        text: "HEARTBEAT_OK",
+                        thinkingText: "",
+                        command: false,
+                        hasAttachments: false
+                    ),
+                    errorMessage: nil,
+                    stopReason: "end_turn"
+                )
+            ),
+            to: &state,
+            currentThreadID: "agent:main:main",
+            now: { "2026-04-04T04:21:01Z" }
+        )
+
+        XCTAssertTrue(state.messages.isEmpty)
+        XCTAssertTrue(state.timelineItems.isEmpty)
+        XCTAssertTrue(state.latestToolCalls.isEmpty)
+        XCTAssertNil(state.activeRunID)
+        XCTAssertFalse(state.needsSnapshotRefresh)
+
+        applyGatewayConnectionEvent(
+            .chat(
+                GatewayChatEvent(
+                    runID: "normal-run",
+                    sessionKey: "agent:main:main",
+                    sequence: 13,
+                    state: .final,
+                    message: GatewayChatMessage(
+                        role: "assistant",
+                        text: "Visible reply",
+                        thinkingText: "",
+                        command: false,
+                        hasAttachments: false
+                    ),
+                    errorMessage: nil,
+                    stopReason: "end_turn"
+                )
+            ),
+            to: &state,
+            currentThreadID: "agent:main:main",
+            now: { "2026-04-04T04:21:02Z" }
+        )
+
+        XCTAssertEqual(state.messages.map(\.content), ["Visible reply"])
+    }
 }
+
+private let heartbeatMaintenancePrompt = """
+Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK. When reading HEARTBEAT.md, use workspace file /Users/lachlan/.openclaw/workspace/HEARTBEAT.md (exact case). Do not read docs/heartbeat.md.
+Current time: Saturday, April 4th, 2026 — 3:21 PM (Australia/Melbourne) / 2026-04-04 04:21 UTC
+"""

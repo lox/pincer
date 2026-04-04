@@ -1,4 +1,5 @@
 import SwiftUI
+import Textual
 
 private enum A11y {
     static let screenChat = "screen_chat"
@@ -257,9 +258,9 @@ private struct ChatConversationView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
-                        ForEach(model.messages) { message in
-                            MessageBubble(message: message)
-                                .id(message.id)
+                        ForEach(model.timelineItems) { item in
+                            TimelineItemView(item: item)
+                                .id(item.id)
                         }
 
                         if !model.liveToolCalls.isEmpty || model.liveAssistantDraft != nil {
@@ -273,8 +274,8 @@ private struct ChatConversationView: View {
                     .padding(16)
                 }
                 .background(PincerPalette.page)
-                .onChange(of: model.messages.count) { _, _ in
-                    let lastID = model.liveAssistantDraft?.id ?? model.messages.last?.id ?? "run_activity"
+                .onChange(of: model.timelineItems.count) { _, _ in
+                    let lastID = model.liveAssistantDraft?.id ?? model.timelineItems.last?.id ?? "run_activity"
                     withAnimation(.easeOut(duration: 0.2)) {
                         proxy.scrollTo(lastID, anchor: .bottom)
                     }
@@ -332,6 +333,21 @@ private struct ChatConversationView: View {
     }
 }
 
+private struct TimelineItemView: View {
+    let item: ChatTimelineItem
+
+    var body: some View {
+        switch item {
+        case .message(let message):
+            MessageBubble(message: message)
+        case .toolActivity(let toolCall):
+            HistoricalToolActivityCard(toolCall: toolCall)
+        case .approval(let approval):
+            ApprovalTimelineCard(approval: approval)
+        }
+    }
+}
+
 private struct MessageBubble: View {
     let message: Message
     var isStreaming = false
@@ -342,9 +358,7 @@ private struct MessageBubble: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(PincerPalette.textSecondary)
 
-            Text(message.content)
-                .font(.body)
-                .foregroundStyle(PincerPalette.textPrimary)
+            messageBody
                 .frame(maxWidth: .infinity, alignment: bubbleAlignment)
                 .padding(12)
                 .background(backgroundColor)
@@ -388,6 +402,116 @@ private struct MessageBubble: View {
             return PincerPalette.card
         }
     }
+
+    @ViewBuilder
+    private var messageBody: some View {
+        if message.role == "user" {
+            Text(message.content)
+                .font(.body)
+                .foregroundStyle(PincerPalette.textPrimary)
+                .textSelection(.enabled)
+        } else {
+            MarkdownMessageText(
+                message.content,
+                font: .body,
+                foregroundStyle: PincerPalette.textPrimary
+            )
+        }
+    }
+}
+
+private struct HistoricalToolActivityCard: View {
+    let toolCall: ToolCallActivity
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: iconName)
+                .foregroundStyle(iconColor)
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Text(toolCall.displayLabel)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(PincerPalette.textPrimary)
+
+                    Text(stateLabel)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(stateColor)
+                }
+
+                if let summary = toolCall.argsPreview, !summary.isEmpty {
+                    Text(summary)
+                        .font(.footnote)
+                        .foregroundStyle(PincerPalette.textSecondary)
+                }
+
+                if let errorText = toolCall.executions.first?.stderr, !errorText.isEmpty {
+                    Text(errorText)
+                        .font(.caption)
+                        .foregroundStyle(PincerPalette.danger)
+                }
+            }
+
+            Spacer()
+        }
+        .padding(12)
+        .background(PincerPalette.card)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private var stateLabel: String {
+        switch toolCall.state {
+        case .planned:
+            return "Queued"
+        case .waitingApproval:
+            return "Waiting Approval"
+        case .running:
+            return "Running"
+        case .succeeded:
+            return "Completed"
+        case .failed:
+            return "Failed"
+        case .rejected:
+            return "Rejected"
+        }
+    }
+
+    private var iconName: String {
+        switch toolCall.state {
+        case .failed, .rejected:
+            return "bolt.slash.circle.fill"
+        default:
+            return "bolt.circle.fill"
+        }
+    }
+
+    private var iconColor: Color {
+        switch toolCall.state {
+        case .failed, .rejected:
+            return PincerPalette.danger
+        case .succeeded:
+            return PincerPalette.success
+        case .waitingApproval:
+            return PincerPalette.warning
+        case .planned, .running:
+            return PincerPalette.accent
+        }
+    }
+
+    private var stateColor: Color {
+        switch toolCall.state {
+        case .planned:
+            return PincerPalette.textSecondary
+        case .waitingApproval:
+            return PincerPalette.warning
+        case .running:
+            return PincerPalette.accent
+        case .succeeded:
+            return PincerPalette.success
+        case .failed, .rejected:
+            return PincerPalette.danger
+        }
+    }
 }
 
 private struct RunActivityView: View {
@@ -411,6 +535,22 @@ private struct RunActivityView: View {
                     .id(assistantDraft.id)
             }
         }
+    }
+}
+
+private struct ApprovalTimelineCard: View {
+    let approval: Approval
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(approval.tool)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(PincerPalette.textPrimary)
+            Text(approval.deterministicSummary)
+                .font(.footnote)
+                .foregroundStyle(PincerPalette.textSecondary)
+        }
+        .cardSurface()
     }
 }
 
@@ -498,6 +638,25 @@ private struct ToolActivityCard: View {
         case .failed, .rejected:
             return PincerPalette.danger
         }
+    }
+}
+
+private struct MarkdownMessageText: View {
+    let text: String
+    let font: Font
+    let foregroundColor: Color
+
+    init(_ text: String, font: Font, foregroundStyle: Color) {
+        self.text = text
+        self.font = font
+        self.foregroundColor = foregroundStyle
+    }
+
+    var body: some View {
+        StructuredText(markdown: text)
+            .font(font)
+            .foregroundStyle(foregroundColor)
+            .textual.textSelection(.enabled)
     }
 }
 

@@ -67,7 +67,9 @@ enum GatewayConnectionEvent: Sendable, Equatable {
 
 struct ChatStreamState: Equatable {
     var messages: [Message] = []
+    var timelineItems: [ChatTimelineItem] = []
     var activeRunID: String?
+    var suppressedRunIDs: Set<String> = []
     var assistantDraftText: String = ""
     var assistantThinkingText: String = ""
     var latestToolCalls: [ToolCallActivity] = []
@@ -84,7 +86,7 @@ func applyGatewayConnectionEvent(
     switch event {
     case .connected:
         state.connectionNotice = nil
-        if !state.messages.isEmpty || !state.assistantDraftText.isEmpty || !state.latestToolCalls.isEmpty {
+        if !state.timelineItems.isEmpty || !state.assistantDraftText.isEmpty || !state.latestToolCalls.isEmpty {
             state.needsSnapshotRefresh = true
         }
     case .reconnecting:
@@ -254,6 +256,30 @@ private func applyGatewayChatEvent(
 ) {
     state.connectionNotice = nil
 
+    if let message = event.message,
+       let content = gatewayChatRenderableContent(message),
+       isGatewayHeartbeatMaintenancePrompt(content, role: message.role) {
+        state.suppressedRunIDs.insert(event.runID)
+        clearGatewayDraft(for: event.runID, state: &state)
+        return
+    }
+
+    if let message = event.message,
+       let content = gatewayChatRenderableContent(message),
+       isGatewayHeartbeatMaintenanceReply(content, role: message.role) {
+        state.suppressedRunIDs.remove(event.runID)
+        clearGatewayDraft(for: event.runID, state: &state)
+        return
+    }
+
+    if state.suppressedRunIDs.contains(event.runID) {
+        if event.state == .final || event.state == .aborted || event.state == .error {
+            state.suppressedRunIDs.remove(event.runID)
+            clearGatewayDraft(for: event.runID, state: &state)
+        }
+        return
+    }
+
     if state.activeRunID != event.runID, event.state == .delta {
         state.activeRunID = event.runID
     }
@@ -274,6 +300,7 @@ private func applyGatewayChatEvent(
         )
         if let finalizedMessage {
             state.messages.append(finalizedMessage)
+            state.timelineItems.append(.message(finalizedMessage))
         }
         state.activeRunID = nil
         state.assistantDraftText = ""
@@ -287,6 +314,7 @@ private func applyGatewayChatEvent(
             now: now
         ) {
             state.messages.append(partial)
+            state.timelineItems.append(.message(partial))
         }
         state.activeRunID = nil
         state.assistantDraftText = ""
@@ -301,17 +329,18 @@ private func applyGatewayChatEvent(
             now: now
         ) {
             state.messages.append(partial)
+            state.timelineItems.append(.message(partial))
         }
         if let errorMessage = gatewayStreamTrimmedString(event.errorMessage) {
-            state.messages.append(
-                Message(
-                    messageID: "system_\(event.runID)",
-                    threadID: threadID,
-                    role: "system",
-                    content: errorMessage,
-                    createdAt: now()
-                )
+            let systemMessage = Message(
+                messageID: "system_\(event.runID)",
+                threadID: threadID,
+                role: "system",
+                content: errorMessage,
+                createdAt: now()
             )
+            state.messages.append(systemMessage)
+            state.timelineItems.append(.message(systemMessage))
         }
         state.activeRunID = nil
         state.assistantDraftText = ""
@@ -322,6 +351,16 @@ private func applyGatewayChatEvent(
 }
 
 private func applyGatewayAgentEvent(_ event: GatewayAgentEvent, to state: inout ChatStreamState) {
+    if state.suppressedRunIDs.contains(event.runID) {
+        if event.stream == "lifecycle",
+           let phase = event.lifecyclePhase?.lowercased(),
+           phase == "end" || phase == "error" {
+            state.suppressedRunIDs.remove(event.runID)
+            clearGatewayDraft(for: event.runID, state: &state)
+        }
+        return
+    }
+
     guard state.activeRunID == nil || state.activeRunID == event.runID else {
         return
     }
@@ -346,6 +385,16 @@ private func applyGatewayAgentEvent(_ event: GatewayAgentEvent, to state: inout 
     default:
         break
     }
+}
+
+private func clearGatewayDraft(for runID: String, state: inout ChatStreamState) {
+    guard state.activeRunID == runID else {
+        return
+    }
+
+    state.activeRunID = nil
+    state.assistantDraftText = ""
+    state.assistantThinkingText = ""
 }
 
 private func upsertGatewayToolEvent(_ event: GatewayToolEvent, into toolCalls: inout [ToolCallActivity]) {

@@ -6,6 +6,7 @@ final class ChatViewModel: ObservableObject {
     @Published var threadID: String?
     @Published var threadTitle: String = ""
     @Published var messages: [Message] = []
+    @Published var timelineItems: [ChatTimelineItem] = []
     @Published var liveAssistantDraft: Message?
     @Published var liveToolCalls: [ToolCallActivity] = []
     @Published var connectionNotice: String?
@@ -14,12 +15,14 @@ final class ChatViewModel: ObservableObject {
     @Published var isBusy = false
     @Published var isStopping = false
 
-    private let client: APIClient
+    private let client: any ChatClientProtocol
     private var gatewayEventsTask: Task<Void, Never>?
     private var snapshotRefreshTask: Task<Void, Never>?
     private var streamState = ChatStreamState()
+    private var isBootstrappingGatewayState = false
+    private var bufferedGatewayEvents: [GatewayConnectionEvent] = []
 
-    init(client: APIClient) {
+    init(client: any ChatClientProtocol) {
         self.client = client
     }
 
@@ -29,13 +32,17 @@ final class ChatViewModel: ObservableObject {
     }
 
     func bootstrapIfNeeded() async {
-        await ensureGatewayEventsStarted()
-
         if !threads.isEmpty, threadID != nil {
+            await ensureGatewayEventsStarted()
             return
         }
 
+        isBootstrappingGatewayState = true
+        bufferedGatewayEvents.removeAll()
+        await ensureGatewayEventsStarted()
         await refreshCurrentThread()
+        isBootstrappingGatewayState = false
+        await flushBufferedGatewayEvents()
     }
 
     func refreshThreads() async {
@@ -76,6 +83,7 @@ final class ChatViewModel: ObservableObject {
             threadID = id
             threadTitle = title.isEmpty ? inferredTitle(for: id) : title
             streamState.messages = snapshot.messages
+            streamState.timelineItems = snapshot.timelineItems
             streamState.activeRunID = nil
             streamState.assistantDraftText = ""
             streamState.assistantThinkingText = ""
@@ -151,6 +159,7 @@ final class ChatViewModel: ObservableObject {
         let originalInput = input
 
         streamState.messages.append(optimisticMessage)
+        streamState.timelineItems.append(.message(optimisticMessage))
         streamState.activeRunID = nil
         streamState.assistantDraftText = ""
         streamState.assistantThinkingText = ""
@@ -172,6 +181,7 @@ final class ChatViewModel: ObservableObject {
         } catch {
             input = originalInput
             streamState.messages.removeAll { $0.messageID == optimisticMessage.messageID }
+            streamState.timelineItems.removeAll { $0.id == "msg_\(optimisticMessage.id)" }
             syncPublishedState()
             errorText = userFacingErrorMessage(error, fallback: "Failed to send message.")
         }
@@ -212,6 +222,11 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func handleGatewayEvent(_ event: GatewayConnectionEvent) async {
+        if shouldBufferGatewayEventDuringBootstrap(event) {
+            bufferedGatewayEvents.append(event)
+            return
+        }
+
         let currentThreadID = threadID ?? AppConfig.primarySessionKey
         applyGatewayConnectionEvent(
             event,
@@ -251,6 +266,7 @@ final class ChatViewModel: ObservableObject {
                 threadTitle = current.displayTitle
             }
             streamState.messages = snapshot.messages
+            streamState.timelineItems = snapshot.timelineItems
             syncPublishedState()
         } catch {
             guard shouldShowLiveStreamError(error) else {
@@ -273,6 +289,7 @@ final class ChatViewModel: ObservableObject {
 
     private func syncPublishedState() {
         messages = streamState.messages
+        timelineItems = streamState.timelineItems
         liveToolCalls = streamState.latestToolCalls
         connectionNotice = streamState.connectionNotice
 
@@ -312,6 +329,32 @@ final class ChatViewModel: ObservableObject {
 
     var canAbortCurrentRun: Bool {
         streamState.activeRunID != nil || !streamState.assistantDraftText.isEmpty
+    }
+
+    private func shouldBufferGatewayEventDuringBootstrap(_ event: GatewayConnectionEvent) -> Bool {
+        guard isBootstrappingGatewayState else {
+            return false
+        }
+
+        switch event {
+        case .connected, .presence, .health:
+            return false
+        case .reconnecting, .disconnected, .gap, .chat, .agent:
+            return true
+        }
+    }
+
+    private func flushBufferedGatewayEvents() async {
+        guard !bufferedGatewayEvents.isEmpty else {
+            return
+        }
+
+        let pendingEvents = bufferedGatewayEvents
+        bufferedGatewayEvents.removeAll()
+
+        for event in pendingEvents {
+            await handleGatewayEvent(event)
+        }
     }
 }
 

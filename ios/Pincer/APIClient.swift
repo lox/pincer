@@ -8,6 +8,7 @@ enum APIError: Error {
 
 struct ThreadMessagesSnapshot {
     let messages: [Message]
+    let timelineItems: [ChatTimelineItem]
     let lastSequence: UInt64
 }
 
@@ -98,9 +99,14 @@ func mapGatewayChatHistoryPayload(_ payload: Any?, threadID: String) throws -> T
     }
 
     var lastSequence: UInt64 = 0
-    let messages = rows.enumerated().compactMap { index, raw -> Message? in
+    var messages: [Message] = []
+    var timelineItems: [ChatTimelineItem] = []
+    var toolTimelineIndexesByID: [String: Int] = [:]
+    var suppressHeartbeatConversation = false
+
+    for (index, raw) in rows.enumerated() {
         guard let row = raw as? [String: Any] else {
-            return nil
+            continue
         }
 
         if let seq = gatewayMessageSequence(from: row) {
@@ -108,23 +114,80 @@ func mapGatewayChatHistoryPayload(_ payload: Any?, threadID: String) throws -> T
         }
 
         let role = gatewayTrimmedString(row["role"] as? String)?.lowercased() ?? "system"
-        guard !gatewayShouldOmitHistoryMessage(row, role: role) else {
-            return nil
-        }
-        guard let content = sanitizeGatewayRenderableText(gatewayMessageText(from: row), role: role) else {
-            return nil
+
+        if let toolActivities = gatewayHistoricalToolActivities(from: row), !toolActivities.isEmpty {
+            if suppressHeartbeatConversation {
+                continue
+            }
+            for activity in toolActivities {
+                toolTimelineIndexesByID[activity.toolCallID] = timelineItems.count
+                timelineItems.append(.toolActivity(activity))
+            }
+            continue
         }
 
-        return Message(
+        if role == "toolresult" || role == "tool_result" {
+            if suppressHeartbeatConversation {
+                continue
+            }
+            if let toolCallID = gatewayTrimmedString(row["toolCallId"] as? String),
+               let index = toolTimelineIndexesByID[toolCallID],
+               case .toolActivity(let existing) = timelineItems[index] {
+                timelineItems[index] = .toolActivity(
+                    gatewayHistoricalToolActivity(existing, updatedWith: row)
+                )
+            } else if let fallbackActivity = gatewayHistoricalToolFallbackActivity(from: row, index: index) {
+                timelineItems.append(.toolActivity(fallbackActivity))
+            }
+            continue
+        }
+
+        guard !gatewayShouldOmitHistoryMessage(row, role: role) else {
+            continue
+        }
+        guard let content = sanitizeGatewayRenderableText(gatewayMessageText(from: row), role: role) else {
+            continue
+        }
+
+        if isGatewayHeartbeatMaintenancePrompt(content, role: role) {
+            suppressHeartbeatConversation = true
+            continue
+        }
+
+        if isGatewayHeartbeatMaintenanceReply(content, role: role) {
+            suppressHeartbeatConversation = false
+            continue
+        }
+
+        if suppressHeartbeatConversation {
+            if role == "assistant" || role == "system" {
+                suppressHeartbeatConversation = false
+                continue
+            }
+
+            if role != "user" {
+                continue
+            }
+
+            suppressHeartbeatConversation = false
+        }
+
+        let message = Message(
             messageID: gatewayMessageID(from: row) ?? "msg_\(index + 1)",
             threadID: threadID,
             role: role,
             content: content,
             createdAt: gatewayISO8601String(from: row["timestamp"]) ?? ""
         )
+        messages.append(message)
+        timelineItems.append(.message(message))
     }
 
-    return ThreadMessagesSnapshot(messages: messages, lastSequence: lastSequence)
+    return ThreadMessagesSnapshot(
+        messages: messages,
+        timelineItems: timelineItems,
+        lastSequence: lastSequence
+    )
 }
 
 private func gatewayTrimmedString(_ value: String?) -> String? {
@@ -264,6 +327,185 @@ private func gatewayShouldOmitHistoryMessage(_ row: [String: Any], role: String)
     default:
         return false
     }
+}
+
+private func gatewayHistoricalToolActivities(from row: [String: Any]) -> [ToolCallActivity]? {
+    guard let role = gatewayTrimmedString(row["role"] as? String)?.lowercased(),
+          role == "assistant",
+          let blocks = gatewayMessageBlocks(from: row) else {
+        return nil
+    }
+
+    let toolCallBlocks = blocks.filter { block in
+        guard let type = gatewayTrimmedString(block["type"] as? String)?.lowercased() else {
+            return false
+        }
+        return type == "toolcall" || type == "tool_call"
+    }
+    guard !toolCallBlocks.isEmpty, toolCallBlocks.count == blocks.count else {
+        return nil
+    }
+
+    return toolCallBlocks.enumerated().map { index, block in
+        let toolCallID = gatewayTrimmedString(block["id"] as? String) ?? "tool_\(index + 1)"
+        let toolName = gatewayTrimmedString(block["name"] as? String) ?? "tool"
+
+        return ToolCallActivity(
+            toolCallID: toolCallID,
+            toolName: toolName,
+            displayLabel: toolName,
+            argsPreview: gatewayHistoricalToolArgsSummary(from: block["arguments"] ?? block["args"]),
+            actionID: nil,
+            state: .running,
+            executions: [ToolExecutionState(executionID: toolCallID, isStreaming: false)]
+        )
+    }
+}
+
+private func gatewayHistoricalToolFallbackActivity(from row: [String: Any], index: Int) -> ToolCallActivity? {
+    let toolCallID = gatewayTrimmedString(row["toolCallId"] as? String) ?? "tool_result_\(index + 1)"
+    let toolName = gatewayTrimmedString(row["toolName"] as? String) ?? "tool"
+    let summary = gatewayHistoricalToolResultSummary(from: row)
+
+    return ToolCallActivity(
+        toolCallID: toolCallID,
+        toolName: toolName,
+        displayLabel: toolName,
+        argsPreview: nil,
+        actionID: nil,
+        state: gatewayHistoricalToolFailed(row) ? .failed : .succeeded,
+        executions: [
+            ToolExecutionState(
+                executionID: toolCallID,
+                stdout: gatewayHistoricalToolFailed(row) ? "" : (summary ?? ""),
+                stderr: gatewayHistoricalToolFailed(row) ? (summary ?? "") : "",
+                exitCode: nil,
+                durationMs: nil,
+                isStreaming: false,
+                truncated: false
+            )
+        ]
+    )
+}
+
+private func gatewayHistoricalToolActivity(
+    _ activity: ToolCallActivity,
+    updatedWith row: [String: Any]
+) -> ToolCallActivity {
+    var updated = activity
+    let summary = gatewayHistoricalToolResultSummary(from: row)
+    let failed = gatewayHistoricalToolFailed(row)
+
+    updated.state = failed ? .failed : .succeeded
+    if updated.executions.isEmpty {
+        updated.executions = [ToolExecutionState(executionID: activity.toolCallID, isStreaming: false)]
+    }
+
+    updated.executions[0].stdout = failed ? "" : (summary ?? "")
+    updated.executions[0].stderr = failed ? (summary ?? "") : ""
+    updated.executions[0].isStreaming = false
+    return updated
+}
+
+private func gatewayHistoricalToolArgsSummary(from raw: Any?) -> String? {
+    if let object = raw as? [String: Any] {
+        if let path = gatewayTrimmedString(object["path"] as? String) {
+            let lastPathComponent = URL(fileURLWithPath: path).lastPathComponent
+            return lastPathComponent.isEmpty ? path : lastPathComponent
+        }
+
+        if let command = gatewayTrimmedString(object["cmd"] as? String) {
+            return command
+        }
+
+        if let query = gatewayTrimmedString(object["query"] as? String) {
+            return query
+        }
+
+        if let url = gatewayTrimmedString(object["url"] as? String) {
+            return url
+        }
+    }
+
+    return gatewayJSONStringSummary(from: raw)
+}
+
+private func gatewayHistoricalToolResultSummary(from row: [String: Any]) -> String? {
+    if let details = row["details"] as? [String: Any],
+       let error = gatewayTrimmedString(details["error"] as? String) {
+        return error
+    }
+
+    guard let blocks = gatewayMessageBlocks(from: row) else {
+        return gatewayTrimmedString(row["content"] as? String)
+    }
+
+    let textBlocks = blocks.compactMap { block -> String? in
+        guard gatewayTrimmedString(block["type"] as? String)?.lowercased() == "text" else {
+            return nil
+        }
+        return gatewayTrimmedString(block["text"] as? String)
+    }
+
+    guard let firstText = textBlocks.first else {
+        return nil
+    }
+
+    if let error = gatewayToolErrorFromJSONString(firstText) {
+        return error
+    }
+
+    return nil
+}
+
+private func gatewayHistoricalToolFailed(_ row: [String: Any]) -> Bool {
+    if let details = row["details"] as? [String: Any],
+       gatewayTrimmedString(details["status"] as? String)?.lowercased() == "error" {
+        return true
+    }
+
+    if row["isError"] as? Bool == true {
+        return true
+    }
+
+    guard let blocks = gatewayMessageBlocks(from: row) else {
+        return false
+    }
+
+    return blocks.contains { block in
+        guard let text = gatewayTrimmedString(block["text"] as? String) else {
+            return false
+        }
+        return gatewayToolErrorFromJSONString(text) != nil
+    }
+}
+
+private func gatewayToolErrorFromJSONString(_ text: String) -> String? {
+    guard let data = text.data(using: .utf8),
+          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          gatewayTrimmedString(object["status"] as? String)?.lowercased() == "error" else {
+        return nil
+    }
+
+    return gatewayTrimmedString(object["error"] as? String) ?? "Tool failed."
+}
+
+private func gatewayJSONStringSummary(from raw: Any?) -> String? {
+    guard let raw else {
+        return nil
+    }
+
+    if let string = gatewayTrimmedString(raw as? String) {
+        return string
+    }
+
+    guard JSONSerialization.isValidJSONObject(raw),
+          let data = try? JSONSerialization.data(withJSONObject: raw, options: [.sortedKeys]),
+          let text = String(data: data, encoding: .utf8) else {
+        return nil
+    }
+
+    return gatewayTrimmedString(text)
 }
 
 private struct StoredThread: Codable {
@@ -984,7 +1226,11 @@ actor APIClient {
 
     private func fetchLocalMessagesSnapshot(threadID: String) -> ThreadMessagesSnapshot {
         let messages = loadMessages(for: threadID)
-        return ThreadMessagesSnapshot(messages: messages, lastSequence: UInt64(messages.count))
+        return ThreadMessagesSnapshot(
+            messages: messages,
+            timelineItems: messages.map(ChatTimelineItem.message),
+            lastSequence: UInt64(messages.count)
+        )
     }
 
     private func sendLocalMessage(threadID: String, content: String) {

@@ -1,6 +1,10 @@
 name: Pincer
 options:
   minimumXcodeGenVersion: 2.44.1
+packages:
+  Textual:
+    url: https://github.com/gonzalezreal/textual.git
+    from: 0.3.1
 settings:
   base:
     SWIFT_VERSION: 5.10
@@ -31,6 +35,9 @@ targets:
         MARKETING_VERSION: 0.1.0
         INFOPLIST_KEY_CFBundleDisplayName: Pincer
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
+    dependencies:
+      - package: Textual
+        product: Textual
   PincerTests:
     type: bundle.unit-test
     platform: iOS
