@@ -11,12 +11,13 @@ Current responsibilities:
 - real Gateway auth probing with stored device identity and device token reuse
 - real Gateway-backed session list/history/create/delete/send requests
 - long-lived authenticated Gateway transport for chat + agent events
+- app lifecycle-aware Gateway transport suspend/resume with a foreground thread refresh
 - optimistic user send with streamed assistant draft updates
 - rich markdown rendering for assistant and system message bodies
 - buffered bootstrap gap recovery so the initial chat load does not depend on a later refresh event
 - Control UI-style transcript cleanup for metadata wrappers, timestamp/channel prefixes, silent assistant `NO_REPLY`, hidden heartbeat maintenance turns, and historical tool execution rendered as compact timeline items instead of raw tool/file output
 - live tool activity cards and `chat.abort` support in the composer
-- local approvals placeholders while approval transport is still being replaced
+- live observed exec/plugin approvals with `allow-once`, `allow-always`, and `deny` actions on the active Gateway connection
 
 ## Local build
 
@@ -50,7 +51,7 @@ Defaults:
 
 Extend the current direct Gateway shell with:
 
-1. real approval list/resolve flows
+1. approval context and richer decision detail threaded into chat/session surfaces
 2. richer historical/live timeline presentation, including denser tool summaries and expansion affordances
-3. further reconnect hardening on top of the current bootstrap/gap fix
+3. further reconnect hardening on top of the current bootstrap/gap/foreground fix
 4. session/presence shell updates without explicit refresh actions

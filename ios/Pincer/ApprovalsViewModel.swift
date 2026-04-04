@@ -15,13 +15,17 @@ final class ApprovalsViewModel: ObservableObject {
         bindStore()
     }
 
+    func start() async {
+        await approvalsStore.start()
+    }
+
     func refresh() async {
         await approvalsStore.refreshPending()
     }
 
-    func approve(_ actionID: String, onSuccess: @escaping () async -> Void = {}) async {
-        let approved = await approvalsStore.approve(actionID)
-        if approved {
+    func resolve(_ actionID: String, decision: String, onSuccess: @escaping () async -> Void = {}) async {
+        let resolved = await approvalsStore.resolve(actionID, decision: decision)
+        if resolved {
             await onSuccess()
         }
     }

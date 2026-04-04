@@ -190,6 +190,25 @@ func mapGatewayChatHistoryPayload(_ payload: Any?, threadID: String) throws -> T
     )
 }
 
+func mapGatewayPendingApprovals(_ approvals: [GatewayPendingApproval]) -> [Approval] {
+    approvals.map { approval in
+        Approval(
+            actionID: approval.id,
+            source: approval.kind.rawValue,
+            sourceID: approval.sessionKey ?? "",
+            tool: approval.tool,
+            status: "PENDING",
+            riskClass: approval.riskClass,
+            deterministicSummary: approval.summary,
+            commandPreview: approval.commandPreview,
+            commandTimeoutMS: nil,
+            createdAt: gatewayISO8601String(from: approval.createdAtMS) ?? "",
+            expiresAt: gatewayISO8601String(from: approval.expiresAtMS) ?? "",
+            allowedDecisions: approval.allowedDecisions
+        )
+    }
+}
+
 private func gatewayTrimmedString(_ value: String?) -> String? {
     let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     return trimmed.isEmpty ? nil : trimmed
@@ -698,7 +717,24 @@ actor APIClient {
         await liveConnection?.start()
     }
 
+    func stopLiveGatewayConnection() async {
+        guard !isUITestMode else {
+            return
+        }
+
+        await liveConnection?.stop()
+    }
+
     func fetchApprovals(status: String = "pending") async throws -> [Approval] {
+        if !isUITestMode {
+            await liveConnection?.start()
+            let approvals = mapGatewayPendingApprovals(await liveConnection?.pendingApprovalsSnapshot() ?? [])
+            let normalized = status.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+            return approvals.filter { approval in
+                normalized.isEmpty || approval.status.uppercased() == normalized
+            }
+        }
+
         let normalized = status.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         return loadApprovals().filter { approval in
             normalized.isEmpty || approval.status.uppercased() == normalized
@@ -706,6 +742,11 @@ actor APIClient {
     }
 
     func approve(actionID: String) async throws {
+        if !isUITestMode {
+            try await resolveApproval(actionID: actionID, decision: "allow-once")
+            return
+        }
+
         var approvals = loadApprovals()
         guard let index = approvals.firstIndex(where: { $0.actionID == actionID }) else {
             return
@@ -726,6 +767,28 @@ actor APIClient {
             expiresAt: current.expiresAt
         )
         saveApprovals(approvals)
+    }
+
+    func resolveApproval(actionID: String, decision: String) async throws {
+        if isUITestMode {
+            if decision == "allow-once" || decision == "allow-always" {
+                try await approve(actionID: actionID)
+            } else {
+                var approvals = loadApprovals()
+                approvals.removeAll { $0.actionID == actionID }
+                saveApprovals(approvals)
+            }
+            return
+        }
+
+        let method = actionID.hasPrefix("plugin:") ? "plugin.approval.resolve" : "exec.approval.resolve"
+        _ = try await authenticatedGatewayRequestPayload(
+            method: method,
+            params: [
+                "id": actionID,
+                "decision": decision,
+            ]
+        )
     }
 
     func probeGatewayConnection(baseURL: URL) async -> GatewayProbeResult {

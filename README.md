@@ -24,17 +24,18 @@ The iOS app currently provides:
 - real Gateway auth probing with device identity, signed `connect`, and Keychain-backed device-token persistence.
 - real Gateway-backed chat/session list, history, create/delete, send, and abort flows,
 - a long-lived authenticated Gateway connection for chat, agent, health, and presence events,
+- app lifecycle-aware Gateway transport that suspends in background and refreshes the active thread on foreground resume,
 - event-driven assistant drafts and live tool activity in the chat timeline,
 - rich markdown rendering for assistant and system message bodies in the chat timeline,
 - snapshot-first bootstrap with buffered gap/chat events so the main thread does not open blank and wait for a later self-heal,
 - Control UI-style transcript cleanup for metadata wrappers, timestamp/channel prefixes, silent `NO_REPLY` assistant messages, hidden heartbeat maintenance turns, and historical tool execution artifacts rendered as compact timeline items instead of raw transcript spill,
-- local approvals placeholders while the approvals transport is still being replaced.
+- a live observed exec/plugin approvals inbox with `allow-once`, `allow-always`, and `deny` actions on the active Gateway connection.
 
 The next implementation slice is the remaining Gateway operator surface:
 
-1. replace local approvals data with real approval listing and resolution,
+1. carry approval context and richer tool detail deeper into the chat/session shell,
 2. carry presence/health/session updates into the shell without manual refresh affordances,
-3. continue hardening reconnect behavior beyond the current bootstrap/gap fix,
+3. continue hardening reconnect behavior beyond the current bootstrap/gap/foreground fix,
 4. tighten the historical/live chat timeline presentation for richer message/tool rendering.
 
 ## Local development

@@ -54,6 +54,30 @@ struct GatewayAgentEvent: Sendable, Equatable {
     let lifecyclePhase: String?
 }
 
+enum GatewayApprovalKind: String, Sendable, Equatable {
+    case exec
+    case plugin
+}
+
+struct GatewayPendingApproval: Sendable, Equatable {
+    let kind: GatewayApprovalKind
+    let id: String
+    let tool: String
+    let summary: String
+    let commandPreview: String
+    let riskClass: String
+    let allowedDecisions: [String]
+    let sessionKey: String?
+    let createdAtMS: Int64
+    let expiresAtMS: Int64
+}
+
+struct GatewayApprovalResolution: Sendable, Equatable {
+    let kind: GatewayApprovalKind
+    let id: String
+    let decision: String
+}
+
 enum GatewayConnectionEvent: Sendable, Equatable {
     case connected
     case reconnecting
@@ -63,6 +87,8 @@ enum GatewayConnectionEvent: Sendable, Equatable {
     case health(GatewayStateVersion)
     case chat(GatewayChatEvent)
     case agent(GatewayAgentEvent)
+    case approvalRequested(GatewayPendingApproval)
+    case approvalResolved(GatewayApprovalResolution)
 }
 
 struct ChatStreamState: Equatable {
@@ -96,7 +122,7 @@ func applyGatewayConnectionEvent(
     case .gap:
         state.connectionNotice = "Gateway event gap detected. Refreshing chat…"
         state.needsSnapshotRefresh = true
-    case .presence, .health:
+    case .presence, .health, .approvalRequested, .approvalResolved:
         break
     case .chat(let chatEvent):
         guard sessionKeyMatchesPrimary(chatEvent.sessionKey, primarySessionKey: currentThreadID) ||
@@ -169,6 +195,26 @@ func parseGatewayConnectionEvent(from frame: [String: Any]) -> GatewayConnection
                 lifecyclePhase: lifecyclePhase
             )
         )
+    case "exec.approval.requested":
+        guard let approval = parseGatewayPendingApproval(from: frame, kind: .exec) else {
+            return nil
+        }
+        return .approvalRequested(approval)
+    case "plugin.approval.requested":
+        guard let approval = parseGatewayPendingApproval(from: frame, kind: .plugin) else {
+            return nil
+        }
+        return .approvalRequested(approval)
+    case "exec.approval.resolved":
+        guard let resolution = parseGatewayApprovalResolution(from: frame, kind: .exec) else {
+            return nil
+        }
+        return .approvalResolved(resolution)
+    case "plugin.approval.resolved":
+        guard let resolution = parseGatewayApprovalResolution(from: frame, kind: .plugin) else {
+            return nil
+        }
+        return .approvalResolved(resolution)
     case "presence":
         guard let stateVersion else {
             return nil
@@ -182,6 +228,77 @@ func parseGatewayConnectionEvent(from frame: [String: Any]) -> GatewayConnection
     default:
         return nil
     }
+}
+
+private func parseGatewayPendingApproval(from frame: [String: Any], kind: GatewayApprovalKind) -> GatewayPendingApproval? {
+    guard let payload = frame["payload"] as? [String: Any],
+          let id = gatewayStreamTrimmedString(payload["id"] as? String),
+          let request = payload["request"] as? [String: Any] else {
+        return nil
+    }
+
+    let createdAtMS = gatewayStreamInt64(payload["createdAtMs"]) ?? 0
+    let expiresAtMS = gatewayStreamInt64(payload["expiresAtMs"]) ?? 0
+    let sessionKey = gatewayStreamTrimmedString(request["sessionKey"] as? String)
+
+    switch kind {
+    case .exec:
+        let command = gatewayStreamTrimmedString(request["command"] as? String) ?? "Exec approval"
+        let commandPreview = gatewayStreamTrimmedString(request["commandPreview"] as? String) ?? command
+        let riskClass = gatewayStreamTrimmedString(request["security"] as? String)
+            ?? gatewayStreamTrimmedString(request["ask"] as? String)
+            ?? "exec"
+        let allowedDecisions = gatewayAllowedDecisionValues(from: request["allowedDecisions"])
+
+        return GatewayPendingApproval(
+            kind: kind,
+            id: id,
+            tool: "Exec approval",
+            summary: commandPreview,
+            commandPreview: command,
+            riskClass: riskClass,
+            allowedDecisions: allowedDecisions,
+            sessionKey: sessionKey,
+            createdAtMS: createdAtMS,
+            expiresAtMS: expiresAtMS
+        )
+    case .plugin:
+        let title = gatewayStreamTrimmedString(request["title"] as? String)
+            ?? gatewayStreamTrimmedString(request["toolName"] as? String)
+            ?? "Plugin approval"
+        let description = gatewayStreamTrimmedString(request["description"] as? String) ?? title
+        let riskClass = gatewayStreamTrimmedString(request["severity"] as? String) ?? "plugin"
+
+        return GatewayPendingApproval(
+            kind: kind,
+            id: id,
+            tool: title,
+            summary: description,
+            commandPreview: description,
+            riskClass: riskClass,
+            allowedDecisions: gatewayAllowedDecisionValues(from: nil),
+            sessionKey: sessionKey,
+            createdAtMS: createdAtMS,
+            expiresAtMS: expiresAtMS
+        )
+    }
+}
+
+private func parseGatewayApprovalResolution(from frame: [String: Any], kind: GatewayApprovalKind) -> GatewayApprovalResolution? {
+    guard let payload = frame["payload"] as? [String: Any],
+          let id = gatewayStreamTrimmedString(payload["id"] as? String),
+          let decision = gatewayStreamTrimmedString(payload["decision"] as? String) else {
+        return nil
+    }
+
+    return GatewayApprovalResolution(kind: kind, id: id, decision: decision)
+}
+
+private func gatewayAllowedDecisionValues(from raw: Any?) -> [String] {
+    let values = (raw as? [Any])?
+        .compactMap { gatewayStreamTrimmedString($0 as? String) }
+        .filter { ["allow-once", "allow-always", "deny"].contains($0) } ?? []
+    return values.isEmpty ? ["allow-once", "allow-always", "deny"] : values
 }
 
 func parseGatewayChatMessage(from raw: Any?) -> GatewayChatMessage? {
@@ -603,6 +720,19 @@ func gatewayStreamUInt64(_ raw: Any?) -> UInt64? {
         return value
     case let value as Int:
         return value >= 0 ? UInt64(value) : nil
+    default:
+        return nil
+    }
+}
+
+private func gatewayStreamInt64(_ raw: Any?) -> Int64? {
+    switch raw {
+    case let number as NSNumber:
+        return number.int64Value
+    case let value as Int64:
+        return value
+    case let value as Int:
+        return Int64(value)
     default:
         return nil
     }

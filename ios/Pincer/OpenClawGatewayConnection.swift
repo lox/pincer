@@ -22,6 +22,7 @@ actor OpenClawGatewayConnection {
     private var connectTask: Task<Void, Error>?
     private var subscribers: [UUID: AsyncStream<GatewayConnectionEvent>.Continuation] = [:]
     private var pendingRequests: [String: PendingGatewayRequest] = [:]
+    private var pendingApprovals: [String: GatewayPendingApproval] = [:]
     private var lastSequence: UInt64?
     private var reconnectDelayNanoseconds: UInt64 = 1_000_000_000
 
@@ -111,6 +112,15 @@ actor OpenClawGatewayConnection {
                     self.failPendingRequest(requestID, error: error)
                 }
             }
+        }
+    }
+
+    func pendingApprovalsSnapshot() -> [GatewayPendingApproval] {
+        pendingApprovals.values.sorted { lhs, rhs in
+            if lhs.createdAtMS == rhs.createdAtMS {
+                return lhs.id < rhs.id
+            }
+            return lhs.createdAtMS < rhs.createdAtMS
         }
     }
 
@@ -364,7 +374,19 @@ actor OpenClawGatewayConnection {
             return
         }
 
+        applyPendingApprovalMutation(for: event)
         broadcast(event)
+    }
+
+    private func applyPendingApprovalMutation(for event: GatewayConnectionEvent) {
+        switch event {
+        case .approvalRequested(let approval):
+            pendingApprovals[approval.id] = approval
+        case .approvalResolved(let resolution):
+            pendingApprovals.removeValue(forKey: resolution.id)
+        default:
+            break
+        }
     }
 
     private func handleResponseFrame(_ frame: [String: Any]) {

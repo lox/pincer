@@ -20,6 +20,7 @@ final class ChatViewModel: ObservableObject {
     private var snapshotRefreshTask: Task<Void, Never>?
     private var streamState = ChatStreamState()
     private var isBootstrappingGatewayState = false
+    private var isGatewayConnectionSuspended = false
     private var bufferedGatewayEvents: [GatewayConnectionEvent] = []
 
     init(client: any ChatClientProtocol) {
@@ -53,6 +54,9 @@ final class ChatViewModel: ObservableObject {
                 threadTitle = current.displayTitle
             }
         } catch {
+            guard !shouldIgnoreTransportError(error) else {
+                return
+            }
             errorText = userFacingErrorMessage(error, fallback: "Failed to load sessions.")
         }
     }
@@ -92,6 +96,9 @@ final class ChatViewModel: ObservableObject {
             streamState.needsSnapshotRefresh = false
             syncPublishedState()
         } catch {
+            guard !shouldIgnoreTransportError(error) else {
+                return
+            }
             errorText = userFacingErrorMessage(error, fallback: "Failed to load session.")
         }
     }
@@ -115,6 +122,37 @@ final class ChatViewModel: ObservableObject {
         threadTitle = ""
         streamState = ChatStreamState()
         syncPublishedState()
+    }
+
+    func setGatewayConnectionActive(_ isActive: Bool) async {
+        if isActive {
+            guard isGatewayConnectionSuspended else {
+                return
+            }
+
+            isGatewayConnectionSuspended = false
+            streamState.connectionNotice = nil
+            syncPublishedState()
+
+            if threadID != nil || !threads.isEmpty {
+                await refreshCurrentThread()
+            } else {
+                await bootstrapIfNeeded()
+            }
+            return
+        }
+
+        guard !isGatewayConnectionSuspended else {
+            return
+        }
+
+        isGatewayConnectionSuspended = true
+        bufferedGatewayEvents.removeAll()
+        snapshotRefreshTask?.cancel()
+        snapshotRefreshTask = nil
+        streamState.connectionNotice = nil
+        syncPublishedState()
+        await client.stopLiveGatewayConnection()
     }
 
     func deleteCurrentThread() async {
@@ -223,6 +261,10 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func handleGatewayEvent(_ event: GatewayConnectionEvent) async {
+        guard !isGatewayConnectionSuspended else {
+            return
+        }
+
         if shouldBufferGatewayEventDuringBootstrap(event) {
             bufferedGatewayEvents.append(event)
             return
@@ -272,6 +314,9 @@ final class ChatViewModel: ObservableObject {
             streamState.needsSnapshotRefresh = false
             syncPublishedState()
         } catch {
+            guard !shouldIgnoreTransportError(error) else {
+                return
+            }
             guard shouldShowLiveStreamError(error) else {
                 return
             }
@@ -340,11 +385,15 @@ final class ChatViewModel: ObservableObject {
         }
 
         switch event {
-        case .connected, .presence, .health:
+        case .connected, .presence, .health, .approvalRequested, .approvalResolved:
             return false
         case .reconnecting, .disconnected, .gap, .chat, .agent:
             return true
         }
+    }
+
+    private func shouldIgnoreTransportError(_ error: Error) -> Bool {
+        isGatewayConnectionSuspended || error is CancellationError
     }
 
     private func flushBufferedGatewayEvents() async {

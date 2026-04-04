@@ -89,6 +89,93 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertNil(model.connectionNotice)
         XCTAssertEqual(model.messages.map(\.content), ["Loaded"])
     }
+
+    func testSetGatewayConnectionActiveFalseStopsLiveConnectionAndIgnoresExpectedDisconnectEvent() async throws {
+        let thread = ThreadSummary(
+            threadID: "agent:main:main",
+            title: "Main",
+            createdAt: "2026-04-04T00:00:00Z",
+            updatedAt: "2026-04-04T00:00:00Z",
+            messageCount: 1
+        )
+        let message = Message(
+            messageID: "msg-1",
+            threadID: thread.threadID,
+            role: "assistant",
+            content: "Loaded",
+            createdAt: "2026-04-04T00:00:01Z"
+        )
+        let client = TestChatClient(
+            threads: [thread],
+            snapshots: [
+                ThreadMessagesSnapshot(
+                    messages: [message],
+                    timelineItems: [.message(message)],
+                    lastSequence: 1
+                ),
+            ]
+        )
+        let model = ChatViewModel(client: client)
+
+        await model.bootstrapIfNeeded()
+        await model.setGatewayConnectionActive(false)
+        client.emit(.disconnected(reason: "Stopped."))
+        await Task.yield()
+
+        XCTAssertEqual(client.stopLiveGatewayConnectionCallCount, 1)
+        XCTAssertNil(model.connectionNotice)
+        XCTAssertEqual(model.messages.map(\.content), ["Loaded"])
+    }
+
+    func testSetGatewayConnectionActiveTrueRestartsLiveConnectionAndRefreshesCurrentThread() async throws {
+        let thread = ThreadSummary(
+            threadID: "agent:main:main",
+            title: "Main",
+            createdAt: "2026-04-04T00:00:00Z",
+            updatedAt: "2026-04-04T00:00:00Z",
+            messageCount: 1
+        )
+        let initialMessage = Message(
+            messageID: "msg-1",
+            threadID: thread.threadID,
+            role: "assistant",
+            content: "Initial",
+            createdAt: "2026-04-04T00:00:01Z"
+        )
+        let refreshedMessage = Message(
+            messageID: "msg-2",
+            threadID: thread.threadID,
+            role: "assistant",
+            content: "Refreshed after foreground",
+            createdAt: "2026-04-04T00:00:02Z"
+        )
+        let client = TestChatClient(
+            threads: [thread],
+            snapshots: [
+                ThreadMessagesSnapshot(
+                    messages: [initialMessage],
+                    timelineItems: [.message(initialMessage)],
+                    lastSequence: 1
+                ),
+                ThreadMessagesSnapshot(
+                    messages: [refreshedMessage],
+                    timelineItems: [.message(refreshedMessage)],
+                    lastSequence: 2
+                ),
+            ]
+        )
+        let model = ChatViewModel(client: client)
+
+        await model.bootstrapIfNeeded()
+        let startCountBeforeResume = client.startLiveGatewayConnectionCallCount
+        await model.setGatewayConnectionActive(false)
+        await model.setGatewayConnectionActive(true)
+
+        XCTAssertGreaterThan(client.startLiveGatewayConnectionCallCount, startCountBeforeResume)
+        XCTAssertEqual(client.stopLiveGatewayConnectionCallCount, 1)
+        XCTAssertEqual(model.messages.map(\.content), ["Refreshed after foreground"])
+        XCTAssertNil(model.connectionNotice)
+    }
 }
 
 private final class TestChatClient: ChatClientProtocol {
@@ -99,6 +186,8 @@ private final class TestChatClient: ChatClientProtocol {
 
     var emitGapDuringFirstFetch = false
     var fetchMessagesSnapshotCallCount = 0
+    var startLiveGatewayConnectionCallCount = 0
+    var stopLiveGatewayConnectionCallCount = 0
     let secondSnapshotExpectation: XCTestExpectation
 
     init(threads: [ThreadSummary], snapshots: [ThreadMessagesSnapshot]) {
@@ -156,7 +245,13 @@ private final class TestChatClient: ChatClientProtocol {
         eventsStream
     }
 
-    func startLiveGatewayConnection() async {}
+    func startLiveGatewayConnection() async {
+        startLiveGatewayConnectionCallCount += 1
+    }
+
+    func stopLiveGatewayConnection() async {
+        stopLiveGatewayConnectionCallCount += 1
+    }
 
     func emit(_ event: GatewayConnectionEvent) {
         eventsContinuation.yield(event)

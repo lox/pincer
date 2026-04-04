@@ -18,6 +18,7 @@ private enum A11y {
 }
 
 struct ContentView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var approvalsStore: ApprovalsStore
     @StateObject private var chatModel: ChatViewModel
     @StateObject private var approvalsModel: ApprovalsViewModel
@@ -60,6 +61,23 @@ struct ContentView: View {
         .toolbarBackground(PincerPalette.page, for: .tabBar)
         .background(PincerPalette.page)
         .ignoresSafeArea(.keyboard, edges: .bottom)
+        .task {
+            await approvalsModel.start()
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            Task {
+                switch newPhase {
+                case .active:
+                    await chatModel.setGatewayConnectionActive(true)
+                case .background:
+                    await chatModel.setGatewayConnectionActive(false)
+                case .inactive:
+                    break
+                @unknown default:
+                    break
+                }
+            }
+        }
     }
 }
 
@@ -672,7 +690,7 @@ private struct ApprovalsView: View {
                             Text("No open approvals")
                                 .font(.title3.weight(.semibold))
                                 .foregroundStyle(PincerPalette.textPrimary)
-                            Text("This tab is reserved for OpenClaw exec/plugin approvals once the direct Gateway client is wired in.")
+                            Text("Pincer shows the OpenClaw approvals it has observed on this live Gateway connection since launch.")
                                 .foregroundStyle(PincerPalette.textSecondary)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -685,8 +703,27 @@ private struct ApprovalsView: View {
                                     .foregroundStyle(PincerPalette.textPrimary)
                                 Text(approval.deterministicSummary)
                                     .foregroundStyle(PincerPalette.textSecondary)
-                                Button("Approve") {
-                                    Task { await model.approve(approval.actionID) }
+                                HStack(spacing: 10) {
+                                    if approval.allowedDecisions.contains("allow-once") {
+                                        Button("Allow once") {
+                                            Task { await model.resolve(approval.actionID, decision: "allow-once") }
+                                        }
+                                        .buttonStyle(.borderedProminent)
+                                    }
+
+                                    if approval.allowedDecisions.contains("allow-always") {
+                                        Button("Always allow") {
+                                            Task { await model.resolve(approval.actionID, decision: "allow-always") }
+                                        }
+                                        .buttonStyle(.bordered)
+                                    }
+
+                                    if approval.allowedDecisions.contains("deny") {
+                                        Button("Deny", role: .destructive) {
+                                            Task { await model.resolve(approval.actionID, decision: "deny") }
+                                        }
+                                        .buttonStyle(.bordered)
+                                    }
                                 }
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -700,7 +737,7 @@ private struct ApprovalsView: View {
             .background(PincerPalette.page)
             .navigationTitle("Approvals")
             .task {
-                await model.refresh()
+                await model.start()
             }
             .refreshable {
                 await model.refresh()

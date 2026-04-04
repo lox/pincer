@@ -30,4 +30,43 @@ final class APIClientParsingTests: XCTestCase {
 
         XCTAssertNil(nonce)
     }
+
+    func testParseGatewayConnectionEventBuildsExecApprovalRequested() {
+        let event = parseGatewayConnectionEvent(
+            from: [
+                "type": "event",
+                "event": "exec.approval.requested",
+                "payload": [
+                    "id": "approval-123",
+                    "createdAtMs": 1_775_259_600_000,
+                    "expiresAtMs": 1_775_259_660_000,
+                    "request": [
+                        "command": "pwd",
+                        "commandPreview": "pwd",
+                        "security": "allowlist",
+                        "allowedDecisions": ["allow-once", "deny"],
+                        "sessionKey": "agent:main:main",
+                    ],
+                ],
+            ]
+        )
+
+        XCTAssertEqual(
+            event,
+            .approvalRequested(
+                GatewayPendingApproval(
+                    kind: .exec,
+                    id: "approval-123",
+                    tool: "Exec approval",
+                    summary: "pwd",
+                    commandPreview: "pwd",
+                    riskClass: "allowlist",
+                    allowedDecisions: ["allow-once", "deny"],
+                    sessionKey: "agent:main:main",
+                    createdAtMS: 1_775_259_600_000,
+                    expiresAtMS: 1_775_259_660_000
+                )
+            )
+        )
+    }
 }

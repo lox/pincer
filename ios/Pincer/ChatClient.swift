@@ -9,6 +9,7 @@ protocol ChatClientProtocol: AnyObject {
     func abortMessageRun(threadID: String, runID: String?) async throws
     func gatewayEvents() async -> AsyncStream<GatewayConnectionEvent>
     func startLiveGatewayConnection() async
+    func stopLiveGatewayConnection() async
 }
 
 extension APIClient: ChatClientProtocol {}

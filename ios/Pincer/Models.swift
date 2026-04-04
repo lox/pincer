@@ -289,8 +289,70 @@ struct Approval: Codable, Identifiable, Equatable {
     let commandTimeoutMS: Int64?
     let createdAt: String
     let expiresAt: String
+    let allowedDecisions: [String]
 
     var id: String { actionID }
+
+    init(
+        actionID: String,
+        source: String,
+        sourceID: String,
+        tool: String,
+        status: String,
+        riskClass: String,
+        deterministicSummary: String,
+        commandPreview: String,
+        commandTimeoutMS: Int64?,
+        createdAt: String,
+        expiresAt: String,
+        allowedDecisions: [String] = ["allow-once", "allow-always", "deny"]
+    ) {
+        self.actionID = actionID
+        self.source = source
+        self.sourceID = sourceID
+        self.tool = tool
+        self.status = status
+        self.riskClass = riskClass
+        self.deterministicSummary = deterministicSummary
+        self.commandPreview = commandPreview
+        self.commandTimeoutMS = commandTimeoutMS
+        self.createdAt = createdAt
+        self.expiresAt = expiresAt
+        self.allowedDecisions = allowedDecisions
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case actionID
+        case source
+        case sourceID
+        case tool
+        case status
+        case riskClass
+        case deterministicSummary
+        case commandPreview
+        case commandTimeoutMS
+        case createdAt
+        case expiresAt
+        case allowedDecisions
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            actionID: try container.decode(String.self, forKey: .actionID),
+            source: try container.decode(String.self, forKey: .source),
+            sourceID: try container.decode(String.self, forKey: .sourceID),
+            tool: try container.decode(String.self, forKey: .tool),
+            status: try container.decode(String.self, forKey: .status),
+            riskClass: try container.decode(String.self, forKey: .riskClass),
+            deterministicSummary: try container.decode(String.self, forKey: .deterministicSummary),
+            commandPreview: try container.decode(String.self, forKey: .commandPreview),
+            commandTimeoutMS: try container.decodeIfPresent(Int64.self, forKey: .commandTimeoutMS),
+            createdAt: try container.decode(String.self, forKey: .createdAt),
+            expiresAt: try container.decode(String.self, forKey: .expiresAt),
+            allowedDecisions: try container.decodeIfPresent([String].self, forKey: .allowedDecisions) ?? ["allow-once", "allow-always", "deny"]
+        )
+    }
 }
 
 struct Device: Codable, Identifiable {
