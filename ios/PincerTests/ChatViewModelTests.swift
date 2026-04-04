@@ -38,7 +38,56 @@ final class ChatViewModelTests: XCTestCase {
 
         XCTAssertEqual(client.fetchMessagesSnapshotCallCount, 2)
         XCTAssertEqual(model.messages.map(\.content), ["Recovered after gap"])
+        XCTAssertNil(model.connectionNotice)
+    }
+
+    func testRefreshCurrentThreadClearsTransientConnectionNoticeAfterSuccessfulLoad() async throws {
+        let thread = ThreadSummary(
+            threadID: "agent:main:main",
+            title: "Main",
+            createdAt: "2026-04-04T00:00:00Z",
+            updatedAt: "2026-04-04T00:00:00Z",
+            messageCount: 1
+        )
+        let message = Message(
+            messageID: "msg-1",
+            threadID: thread.threadID,
+            role: "assistant",
+            content: "Loaded",
+            createdAt: "2026-04-04T00:00:01Z"
+        )
+        let client = TestChatClient(
+            threads: [thread],
+            snapshots: [
+                ThreadMessagesSnapshot(
+                    messages: [message],
+                    timelineItems: [.message(message)],
+                    lastSequence: 1
+                ),
+                ThreadMessagesSnapshot(
+                    messages: [message],
+                    timelineItems: [.message(message)],
+                    lastSequence: 1
+                ),
+                ThreadMessagesSnapshot(
+                    messages: [message],
+                    timelineItems: [.message(message)],
+                    lastSequence: 1
+                ),
+            ]
+        )
+        let model = ChatViewModel(client: client)
+
+        await model.bootstrapIfNeeded()
+        client.emit(.gap(GatewayGapEvent(expected: 2, received: 4, stateVersion: nil)))
+        await Task.yield()
+
         XCTAssertEqual(model.connectionNotice, "Gateway event gap detected. Refreshing chat…")
+
+        await model.refreshCurrentThread()
+
+        XCTAssertNil(model.connectionNotice)
+        XCTAssertEqual(model.messages.map(\.content), ["Loaded"])
     }
 }
 
@@ -108,4 +157,8 @@ private final class TestChatClient: ChatClientProtocol {
     }
 
     func startLiveGatewayConnection() async {}
+
+    func emit(_ event: GatewayConnectionEvent) {
+        eventsContinuation.yield(event)
+    }
 }

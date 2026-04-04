@@ -88,6 +88,7 @@ final class ChatViewModel: ObservableObject {
             streamState.assistantDraftText = ""
             streamState.assistantThinkingText = ""
             streamState.latestToolCalls = []
+            streamState.connectionNotice = nil
             streamState.needsSnapshotRefresh = false
             syncPublishedState()
         } catch {
@@ -267,6 +268,8 @@ final class ChatViewModel: ObservableObject {
             }
             streamState.messages = snapshot.messages
             streamState.timelineItems = snapshot.timelineItems
+            streamState.connectionNotice = nil
+            streamState.needsSnapshotRefresh = false
             syncPublishedState()
         } catch {
             guard shouldShowLiveStreamError(error) else {
